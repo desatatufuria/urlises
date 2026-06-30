@@ -1,0 +1,50 @@
+services:
+  dev-bookmarks:
+    container_name: ${PROJECT}
+    build:
+      context: ..
+      dockerfile: .devcontainer/Dockerfile
+      args:
+        USERNAME: "furia"
+        USER_ID: "1000"
+        GROUP_ID: "1000"
+        GO_IMAGE_VERSION: "1.26.4-bookworm"
+        DOCKER_COMPOSE_VERSION: "v5.0.2"
+        AIR_VERSION: "latest"
+        GO_DELVE_VERSION: "latest"
+        GOPLS_VERSION: "latest"
+        STATICCHECK_VERSION: "latest"
+    user: "${LOCAL_USER_ID:-1000}:${LOCAL_GROUP_ID:-1000}"
+    dns:
+      - ${SERVER_DNS1}
+      - ${SERVER_DNS2}
+    extra_hosts:
+      #- "${HOST_JIRA_PRE}"
+      #- "${HOST_JIRA_PRO}"
+      - "telemetry.host:host-gateway"
+    volumes:
+      - ..:/workspace
+      - /var/run/docker.sock:/var/run/docker.sock
+      - go-mod-cache:/go/pkg/mod
+    ports:
+      - "${PORT}:443"
+      - "2345"
+    environment:
+      - DOCKER_BUILDKIT=1
+      - HOST_HOSTNAME=${HOSTNAME}
+      - ITSM_NAME=${ITSM_NAME}
+      - TELEMETRY_HOST="telemetry.host"
+      # 🔐 Engram
+      #- ENGRAM_PROJECT=${PROJECT}
+      #- ENGRAM_CLOUD_TOKEN=${ENGRAM_CLOUD_TOKEN}   
+      #- ENGRAM_CLOUD_SERVER=${ENGRAM_CLOUD_SERVER}
+    networks:
+      - dtf-netwok
+    command: ["sleep", "infinity"]
+
+volumes:
+  go-mod-cache:
+
+networks:
+  dtf-netwok:
+    external: true

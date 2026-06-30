@@ -1,0 +1,78 @@
+{
+  "name": "Go Dev Container",
+"dockerComposeFile": [
+    "docker-compose.yml"
+  ],
+  "service": "dev-bookmarks",
+  "workspaceFolder": "/workspace",
+//   "build": {
+//   "dockerfile": "Dockerfile",
+//    "context": ".."
+// },
+
+// "runArgs": [
+//   "--name", "dev-bancamarch-dev_jc",
+//   "--network=dtf-netwok"
+// ],
+  "customizations": { 
+    "vscode": {
+      "extensions": [
+        "golang.go",
+        "ms-vscode.go-tools",
+        "ShaneLiesegang.vscode-simple-icons-rev",
+        "miguelsolorio.symbols",
+        "dotenv.dotenv-vscode",
+        "usernamehw.errorlens",
+        "donjayamanne.git-extension-pack",
+        "Postman.postman-for-vscode",
+        "GitHub.github-vscode-theme",
+        "codezombiech.gitignore",
+        "neonxp.gotools",
+        "quicktype.quicktype",
+        "Gruntfuggly.todo-tree",
+        "TGOSystems.togglebracketguides",
+        "adpyke.codesnap",
+        "qwtel.sqlite-viewer",
+        "mhutchie.git-graph",
+        "Anthropic.claude-code",
+        "GitHub.copilot",
+        "GitHub.copilot-chat",
+        "openai.chatgpt"
+      ],
+      "settings": {
+        "go.toolsEnvVars": {
+          "GOMODCACHE": "/tmp/opencode/gomodcache",
+          "GOCACHE": "/tmp/opencode/gocache"
+        },
+        "workbench.colorCustomizations": {
+          "titleBar.activeBackground": "#2E7D8C",
+          "titleBar.activeForeground": "#E8F6F8",
+          "titleBar.inactiveBackground": "#236070",
+          "titleBar.inactiveForeground": "#A8D4DA",
+          "statusBar.background": "#2E7D8C",
+          "statusBar.foreground": "#E8F6F8",
+          "statusBar.debuggingBackground": "#4A5B8C",
+          "statusBar.debuggingForeground": "#E8F0F8",
+          "statusBar.noFolderBackground": "#236070",
+          "statusBar.noFolderForeground": "#A8D4DA"
+        }
+      }
+  }
+  },
+  "forwardPorts": [3000, 2345, 5173, 5180, 4173],
+  //"appPort": ["8453:443"], //"8443:443"
+  "remoteUser": "${localEnv:USER}",
+  "updateRemoteUserUID": true,
+  "remoteEnv": {
+    "DOCKER_BUILDKIT": "1",
+    "GOMODCACHE": "/tmp/opencode/gomodcache",
+    "GOCACHE": "/tmp/opencode/gocache"
+  },
+  "mounts": [
+    //"source=${localWorkspaceFolder},target=/workspace,type=bind",
+    "source=/var/run/docker.sock,target=/var/run/docker.sock,type=bind",
+    "source=go-mod-cache,target=/go/pkg/mod,type=volume"
+   // "source=${localEnv:USERPROFILE}\\.ssh,target=/root/.ssh,type=bind"
+  ],
+  "postCreateCommand": "bash .devcontainer/post-create.sh"
+}
