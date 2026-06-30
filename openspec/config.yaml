@@ -1,0 +1,68 @@
+schema: spec-driven
+
+context: |
+  Project state: Greenfield repository with requirements and devcontainer bootstrap only.
+  Product: Shared bookmark sync platform for teams, projects, clients, and environments.
+  Source requirements: docs/requeriments.md.
+  Detected stack: Go-focused devcontainer with Node/npm, Docker Compose, Chromium, SQLite, and Go tooling.
+  Architecture direction: Modular Go backend plus TypeScript Manifest V3 Chrome extension.
+  Documentation: SDD artifacts must be documented in OpenSpec and Engram.
+  Workflow convention: Gitflow is required by the user but is not yet documented in repository files.
+
+strict_tdd: false
+
+testing:
+  detected_at: 2026-06-30
+  strict_tdd: false
+  test_runner:
+    available: false
+    framework: ""
+    command: ""
+  layers:
+    unit:
+      available: false
+      tool: ""
+    integration:
+      available: false
+      tool: ""
+    e2e:
+      available: false
+      tool: ""
+  coverage:
+    available: false
+    command: ""
+  quality:
+    linter:
+      available: false
+      command: ""
+    type_checker:
+      available: false
+      command: ""
+    formatter:
+      available: false
+      command: ""
+
+rules:
+  proposal:
+    - Document scope, assumptions, risks, and rollback considerations.
+    - Record Gitflow branch intent and documentation impact for each change.
+  specs:
+    - Use Given/When/Then for scenarios.
+    - Use RFC 2119 keywords (MUST, SHALL, SHOULD, MAY).
+  design:
+    - Keep the backend modular and document sync/event consistency rules.
+    - Document contracts between the Go backend and Chrome extension.
+  tasks:
+    - Group by phase with hierarchical numbering.
+    - Keep tasks completable in one session and include documentation work.
+  apply:
+    - Follow existing code patterns.
+    - Document created modules, interfaces, and cross-surface contracts.
+    tdd: false
+    test_command: ""
+  verify:
+    test_command: ""
+    build_command: ""
+    coverage_threshold: 0
+  archive:
+    - Preserve change history and document merged deltas.
