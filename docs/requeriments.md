@@ -391,6 +391,12 @@ DELETE /bookmarks/:bookmarkId
 GET /sync/events?workspaceId=:workspaceId&since=:timestamp
 WS  /sync/ws?workspaceId=:workspaceId
 
+Authentication notes for MVP:
+
+- `POST /auth/register` and `POST /auth/login` require a durable client identifier header (`X-Client-Id` by default).
+- The backend binds that client ID to the authenticated device/user record and returns a JWT for subsequent requests.
+- Authenticated requests must send both `Authorization: Bearer <token>` and the same durable `X-Client-Id` header.
+
 
 ## 12. WebSocket Behavior
 
@@ -457,6 +463,10 @@ For MVP, do not implement complex permission inheritance.
 - Users cannot access workspaces where they are not members.
 - The backend is the source of truth.
 - Chrome local state is a projection of backend state.
+- Workspace trees must expose stable backend IDs, parent links, and sibling order.
+- Only `admin` and `editor` members may mutate shared folders and bookmarks.
+- `viewer` members may read workspace trees but must not mutate shared semantics.
+- Shared folder/bookmark moves must preserve deterministic sibling ordering after create, update, move, and soft delete operations.
 
 ## 15. First Implementation Milestones
 

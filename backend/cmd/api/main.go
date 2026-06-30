@@ -2,17 +2,20 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"log"
 	"net/http"
-	"os"
 	"os/signal"
 	"syscall"
 	"time"
 
+	"github.com/furia/shared-bookmark-sync/backend/internal/auth"
+	"github.com/furia/shared-bookmark-sync/backend/internal/bookmarks"
 	"github.com/furia/shared-bookmark-sync/backend/internal/config"
 	"github.com/furia/shared-bookmark-sync/backend/internal/database"
+	"github.com/furia/shared-bookmark-sync/backend/internal/httpapi"
+	"github.com/furia/shared-bookmark-sync/backend/internal/organizations"
+	"github.com/furia/shared-bookmark-sync/backend/internal/workspaces"
 )
 
 func main() {
@@ -37,8 +40,13 @@ func main() {
 	}
 
 	mux := http.NewServeMux()
+	authService := auth.NewService(pool, cfg.Auth)
+	organizationsService := organizations.NewService(pool)
+	workspacesService := workspaces.NewService(pool)
+	bookmarksService := bookmarks.NewService(pool)
+
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, http.StatusOK, map[string]string{
+		httpapi.WriteJSON(w, http.StatusOK, map[string]string{
 			"status":  "ok",
 			"service": "shared-bookmark-sync-api",
 		})
@@ -48,18 +56,23 @@ func main() {
 		defer cancel()
 
 		if err := pool.Ping(pingCtx); err != nil {
-			writeJSON(w, http.StatusServiceUnavailable, map[string]string{
+			httpapi.WriteJSON(w, http.StatusServiceUnavailable, map[string]string{
 				"status": "error",
 				"error":  err.Error(),
 			})
 			return
 		}
 
-		writeJSON(w, http.StatusOK, map[string]string{
+		httpapi.WriteJSON(w, http.StatusOK, map[string]string{
 			"status":   "ready",
 			"database": "reachable",
 		})
 	})
+
+	auth.RegisterRoutes(mux, authService)
+	organizations.RegisterRoutes(mux, authService.Middleware, organizationsService)
+	workspaces.RegisterRoutes(mux, authService.Middleware, workspacesService)
+	bookmarks.RegisterRoutes(mux, authService.Middleware, bookmarksService)
 
 	server := &http.Server{
 		Addr:              cfg.Server.Addr,
@@ -89,15 +102,5 @@ func main() {
 		if closeErr := server.Close(); closeErr != nil {
 			log.Printf("force close failed: %v", closeErr)
 		}
-	}
-}
-
-func writeJSON(w http.ResponseWriter, status int, payload any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-
-	if err := json.NewEncoder(w).Encode(payload); err != nil {
-		log.Printf("encode response: %v", err)
-		_, _ = os.Stderr.WriteString(err.Error())
 	}
 }

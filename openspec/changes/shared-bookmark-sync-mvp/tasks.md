@@ -22,9 +22,9 @@ Chain strategy: feature-branch-chain
 |------|------|-----------|-------|
 | 1 | Backend bootstrap + Postgres schema + docs baseline | PR 1 | Base=`feature/shared-bookmark-sync-mvp`; include README, Gitflow note, roadmap scaffold. |
 | 2 | Organizations/workspaces/tree + role gates | PR 2 | Base=PR 1 branch; include tree/read tests and docs delta. |
-| 3 | Transactional sync log + replay + WS fan-out | PR 3 | Base=PR 2 branch; include idempotency/replay tests and tracker update. |
+| 3 | Sync engine + minimal backend/PostgreSQL Compose bring-up | PR 3 | Base=PR 2 branch; include `docker-compose.yml`, replay/idempotency tests, and tracker update. |
 | 4 | MV3 auth + projection + exclusions/reconcile | PR 4 | Base=PR 3 branch; include projection tests and roadmap progress. |
-| 5 | Hardening + compose + verification docs | PR 5 | Base=PR 4 branch; include integration/e2e notes and requirements alignment. |
+| 5 | Hardening + verification docs | PR 5 | Base=PR 4 branch; include integration/e2e notes and requirements alignment. |
 
 ## Phase 1: Foundation
 
@@ -35,16 +35,17 @@ Chain strategy: feature-branch-chain
 
 ## Phase 2: Canonical Domain
 
-- [ ] 2.1 Create `backend/internal/auth/*` for register/login/me, JWT middleware, and durable `clientId` binding.
-- [ ] 2.2 Create `backend/internal/organizations/*` and `backend/internal/workspaces/*` for membership reads, workspace access, and `GET /workspaces/:workspaceId/tree`.
-- [ ] 2.3 Create `backend/internal/bookmarks/*` for folder/bookmark create-update-delete-move, sibling ordering, URL validation, and soft delete.
-- [ ] 2.4 Update `docs/requeriments.md` and `docs/roadmap.md` to document canonical tree, roles, and backend-source-of-truth rules.
+- [x] 2.1 Create `backend/internal/auth/*` for register/login/me, JWT middleware, and durable `clientId` binding.
+- [x] 2.2 Create `backend/internal/organizations/*` and `backend/internal/workspaces/*` for membership reads, workspace access, and `GET /workspaces/:workspaceId/tree`.
+- [x] 2.3 Create `backend/internal/bookmarks/*` for folder/bookmark create-update-delete-move, sibling ordering, URL validation, and soft delete.
+- [x] 2.4 Update `docs/requeriments.md` and `docs/roadmap.md` to document canonical tree, roles, and backend-source-of-truth rules.
 
-## Phase 3: Sync Engine
+## Phase 3: Sync Engine and Local Bring-up
 
 - [ ] 3.1 Create `backend/internal/sync/*` for transactional domain+event writes, per-workspace cursor assignment, and `eventId` idempotency.
 - [ ] 3.2 Create `backend/internal/websocket/*` plus replay handlers for `GET /sync/events?afterCursor=` and `WS /sync/ws?workspaceId=` with origin suppression.
-- [ ] 3.3 Add backend tests covering resume replay, replay gap, duplicate `eventId`, and broadcast-excludes-origin scenarios.
+- [ ] 3.3 Add minimal `docker-compose.yml` for backend + PostgreSQL only, with required env, port, and volume wiring for local backend exercise.
+- [ ] 3.4 Add backend tests plus `README.md`/`docs/roadmap.md` updates covering resume replay, replay gap, duplicate `eventId`, broadcast-excludes-origin, and local bring-up.
 
 ## Phase 4: Extension Projection
 
@@ -55,5 +56,5 @@ Chain strategy: feature-branch-chain
 ## Phase 5: Verification and Documentation
 
 - [ ] 5.1 Add TS tests for mapping persistence, exclusion survival after remote updates, and unauthorized local edit reconciliation.
-- [ ] 5.2 Add `docker-compose.yml` and verification notes for PostgreSQL-backed local dev plus backend/extension bring-up.
+- [ ] 5.2 Add verification notes for PostgreSQL-backed local dev plus backend/extension bring-up after extension wiring lands.
 - [ ] 5.3 Update `README.md`, `docs/requeriments.md`, and `docs/roadmap.md` with delivered slices, open questions, and next-step handoff for apply/verify.
