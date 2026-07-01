@@ -107,16 +107,29 @@ func NewService(pool *pgxpool.Pool) *Service {
 }
 
 func (s *Service) CreateFolder(ctx context.Context, userID, workspaceID string, input CreateFolderInput) (Folder, error) {
-	input.Name = strings.TrimSpace(input.Name)
-	if input.Name == "" {
-		return Folder{}, fmt.Errorf("folder name is required")
-	}
-
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return Folder{}, fmt.Errorf("begin create folder tx: %w", err)
 	}
 	defer tx.Rollback(ctx)
+
+	folder, err := s.CreateFolderTx(ctx, tx, userID, workspaceID, input)
+	if err != nil {
+		return Folder{}, err
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return Folder{}, fmt.Errorf("commit create folder tx: %w", err)
+	}
+
+	return folder, nil
+}
+
+func (s *Service) CreateFolderTx(ctx context.Context, tx pgx.Tx, userID, workspaceID string, input CreateFolderInput) (Folder, error) {
+	input.Name = strings.TrimSpace(input.Name)
+	if input.Name == "" {
+		return Folder{}, fmt.Errorf("folder name is required")
+	}
 
 	if err := s.requireMutatingRole(ctx, tx, userID, workspaceID); err != nil {
 		return Folder{}, err
@@ -128,6 +141,7 @@ func (s *Service) CreateFolder(ctx context.Context, userID, workspaceID string, 
 	var (
 		folder               Folder
 		createdAt, updatedAt time.Time
+		err                  error
 	)
 	err = tx.QueryRow(ctx, `
 		INSERT INTO folders (workspace_id, parent_id, name, position)
@@ -149,10 +163,6 @@ func (s *Service) CreateFolder(ctx context.Context, userID, workspaceID string, 
 	folder.CreatedAt = createdAt.UTC().Format(time.RFC3339)
 	folder.UpdatedAt = updatedAt.UTC().Format(time.RFC3339)
 
-	if err := tx.Commit(ctx); err != nil {
-		return Folder{}, fmt.Errorf("commit create folder tx: %w", err)
-	}
-
 	return folder, nil
 }
 
@@ -163,7 +173,24 @@ func (s *Service) UpdateFolder(ctx context.Context, userID, folderID string, inp
 	}
 	defer tx.Rollback(ctx)
 
-	var folder Folder
+	folder, err := s.UpdateFolderTx(ctx, tx, userID, folderID, input)
+	if err != nil {
+		return Folder{}, err
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return Folder{}, fmt.Errorf("commit update folder tx: %w", err)
+	}
+
+	return folder, nil
+}
+
+func (s *Service) UpdateFolderTx(ctx context.Context, tx pgx.Tx, userID, folderID string, input UpdateFolderInput) (Folder, error) {
+
+	var (
+		folder Folder
+		err    error
+	)
 	err = tx.QueryRow(ctx, `
 		SELECT id, workspace_id, parent_id, name, position
 		FROM folders
@@ -229,10 +256,6 @@ func (s *Service) UpdateFolder(ctx context.Context, userID, folderID string, inp
 	folder.CreatedAt = createdAt.UTC().Format(time.RFC3339)
 	folder.UpdatedAt = updatedAt.UTC().Format(time.RFC3339)
 
-	if err := tx.Commit(ctx); err != nil {
-		return Folder{}, fmt.Errorf("commit update folder tx: %w", err)
-	}
-
 	return folder, nil
 }
 
@@ -243,9 +266,21 @@ func (s *Service) DeleteFolder(ctx context.Context, userID, folderID string) err
 	}
 	defer tx.Rollback(ctx)
 
+	if err := s.DeleteFolderTx(ctx, tx, userID, folderID); err != nil {
+		return err
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit delete folder tx: %w", err)
+	}
+
+	return nil
+}
+
+func (s *Service) DeleteFolderTx(ctx context.Context, tx pgx.Tx, userID, folderID string) error {
 	var workspaceID string
 	var parentID *string
-	err = tx.QueryRow(ctx, `SELECT workspace_id, parent_id FROM folders WHERE id = $1 AND deleted_at IS NULL`, folderID).Scan(&workspaceID, &parentID)
+	err := tx.QueryRow(ctx, `SELECT workspace_id, parent_id FROM folders WHERE id = $1 AND deleted_at IS NULL`, folderID).Scan(&workspaceID, &parentID)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return ErrNotFound
@@ -283,14 +318,29 @@ func (s *Service) DeleteFolder(ctx context.Context, userID, folderID string) err
 		return err
 	}
 
-	if err := tx.Commit(ctx); err != nil {
-		return fmt.Errorf("commit delete folder tx: %w", err)
-	}
-
 	return nil
 }
 
 func (s *Service) CreateBookmark(ctx context.Context, userID, workspaceID string, input CreateBookmarkInput) (Bookmark, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return Bookmark{}, fmt.Errorf("begin create bookmark tx: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	bookmark, err := s.CreateBookmarkTx(ctx, tx, userID, workspaceID, input)
+	if err != nil {
+		return Bookmark{}, err
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return Bookmark{}, fmt.Errorf("commit create bookmark tx: %w", err)
+	}
+
+	return bookmark, nil
+}
+
+func (s *Service) CreateBookmarkTx(ctx context.Context, tx pgx.Tx, userID, workspaceID string, input CreateBookmarkInput) (Bookmark, error) {
 	input.Title = strings.TrimSpace(input.Title)
 	input.URL = strings.TrimSpace(input.URL)
 	if input.Title == "" {
@@ -299,12 +349,6 @@ func (s *Service) CreateBookmark(ctx context.Context, userID, workspaceID string
 	if err := validateURL(input.URL); err != nil {
 		return Bookmark{}, err
 	}
-
-	tx, err := s.pool.Begin(ctx)
-	if err != nil {
-		return Bookmark{}, fmt.Errorf("begin create bookmark tx: %w", err)
-	}
-	defer tx.Rollback(ctx)
 
 	if err := s.requireMutatingRole(ctx, tx, userID, workspaceID); err != nil {
 		return Bookmark{}, err
@@ -316,6 +360,7 @@ func (s *Service) CreateBookmark(ctx context.Context, userID, workspaceID string
 	var (
 		bookmark             Bookmark
 		createdAt, updatedAt time.Time
+		err                  error
 	)
 	err = tx.QueryRow(ctx, `
 		INSERT INTO bookmarks (workspace_id, folder_id, title, url, position)
@@ -337,10 +382,6 @@ func (s *Service) CreateBookmark(ctx context.Context, userID, workspaceID string
 	bookmark.CreatedAt = createdAt.UTC().Format(time.RFC3339)
 	bookmark.UpdatedAt = updatedAt.UTC().Format(time.RFC3339)
 
-	if err := tx.Commit(ctx); err != nil {
-		return Bookmark{}, fmt.Errorf("commit create bookmark tx: %w", err)
-	}
-
 	return bookmark, nil
 }
 
@@ -351,7 +392,24 @@ func (s *Service) UpdateBookmark(ctx context.Context, userID, bookmarkID string,
 	}
 	defer tx.Rollback(ctx)
 
-	var bookmark Bookmark
+	bookmark, err := s.UpdateBookmarkTx(ctx, tx, userID, bookmarkID, input)
+	if err != nil {
+		return Bookmark{}, err
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return Bookmark{}, fmt.Errorf("commit update bookmark tx: %w", err)
+	}
+
+	return bookmark, nil
+}
+
+func (s *Service) UpdateBookmarkTx(ctx context.Context, tx pgx.Tx, userID, bookmarkID string, input UpdateBookmarkInput) (Bookmark, error) {
+
+	var (
+		bookmark Bookmark
+		err      error
+	)
 	err = tx.QueryRow(ctx, `
 		SELECT id, workspace_id, folder_id, title, url, position
 		FROM bookmarks
@@ -422,10 +480,6 @@ func (s *Service) UpdateBookmark(ctx context.Context, userID, bookmarkID string,
 	bookmark.CreatedAt = createdAt.UTC().Format(time.RFC3339)
 	bookmark.UpdatedAt = updatedAt.UTC().Format(time.RFC3339)
 
-	if err := tx.Commit(ctx); err != nil {
-		return Bookmark{}, fmt.Errorf("commit update bookmark tx: %w", err)
-	}
-
 	return bookmark, nil
 }
 
@@ -436,8 +490,21 @@ func (s *Service) DeleteBookmark(ctx context.Context, userID, bookmarkID string)
 	}
 	defer tx.Rollback(ctx)
 
+	if err := s.DeleteBookmarkTx(ctx, tx, userID, bookmarkID); err != nil {
+		return err
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit delete bookmark tx: %w", err)
+	}
+
+	return nil
+}
+
+func (s *Service) DeleteBookmarkTx(ctx context.Context, tx pgx.Tx, userID, bookmarkID string) error {
+
 	var workspaceID, folderID string
-	err = tx.QueryRow(ctx, `SELECT workspace_id, folder_id FROM bookmarks WHERE id = $1 AND deleted_at IS NULL`, bookmarkID).Scan(&workspaceID, &folderID)
+	err := tx.QueryRow(ctx, `SELECT workspace_id, folder_id FROM bookmarks WHERE id = $1 AND deleted_at IS NULL`, bookmarkID).Scan(&workspaceID, &folderID)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return ErrNotFound
@@ -455,10 +522,6 @@ func (s *Service) DeleteBookmark(ctx context.Context, userID, bookmarkID string)
 
 	if err := s.reorderBookmarkSiblings(ctx, tx, workspaceID, folderID, "", nil); err != nil {
 		return err
-	}
-
-	if err := tx.Commit(ctx); err != nil {
-		return fmt.Errorf("commit delete bookmark tx: %w", err)
 	}
 
 	return nil
@@ -534,15 +597,20 @@ func (s *Service) ensureBookmarkFolder(ctx context.Context, tx pgx.Tx, workspace
 }
 
 func (s *Service) reorderFolderSiblings(ctx context.Context, tx pgx.Tx, workspaceID string, parentID *string, movingID string, requestedPosition *int) error {
+	var movingUUID *string
+	if movingID != "" {
+		movingUUID = &movingID
+	}
+
 	rows, err := tx.Query(ctx, `
 		SELECT id
 		FROM folders
 		WHERE workspace_id = $1
 		  AND deleted_at IS NULL
 		  AND (($2::uuid IS NULL AND parent_id IS NULL) OR parent_id = $2)
-		  AND ($3 = '' OR id <> $3)
+		  AND ($3::uuid IS NULL OR id <> $3::uuid)
 		ORDER BY position, id
-	`, workspaceID, parentID, movingID)
+	`, workspaceID, parentID, movingUUID)
 	if err != nil {
 		return fmt.Errorf("query folder siblings: %w", err)
 	}

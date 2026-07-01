@@ -42,10 +42,10 @@ Chain strategy: feature-branch-chain
 
 ## Phase 3: Sync Engine and Local Bring-up
 
-- [ ] 3.1 Create `backend/internal/sync/*` for transactional domain+event writes, per-workspace cursor assignment, and `eventId` idempotency.
-- [ ] 3.2 Create `backend/internal/websocket/*` plus replay handlers for `GET /sync/events?afterCursor=` and `WS /sync/ws?workspaceId=` with origin suppression.
-- [ ] 3.3 Add minimal `docker-compose.yml` for backend + PostgreSQL only, with required env, port, and volume wiring for local backend exercise.
-- [ ] 3.4 Add backend tests plus `README.md`/`docs/roadmap.md` updates covering resume replay, replay gap, duplicate `eventId`, broadcast-excludes-origin, and local bring-up.
+- [x] 3.1 Create `backend/internal/sync/*` for transactional domain+event writes, per-workspace cursor assignment, and `eventId` idempotency.
+- [x] 3.2 Create `backend/internal/websocket/*` plus replay handlers for `GET /sync/events?afterCursor=` and `WS /sync/ws?workspaceId=` with origin suppression.
+- [x] 3.3 Add minimal `docker-compose.yml` for backend + PostgreSQL only, with required env, port, and volume wiring for local backend exercise.
+- [x] 3.4 Add backend tests plus `README.md`/`docs/roadmap.md` updates covering resume replay, replay gap, duplicate `eventId`, broadcast-excludes-origin, and local bring-up.
 
 ## Phase 4: Extension Projection
 

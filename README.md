@@ -4,13 +4,15 @@ Shared Bookmark Sync is a greenfield MVP that keeps organization and workspace b
 
 ## Current Slice
 
-This repository is currently on **Work Unit 2 / PR 2** of a chained Gitflow delivery plan:
+This repository is currently on **Work Unit 3 / PR 3** of a chained Gitflow delivery plan:
 
 - auth, durable client bindings, and JWT-protected session reads
 - organization/workspace membership reads and canonical workspace tree reads
 - folder/bookmark shared CRUD with role gates, ordering, URL validation, and soft delete
+- transactional sync-event writes, per-workspace cursors, replay endpoint, and websocket fan-out with origin suppression
+- minimal local backend + PostgreSQL Compose bring-up
 
-Sync replay, websocket fan-out, and a minimal local backend + PostgreSQL Compose stack are the next slice; extension code remains deferred until after that backend exercise step.
+Chrome extension projection work remains deferred until the next slice.
 
 ## Architecture Baseline
 
@@ -47,7 +49,7 @@ openspec/
 
 1. Create a PostgreSQL database for the project.
 2. Export the required environment variables.
-3. Run the backend from the `backend/` directory.
+3. Run the backend from the `backend/` directory, or use the minimal Compose stack.
 
 ```bash
 export DATABASE_URL="postgres://postgres:postgres@localhost:5432/shared_bookmark_sync?sslmode=disable"
@@ -74,6 +76,8 @@ Available endpoints in this slice:
 - `POST /workspaces/{workspaceId}/bookmarks`
 - `PATCH /bookmarks/{bookmarkId}`
 - `DELETE /bookmarks/{bookmarkId}`
+- `GET /sync/events?workspaceId=<id>&afterCursor=<n>`
+- `GET /sync/ws?workspaceId=<id>&accessToken=<jwt>&clientId=<durable-client-id>`
 - `GET /healthz`
 - `GET /readyz`
 
@@ -81,6 +85,17 @@ Authenticated routes require:
 
 - `Authorization: Bearer <token>`
 - `X-Client-Id: <durable-browser-client-id>`
+
+Shared mutation routes also accept:
+
+- `X-Sync-Event-Id: <client-generated-id>` for idempotent mutation retries
+- `X-Sync-Base-Cursor: <last-applied-cursor>` for client replay context
+
+Successful shared mutations return:
+
+- `X-Sync-Event-Id`
+- `X-Sync-Cursor`
+- `X-Sync-Duplicate`
 
 ## Configuration
 
@@ -107,6 +122,36 @@ go build ./cmd/api
 ```
 
 These commands validate compilation only. There is no automated integration or end-to-end runner in the repository yet.
+
+Current automated backend coverage for this slice focuses on:
+
+- contiguous resume replay acceptance
+- replay-gap resync detection
+- duplicate mutation ACK header behavior
+- websocket broadcast exclusion for the origin client
+
+## Minimal Docker Compose Bring-up
+
+From the repository root:
+
+```bash
+docker compose up --build
+```
+
+This starts only:
+
+- PostgreSQL on `localhost:5433`
+- the Go backend on `localhost:8081`
+
+The backend container is built from `backend/Dockerfile`, bakes in the Go binary plus SQL migrations, and starts without a source bind mount. This avoids devcontainer-to-host Docker mount mismatches while keeping auto-migrations enabled.
+
+## Sync Guarantees in This Slice
+
+- Shared folder/bookmark mutations write canonical data and `sync_events` in the same PostgreSQL transaction.
+- Each workspace receives a monotonic `cursor` sequence through `workspace_cursors`.
+- `GET /sync/events` returns only events after the caller's cursor and rejects replay gaps with `resync_required` semantics.
+- Duplicate `X-Sync-Event-Id` values return the prior ACK without producing a second shared mutation.
+- WebSocket fan-out excludes the origin client and broadcasts only to other subscribers on the same workspace.
 
 ## Canonical Domain Rules in This Slice
 

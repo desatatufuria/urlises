@@ -310,6 +310,10 @@ Rules:
 5. When the backend broadcasts an event, it must not send it back to the same originClientId.
 6. When the extension applies a remote change to Chrome, it must mark the operation as remote.
 7. Chrome bookmark listeners must ignore changes currently being applied from remote sync.
+8. The backend must assign a monotonic per-workspace cursor to every accepted shared mutation.
+9. Reconnect replay must use `GET /sync/events?workspaceId=<id>&afterCursor=<n>` and return only contiguous later events.
+10. If replay continuity cannot be proven, the backend must instruct the client to resync from a fresh snapshot.
+11. MVP policy: retain all sync events in PostgreSQL; do not implement pruning or retention jobs yet.
 
 ## 9. Chrome Extension Behavior
 

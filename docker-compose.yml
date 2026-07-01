@@ -1,0 +1,45 @@
+name: shared-bookmark-sync
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: shared-bookmark-sync-postgres
+    environment:
+      POSTGRES_DB: shared_bookmark_sync
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5433:5432"
+    volumes:
+      - shared-bookmark-sync-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d shared_bookmark_sync"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    image: shared-bookmark-sync-backend:local
+    container_name: shared-bookmark-sync-backend
+    environment:
+      APP_ROOT: /app
+      SERVER_ADDR: :8080
+      AUTH_JWT_SECRET: change-me-for-local-dev
+      AUTH_CLIENT_ID_HEADER: X-Client-Id
+      AUTH_TOKEN_TTL: 24h
+      DATABASE_URL: postgres://postgres:postgres@postgres:5432/shared_bookmark_sync?sslmode=disable
+      DATABASE_AUTO_MIGRATE: "true"
+      DATABASE_MIGRATIONS_DIR: migrations
+      DATABASE_MAX_CONNS: "10"
+      DATABASE_MIN_CONNS: "1"
+    ports:
+      - "8081:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  shared-bookmark-sync-postgres-data:

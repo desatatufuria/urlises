@@ -15,6 +15,8 @@ import (
 	"github.com/furia/shared-bookmark-sync/backend/internal/database"
 	"github.com/furia/shared-bookmark-sync/backend/internal/httpapi"
 	"github.com/furia/shared-bookmark-sync/backend/internal/organizations"
+	syncapi "github.com/furia/shared-bookmark-sync/backend/internal/sync"
+	wsapi "github.com/furia/shared-bookmark-sync/backend/internal/websocket"
 	"github.com/furia/shared-bookmark-sync/backend/internal/workspaces"
 )
 
@@ -44,6 +46,8 @@ func main() {
 	organizationsService := organizations.NewService(pool)
 	workspacesService := workspaces.NewService(pool)
 	bookmarksService := bookmarks.NewService(pool)
+	websocketHub := wsapi.NewHub()
+	syncService := syncapi.NewService(syncapi.NewPostgresStore(pool, bookmarksService, workspacesService, websocketHub))
 
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		httpapi.WriteJSON(w, http.StatusOK, map[string]string{
@@ -72,7 +76,9 @@ func main() {
 	auth.RegisterRoutes(mux, authService)
 	organizations.RegisterRoutes(mux, authService.Middleware, organizationsService)
 	workspaces.RegisterRoutes(mux, authService.Middleware, workspacesService)
-	bookmarks.RegisterRoutes(mux, authService.Middleware, bookmarksService)
+	syncapi.RegisterBookmarkRoutes(mux, authService.Middleware, syncService)
+	syncapi.RegisterRoutes(mux, authService.Middleware, syncService)
+	wsapi.RegisterRoutes(mux, authService, workspacesService, syncService, websocketHub)
 
 	server := &http.Server{
 		Addr:              cfg.Server.Addr,

@@ -36,6 +36,13 @@
 - Add only a minimal `docker-compose.yml` for backend + PostgreSQL with essential env and volume wiring.
 - Do not expand this slice into observability, reverse proxy, extension services, or deployment hardening.
 
+Delivered in PR 3:
+- transactional sync-event writes now wrap shared folder/bookmark mutations
+- `GET /sync/events` replays ordered events and flags replay gaps for resync
+- `GET /sync/ws` subscribes workspace clients and suppresses origin rebroadcast
+- repository root `docker-compose.yml` now brings up only PostgreSQL + backend for local exercise
+- slice-level backend tests cover replay continuity, replay-gap detection, duplicate ACK headers, and origin suppression
+
 ### Work Unit 4
 - The extension must manage only `Shared Bookmarks / Organization / Workspace`.
 - Viewer-local exclusions must stay local and survive remote updates.
