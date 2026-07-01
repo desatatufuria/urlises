@@ -310,6 +310,10 @@ Rules:
 5. When the backend broadcasts an event, it must not send it back to the same originClientId.
 6. When the extension applies a remote change to Chrome, it must mark the operation as remote.
 7. Chrome bookmark listeners must ignore changes currently being applied from remote sync.
+8. The backend must assign a monotonic per-workspace cursor to every accepted shared mutation.
+9. Reconnect replay must use `GET /sync/events?workspaceId=<id>&afterCursor=<n>` and return only contiguous later events.
+10. If replay continuity cannot be proven, the backend must instruct the client to resync from a fresh snapshot.
+11. MVP policy: retain all sync events in PostgreSQL; do not implement pruning or retention jobs yet.
 
 ## 9. Chrome Extension Behavior
 
@@ -391,6 +395,12 @@ DELETE /bookmarks/:bookmarkId
 GET /sync/events?workspaceId=:workspaceId&since=:timestamp
 WS  /sync/ws?workspaceId=:workspaceId
 
+Authentication notes for MVP:
+
+- `POST /auth/register` and `POST /auth/login` require a durable client identifier header (`X-Client-Id` by default).
+- The backend binds that client ID to the authenticated device/user record and returns a JWT for subsequent requests.
+- Authenticated requests must send both `Authorization: Bearer <token>` and the same durable `X-Client-Id` header.
+
 
 ## 12. WebSocket Behavior
 
@@ -457,6 +467,10 @@ For MVP, do not implement complex permission inheritance.
 - Users cannot access workspaces where they are not members.
 - The backend is the source of truth.
 - Chrome local state is a projection of backend state.
+- Workspace trees must expose stable backend IDs, parent links, and sibling order.
+- Only `admin` and `editor` members may mutate shared folders and bookmarks.
+- `viewer` members may read workspace trees but must not mutate shared semantics.
+- Shared folder/bookmark moves must preserve deterministic sibling ordering after create, update, move, and soft delete operations.
 
 ## 15. First Implementation Milestones
 
