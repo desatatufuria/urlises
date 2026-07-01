@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Shared Bookmark Sync Settings</title>
+    <style>
+      body { font-family: Arial, sans-serif; margin: 24px; max-width: 900px; }
+      .grid { display: grid; gap: 16px; }
+      .panel { border: 1px solid #ddd; border-radius: 10px; padding: 16px; }
+      .workspace { margin-left: 16px; display: grid; gap: 8px; }
+      button { padding: 8px 12px; font: inherit; }
+      pre { white-space: pre-wrap; background: #f7f7f7; padding: 12px; border-radius: 8px; }
+    </style>
+  </head>
+  <body>
+    <div class="grid">
+      <section class="panel">
+        <h1>Workspace Projection</h1>
+        <p id="summary"></p>
+        <div id="workspace-groups"></div>
+        <button id="save-selection" type="button">Save workspace selection</button>
+      </section>
+
+      <section class="panel">
+        <h2>Diagnostics</h2>
+        <button id="resync-all" type="button">Resync all selected workspaces</button>
+        <pre id="diagnostics"></pre>
+      </section>
+    </div>
+
+    <script type="module" src="../../dist/options/options.js"></script>
+  </body>
+</html>

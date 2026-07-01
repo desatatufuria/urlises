@@ -47,6 +47,12 @@ Delivered in PR 3:
 - The extension must manage only `Shared Bookmarks / Organization / Workspace`.
 - Viewer-local exclusions must stay local and survive remote updates.
 
+Delivered in PR 4:
+- `extension/` now contains the MV3 shell, TypeScript toolchain, popup login flow, options workspace selection UI, and background sync service worker
+- the extension persists JWT session state, durable client identity, backend↔Chrome mappings, per-workspace cursors, and viewer-local exclusions in `chrome.storage.local`
+- snapshot bootstrap, replay catch-up, websocket subscription, managed-root projection, remote apply suppression, and manual resync diagnostics are wired for selected workspaces only
+- focused projection behavior tests now cover exclusion-preserving snapshot filtering and descendant exclusion cleanup after canonical folder deletion
+
 ### Work Unit 5
 - Documentation must reflect delivered behavior and open questions.
 - Verification notes must state what is automated versus manual.

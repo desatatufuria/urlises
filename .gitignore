@@ -1,2 +1,5 @@
 .atl/
 /backend/api
+/extension/node_modules/
+/extension/dist/
+/tmp/

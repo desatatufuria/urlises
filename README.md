@@ -4,15 +4,14 @@ Shared Bookmark Sync is a greenfield MVP that keeps organization and workspace b
 
 ## Current Slice
 
-This repository is currently on **Work Unit 3 / PR 3** of a chained Gitflow delivery plan:
+This repository is currently on **Work Unit 4 / PR 4** of a chained Gitflow delivery plan:
 
 - auth, durable client bindings, and JWT-protected session reads
 - organization/workspace membership reads and canonical workspace tree reads
 - folder/bookmark shared CRUD with role gates, ordering, URL validation, and soft delete
 - transactional sync-event writes, per-workspace cursors, replay endpoint, and websocket fan-out with origin suppression
 - minimal local backend + PostgreSQL Compose bring-up
-
-Chrome extension projection work remains deferred until the next slice.
+- Manifest V3 extension login, workspace selection, managed projection, cursor replay, websocket subscription, viewer-local exclusions, and resync diagnostics
 
 ## Architecture Baseline
 
@@ -38,6 +37,12 @@ docs/
   roadmap.md             chained MVP delivery roadmap
 openspec/
   changes/shared-bookmark-sync-mvp/
+extension/
+  manifest.json          MV3 shell pointing to popup/options UI and background service worker
+  src/background/        bookmark listeners, projection sync engine, Chrome bookmark applier
+  src/popup/             sign-in UI for JWT session bootstrap
+  src/options/           workspace selection, resync-all, diagnostics
+  src/shared/            REST/WS clients, session storage, mappings, exclusions, runtime types
 ```
 
 ## Prerequisites
@@ -123,6 +128,23 @@ go build ./cmd/api
 
 These commands validate compilation only. There is no automated integration or end-to-end runner in the repository yet.
 
+From `extension/`:
+
+```bash
+npm install
+npm run build
+npm run typecheck
+npm run test:projection
+```
+
+The extension build emits the service worker, popup script, and options script into `extension/dist/`.
+
+Current automated extension coverage for this slice focuses on:
+
+- managed-root projection filtering for local-only exclusions
+- descendant exclusion cleanup after canonical folder deletion
+- exclusion pruning during snapshot-driven reconciliation
+
 Current automated backend coverage for this slice focuses on:
 
 - contiguous resume replay acceptance
@@ -152,6 +174,15 @@ The backend container is built from `backend/Dockerfile`, bakes in the Go binary
 - `GET /sync/events` returns only events after the caller's cursor and rejects replay gaps with `resync_required` semantics.
 - Duplicate `X-Sync-Event-Id` values return the prior ACK without producing a second shared mutation.
 - WebSocket fan-out excludes the origin client and broadcasts only to other subscribers on the same workspace.
+- The extension projects only `Shared Bookmarks / Organization / Workspace` and ignores everything outside that managed path.
+- Viewer-local exclusions stay in `chrome.storage.local`, survive remote updates, and do not mutate canonical backend data.
+
+## Extension Bring-up for This Slice
+
+1. Start the backend and PostgreSQL stack.
+2. Build the extension from `extension/`.
+3. Open `chrome://extensions`, enable Developer Mode, and load `extension/` as an unpacked extension.
+4. Sign in from the popup, open Options, select accessible workspaces, and use `Resync all selected workspaces` when diagnostics indicate replay or reconciliation drift.
 
 ## Canonical Domain Rules in This Slice
 

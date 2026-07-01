@@ -133,7 +133,7 @@ extension
 │   ├── background
 │   │   ├── service-worker.ts
 │   │   ├── bookmark-listeners.ts
-│   │   ├── sync-client.ts
+│   │   ├── projection.ts
 │   │   └── chrome-bookmarks.ts
 │   ├── popup
 │   │   ├── popup.html
@@ -144,7 +144,8 @@ extension
 │   └── shared
 │       ├── api.ts
 │       ├── types.ts
-│       └── config.ts
+│       ├── runtime.ts
+│       └── websocket.ts
 
 
 ## 5. Core Domain Model

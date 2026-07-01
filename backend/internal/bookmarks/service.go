@@ -639,15 +639,20 @@ func (s *Service) reorderFolderSiblings(ctx context.Context, tx pgx.Tx, workspac
 }
 
 func (s *Service) reorderBookmarkSiblings(ctx context.Context, tx pgx.Tx, workspaceID, folderID, movingID string, requestedPosition *int) error {
+	var movingUUID *string
+	if movingID != "" {
+		movingUUID = &movingID
+	}
+
 	rows, err := tx.Query(ctx, `
 		SELECT id
 		FROM bookmarks
 		WHERE workspace_id = $1
 		  AND folder_id = $2
 		  AND deleted_at IS NULL
-		  AND ($3 = '' OR id <> $3)
+		  AND ($3::uuid IS NULL OR id <> $3::uuid)
 		ORDER BY position, id
-	`, workspaceID, folderID, movingID)
+	`, workspaceID, folderID, movingUUID)
 	if err != nil {
 		return fmt.Errorf("query bookmark siblings: %w", err)
 	}
