@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Shared Bookmark Sync</title>
+    <style>
+      body { font-family: Arial, sans-serif; margin: 16px; min-width: 320px; }
+      form, .stack { display: grid; gap: 8px; }
+      input, button { padding: 8px; font: inherit; }
+      small { color: #555; }
+      .hidden { display: none; }
+      .row { display: flex; gap: 8px; }
+      .status { background: #f4f4f4; padding: 12px; border-radius: 8px; }
+    </style>
+  </head>
+  <body>
+    <section id="signed-out" class="stack">
+      <h1>Shared Bookmark Sync</h1>
+      <form id="login-form">
+        <input id="backend-url" type="url" placeholder="Backend URL" required />
+        <input id="email" type="email" placeholder="Email" required />
+        <input id="password" type="password" placeholder="Password" required />
+        <input id="device-name" type="text" placeholder="Device name" value="Chrome Extension" />
+        <button type="submit">Sign in</button>
+      </form>
+      <small>Projects only the managed path: Shared Bookmarks / Organization / Workspace.</small>
+    </section>
+
+    <section id="signed-in" class="stack hidden">
+      <h1>Session Ready</h1>
+      <div class="status">
+        <div id="session-summary"></div>
+        <div id="workspace-summary"></div>
+      </div>
+      <div class="row">
+        <button id="open-options" type="button">Open workspace settings</button>
+        <button id="logout" type="button">Sign out</button>
+      </div>
+    </section>
+
+    <p id="error" role="alert"></p>
+    <script type="module" src="../../dist/popup/popup.js"></script>
+  </body>
+</html>

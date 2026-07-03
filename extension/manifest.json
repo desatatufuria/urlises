@@ -1,0 +1,17 @@
+{
+  "manifest_version": 3,
+  "name": "Shared Bookmark Sync MVP",
+  "version": "0.1.0",
+  "description": "Projects backend-authoritative shared workspaces into Chrome bookmarks.",
+  "permissions": ["bookmarks", "storage"],
+  "host_permissions": ["http://*/*", "https://*/*", "ws://*/*", "wss://*/*"],
+  "background": {
+    "service_worker": "dist/background/service-worker.js",
+    "type": "module"
+  },
+  "action": {
+    "default_title": "Shared Bookmark Sync",
+    "default_popup": "src/popup/popup.html"
+  },
+  "options_page": "src/options/options.html"
+}

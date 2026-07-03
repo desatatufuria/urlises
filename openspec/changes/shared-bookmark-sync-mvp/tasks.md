@@ -49,9 +49,9 @@ Chain strategy: feature-branch-chain
 
 ## Phase 4: Extension Projection
 
-- [ ] 4.1 Create `extension/manifest.json`, `extension/package.json`, `extension/tsconfig.json`, and `extension/src/shared/*` for REST/WS clients, types, session, mapping, and exclusion storage.
-- [ ] 4.2 Create `extension/src/popup/*` and `extension/src/options/*` for JWT login, workspace selection, resync-all, and diagnostics.
-- [ ] 4.3 Create `extension/src/background/*` for managed-root listeners, snapshot bootstrap, cursor replay, remote apply suppression, and viewer local exclusions.
+- [x] 4.1 Create `extension/manifest.json`, `extension/package.json`, `extension/tsconfig.json`, and `extension/src/shared/*` for REST/WS clients, types, session, mapping, and exclusion storage.
+- [x] 4.2 Create `extension/src/popup/*` and `extension/src/options/*` for JWT login, workspace selection, resync-all, and diagnostics.
+- [x] 4.3 Create `extension/src/background/*` for managed-root listeners, snapshot bootstrap, cursor replay, remote apply suppression, and viewer local exclusions.
 
 ## Phase 5: Verification and Documentation
 
