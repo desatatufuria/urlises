@@ -2,9 +2,18 @@
 
 Shared Bookmark Sync is a greenfield MVP that keeps organization and workspace bookmark trees consistent across Chrome clients while treating the Go backend as the canonical source of truth.
 
-## Current Slice
+## Admin Backend Foundation Delivery
 
-This repository contains the **Work Unit 4 / PR 4 baseline plus extension-only follow-up remediations and the premium UI redesign slice** on `feature/extension-premium-ui`:
+This branch carries the `admin-backend-foundation` chained backend delivery through **PR 3 / Work Unit 3**:
+
+- explicit organization, invitation, group, workspace, and workspace-grant control-plane routes
+- shared `internal/access` resolution for effective workspace roles across direct and group grants
+- runtime-compatible workspace reads backed by the new access model
+- bookmark write guards enforced through effective shared access instead of legacy `workspace_members` reads
+
+## Current Product Baseline
+
+This repository now includes:
 
 - auth, durable client bindings, and JWT-protected session reads
 - organization/workspace membership reads and canonical workspace tree reads
@@ -73,9 +82,25 @@ Available endpoints in this slice:
 - `POST /auth/login`
 - `GET /me`
 - `GET /organizations`
+- `POST /organizations`
+- `GET /organizations/{organizationId}/members`
+- `PATCH /organizations/{organizationId}/members`
+- `POST /organizations/{organizationId}/invitations`
+- `POST /invitations/{token}/accept`
+- `GET /organizations/{organizationId}/groups`
+- `POST /organizations/{organizationId}/groups`
+- `PATCH /organizations/{organizationId}/groups/{groupId}`
+- `DELETE /organizations/{organizationId}/groups/{groupId}`
+- `POST /groups/{groupId}/members`
+- `DELETE /groups/{groupId}/members/{userId}`
 - `GET /organizations/{organizationId}/workspaces`
+- `POST /organizations/{organizationId}/workspaces`
 - `GET /workspaces/{workspaceId}`
 - `GET /workspaces/{workspaceId}/tree`
+- `PUT /workspaces/{workspaceId}/users/{userId}/access`
+- `DELETE /workspaces/{workspaceId}/users/{userId}/access`
+- `PUT /workspaces/{workspaceId}/groups/{groupId}/access`
+- `DELETE /workspaces/{workspaceId}/groups/{groupId}/access`
 - `POST /workspaces/{workspaceId}/folders`
 - `PATCH /folders/{folderId}`
 - `DELETE /folders/{folderId}`
@@ -118,7 +143,7 @@ Successful shared mutations return:
 | `DATABASE_MIGRATIONS_DIR` | No | `migrations` | Relative migrations directory from `APP_ROOT`. |
 | `APP_ROOT` | No | `.` | Base path used to resolve migrations. |
 
-## Verification Commands for This Slice
+## Verification Commands
 
 From `backend/`:
 
@@ -127,7 +152,7 @@ go test ./...
 go build ./cmd/api
 ```
 
-These commands validate compilation only. There is no automated integration or end-to-end runner in the repository yet.
+These commands validate compilation and the current unit-style test coverage. PostgreSQL-backed integration tests also exist for selected admin/backend flows, but they require explicit database environment variables.
 
 From `extension/`:
 
@@ -155,6 +180,22 @@ Current automated backend coverage for this slice focuses on:
 - replay-gap resync detection
 - duplicate mutation ACK header behavior
 - websocket broadcast exclusion for the origin client
+- workspace creator-only default admin grants
+- highest-role-wins recalculation across direct and group workspace access
+- bookmark mutation guards resolved through shared access grants
+
+PostgreSQL-backed integration tests remain environment-gated and require one of:
+
+- `WORKSPACES_TEST_DATABASE_URL`
+- `GROUPS_TEST_DATABASE_URL`
+- `BOOKMARKS_TEST_DATABASE_URL`
+- `DATABASE_URL`
+
+For the admin backend invitation flow specifically, this helper runs the organization integration tests against the local Docker PostgreSQL instance from the devcontainer/host setup:
+
+```bash
+./scripts/test-organizations.sh
+```
 
 ## Minimal Docker Compose Bring-up
 
@@ -298,6 +339,9 @@ Manual Chromium validation completed on the current branch:
 - `viewer` members can read workspace trees but cannot change shared semantics.
 - `GET /workspaces/{workspaceId}/tree` returns stable backend IDs, parent links, and sibling order.
 - Folder and bookmark deletes are soft deletes; sibling positions are re-packed after create, move, update, and delete operations.
+- Organization membership alone does not unlock a workspace; access must come from an explicit direct or group grant.
+- New workspaces start with only the creator as `admin` until additional user or group grants are added.
+- Group membership is reusable for access, but grants nothing until the group is attached to a workspace.
 
 ## Gitflow and Chained Delivery
 
@@ -310,6 +354,14 @@ This change follows **Gitflow** with a dedicated tracker branch:
 
 Each work unit must stay reviewable, self-contained, and documented. Documentation updates ship with the same slice that introduces the behavior.
 
+The admin backend foundation follow-up uses the same Gitflow chain discipline:
+
+- Tracker branch: `feature/admin-backend-foundation`
+- Delivery model: `feature-branch-chain`
+- PR 1: schema + shared access
+- PR 2: organizations + invitations + groups
+- PR 3: workspace grants + runtime integration + verification + docs
+
 ## Review Slice Policy
 
 - Keep each PR focused on one work unit.
@@ -318,3 +370,15 @@ Each work unit must stay reviewable, self-contained, and documented. Documentati
 - Prefer compile/build verification when full test infrastructure does not exist yet.
 
 See `docs/roadmap.md` for the five planned slices and their acceptance checkpoints.
+
+## Manual API Validation: Admin Backend Foundation
+
+Use an authenticated admin session with the durable client header already required by the runtime routes.
+
+1. `POST /organizations` and confirm the creator becomes the initial `owner`.
+2. `POST /organizations/{organizationId}/invitations`, then `POST /invitations/{token}/accept`, and confirm the invitee becomes an active organization member.
+3. `POST /organizations/{organizationId}/groups` plus `POST /groups/{groupId}/members` to prepare a reusable access group.
+4. `POST /organizations/{organizationId}/workspaces` and confirm only the creator has initial `admin` access.
+5. `PUT /workspaces/{workspaceId}/users/{userId}/access` and `PUT /workspaces/{workspaceId}/groups/{groupId}/access`, then confirm `GET /organizations/{organizationId}/workspaces` and `GET /workspaces/{workspaceId}` expose the effective highest role.
+6. Remove one grant path at a time with the matching `DELETE` endpoints and confirm remaining access is recalculated instead of dropped prematurely.
+7. Validate bookmark writes: `POST /workspaces/{workspaceId}/folders` must succeed for effective `admin`/`editor` access and fail with `403` for viewer-only or no-grant users.
