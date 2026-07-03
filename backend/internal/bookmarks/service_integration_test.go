@@ -63,11 +63,11 @@ func TestCreateFolderReordersRootSiblingsInPostgres(t *testing.T) {
 	}
 
 	userID := insertTestUser(t, ctx, pool)
-	workspaceID := insertTestWorkspace(t, ctx, pool)
-	insertWorkspaceMember(t, ctx, pool, workspaceID, userID, "editor")
+	_, workspaceID := insertTestWorkspace(t, ctx, pool)
+	insertWorkspaceUserAccess(t, ctx, pool, workspaceID, userID, "editor")
 	existingFolderID := insertTestFolder(t, ctx, pool, workspaceID, nil, "Existing", 0)
 
-	service := NewService(pool)
+	service := NewService(pool, nil)
 	position := 0
 	folder, err := service.CreateFolder(ctx, userID, workspaceID, CreateFolderInput{
 		Name:     "Inserted first",
@@ -142,12 +142,12 @@ func TestCreateBookmarkReordersFolderSiblingsInPostgres(t *testing.T) {
 	}
 
 	userID := insertTestUser(t, ctx, pool)
-	workspaceID := insertTestWorkspace(t, ctx, pool)
-	insertWorkspaceMember(t, ctx, pool, workspaceID, userID, "editor")
+	_, workspaceID := insertTestWorkspace(t, ctx, pool)
+	insertWorkspaceUserAccess(t, ctx, pool, workspaceID, userID, "editor")
 	folderID := insertTestFolder(t, ctx, pool, workspaceID, nil, "Folder", 0)
 	existingBookmarkID := insertTestBookmark(t, ctx, pool, workspaceID, folderID, "Existing", "https://example.com/existing", 0)
 
-	service := NewService(pool)
+	service := NewService(pool, nil)
 	position := 0
 	bookmark, err := service.CreateBookmark(ctx, userID, workspaceID, CreateBookmarkInput{
 		FolderID: folderID,
@@ -174,6 +174,96 @@ func TestCreateBookmarkReordersFolderSiblingsInPostgres(t *testing.T) {
 	}
 }
 
+func TestCreateFolderUsesEffectiveSharedAccessResults(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping PostgreSQL integration test in short mode")
+	}
+
+	databaseURL := strings.TrimSpace(os.Getenv("BOOKMARKS_TEST_DATABASE_URL"))
+	if databaseURL == "" {
+		databaseURL = strings.TrimSpace(os.Getenv("DATABASE_URL"))
+	}
+	if databaseURL == "" {
+		t.Skip("set BOOKMARKS_TEST_DATABASE_URL or DATABASE_URL to run PostgreSQL integration tests")
+	}
+
+	ctx := context.Background()
+	adminPool, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		t.Fatalf("open admin pool: %v", err)
+	}
+	defer adminPool.Close()
+	if err := adminPool.Ping(ctx); err != nil {
+		t.Skipf("skipping PostgreSQL integration test: %v", err)
+	}
+
+	schemaName := fmt.Sprintf("bookmarks_test_%d", time.Now().UnixNano())
+	if _, err := adminPool.Exec(ctx, fmt.Sprintf("CREATE SCHEMA %s", schemaName)); err != nil {
+		t.Fatalf("create schema: %v", err)
+	}
+	defer func() {
+		if _, err := adminPool.Exec(ctx, fmt.Sprintf("DROP SCHEMA %s CASCADE", schemaName)); err != nil {
+			t.Fatalf("drop schema: %v", err)
+		}
+	}()
+
+	poolConfig, err := pgxpool.ParseConfig(databaseURL)
+	if err != nil {
+		t.Fatalf("parse database url: %v", err)
+	}
+	poolConfig.ConnConfig.RuntimeParams["search_path"] = schemaName
+
+	pool, err := pgxpool.NewWithConfig(ctx, poolConfig)
+	if err != nil {
+		t.Fatalf("open test pool: %v", err)
+	}
+	defer pool.Close()
+
+	if err := database.Migrate(ctx, pool, filepath.Clean(filepath.Join("..", "..", "migrations"))); err != nil {
+		t.Fatalf("migrate test schema: %v", err)
+	}
+
+	userID := insertTestUser(t, ctx, pool)
+	organizationID, workspaceID := insertTestWorkspace(t, ctx, pool)
+	insertOrganizationMember(t, ctx, pool, organizationID, userID, "member")
+	insertWorkspaceUserAccess(t, ctx, pool, workspaceID, userID, "viewer")
+	groupID := insertTestGroup(t, ctx, pool, organizationID, "monitoring")
+	insertTestGroupMember(t, ctx, pool, groupID, userID)
+	insertWorkspaceGroupAccess(t, ctx, pool, workspaceID, groupID, "editor")
+
+	service := NewService(pool, nil)
+	folder, err := service.CreateFolder(ctx, userID, workspaceID, CreateFolderInput{Name: "Granted by group"})
+	if err != nil {
+		t.Fatalf("create folder through effective editor access: %v", err)
+	}
+	if folder.Name != "Granted by group" {
+		t.Fatalf("folder name = %q, want Granted by group", folder.Name)
+	}
+
+	if _, err := pool.Exec(ctx, `DELETE FROM workspace_group_access WHERE workspace_id = $1 AND group_id = $2`, workspaceID, groupID); err != nil {
+		t.Fatalf("delete workspace group access: %v", err)
+	}
+
+	_, err = service.CreateFolder(ctx, userID, workspaceID, CreateFolderInput{Name: "Viewer cannot write"})
+	if err == nil {
+		t.Fatal("expected viewer-only access to reject folder creation")
+	}
+	if err != ErrForbidden {
+		t.Fatalf("err = %v, want %v", err, ErrForbidden)
+	}
+	if _, err := pool.Exec(ctx, `DELETE FROM workspace_user_access WHERE workspace_id = $1 AND user_id = $2`, workspaceID, userID); err != nil {
+		t.Fatalf("delete workspace user access: %v", err)
+	}
+
+	_, err = service.CreateFolder(ctx, userID, workspaceID, CreateFolderInput{Name: "No grants"})
+	if err == nil {
+		t.Fatal("expected no shared access to reject folder creation")
+	}
+	if err != ErrForbidden {
+		t.Fatalf("err = %v, want %v", err, ErrForbidden)
+	}
+}
+
 func insertTestUser(t *testing.T, ctx context.Context, pool *pgxpool.Pool) string {
 	t.Helper()
 
@@ -190,7 +280,7 @@ func insertTestUser(t *testing.T, ctx context.Context, pool *pgxpool.Pool) strin
 	return userID
 }
 
-func insertTestWorkspace(t *testing.T, ctx context.Context, pool *pgxpool.Pool) string {
+func insertTestWorkspace(t *testing.T, ctx context.Context, pool *pgxpool.Pool) (string, string) {
 	t.Helper()
 
 	var organizationID string
@@ -213,17 +303,66 @@ func insertTestWorkspace(t *testing.T, ctx context.Context, pool *pgxpool.Pool) 
 		t.Fatalf("insert workspace: %v", err)
 	}
 
-	return workspaceID
+	return organizationID, workspaceID
 }
 
-func insertWorkspaceMember(t *testing.T, ctx context.Context, pool *pgxpool.Pool, workspaceID, userID, role string) {
+func insertWorkspaceUserAccess(t *testing.T, ctx context.Context, pool *pgxpool.Pool, workspaceID, userID, role string) {
 	t.Helper()
 
 	if _, err := pool.Exec(ctx, `
-		INSERT INTO workspace_members (workspace_id, user_id, role)
+		INSERT INTO workspace_user_access (workspace_id, user_id, role)
 		VALUES ($1, $2, $3)
 	`, workspaceID, userID, role); err != nil {
-		t.Fatalf("insert workspace member: %v", err)
+		t.Fatalf("insert workspace user access: %v", err)
+	}
+}
+
+func insertOrganizationMember(t *testing.T, ctx context.Context, pool *pgxpool.Pool, organizationID, userID, role string) {
+	t.Helper()
+
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO organization_members (organization_id, user_id, role)
+		VALUES ($1, $2, $3)
+	`, organizationID, userID, role); err != nil {
+		t.Fatalf("insert organization member: %v", err)
+	}
+}
+
+func insertTestGroup(t *testing.T, ctx context.Context, pool *pgxpool.Pool, organizationID, name string) string {
+	t.Helper()
+
+	var groupID string
+	err := pool.QueryRow(ctx, `
+		INSERT INTO groups (organization_id, name)
+		VALUES ($1, $2)
+		RETURNING id
+	`, organizationID, name).Scan(&groupID)
+	if err != nil {
+		t.Fatalf("insert group: %v", err)
+	}
+
+	return groupID
+}
+
+func insertTestGroupMember(t *testing.T, ctx context.Context, pool *pgxpool.Pool, groupID, userID string) {
+	t.Helper()
+
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO group_members (group_id, user_id)
+		VALUES ($1, $2)
+	`, groupID, userID); err != nil {
+		t.Fatalf("insert group member: %v", err)
+	}
+}
+
+func insertWorkspaceGroupAccess(t *testing.T, ctx context.Context, pool *pgxpool.Pool, workspaceID, groupID, role string) {
+	t.Helper()
+
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO workspace_group_access (workspace_id, group_id, role)
+		VALUES ($1, $2, $3)
+	`, workspaceID, groupID, role); err != nil {
+		t.Fatalf("insert workspace group access: %v", err)
 	}
 }
 

@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/furia/shared-bookmark-sync/backend/internal/access"
 	"github.com/furia/shared-bookmark-sync/backend/internal/bookmarks"
 	"github.com/furia/shared-bookmark-sync/backend/internal/database"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -65,9 +66,9 @@ func TestCreateFolderCreatesCursorAndSyncEventWhenWorkspaceCursorRowDoesNotExist
 
 	userID := insertSyncTestUser(t, ctx, pool)
 	workspaceID := insertSyncTestWorkspace(t, ctx, pool)
-	insertSyncWorkspaceMember(t, ctx, pool, workspaceID, userID, "editor")
+	insertSyncWorkspaceAccess(t, ctx, pool, workspaceID, userID, "editor")
 
-	store := NewPostgresStore(pool, bookmarks.NewService(pool), nil, nil)
+	store := NewPostgresStore(pool, bookmarks.NewService(pool, access.NewService(pool)), nil, nil)
 	result, err := store.CreateFolder(ctx, userID, workspaceID, bookmarks.CreateFolderInput{Name: "First sync folder"}, Metadata{
 		EventID:        "evt-first-folder",
 		OriginClientID: "client-a",
@@ -163,14 +164,14 @@ func insertSyncTestWorkspace(t *testing.T, ctx context.Context, pool *pgxpool.Po
 	return workspaceID
 }
 
-func insertSyncWorkspaceMember(t *testing.T, ctx context.Context, pool *pgxpool.Pool, workspaceID, userID, role string) {
+func insertSyncWorkspaceAccess(t *testing.T, ctx context.Context, pool *pgxpool.Pool, workspaceID, userID, role string) {
 	t.Helper()
 
 	if _, err := pool.Exec(ctx, `
-		INSERT INTO workspace_members (workspace_id, user_id, role)
+		INSERT INTO workspace_user_access (workspace_id, user_id, role)
 		VALUES ($1, $2, $3)
 	`, workspaceID, userID, role); err != nil {
-		t.Fatalf("insert workspace member: %v", err)
+		t.Fatalf("insert workspace access: %v", err)
 	}
 }
 

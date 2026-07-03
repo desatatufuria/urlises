@@ -87,6 +87,23 @@ Delivered follow-up on `feature/shared-bookmark-sync-wu4-extension`:
 - That organization admin is responsible for inviting members, assigning organization/workspace access, and setting `admin` / `editor` / `viewer` workspace roles.
 - The extension remains an operational sync client: login, workspace selection, projection, replay, websocket sync, and local viewer exclusions.
 
+## Admin Backend Foundation Delivery
+
+- Workflow: Gitflow
+- Tracker branch: `feature/admin-backend-foundation`
+- Chain strategy: `feature-branch-chain`
+- PR 1: schema migration + shared access resolver
+- PR 2: organizations + invitations + groups
+- PR 3: workspace grants + runtime integration + verification + docs
+
+Delivered PR 3 scope:
+
+- workspace creation now grants only the creator as initial `admin`
+- direct user access and group-based workspace access are managed explicitly through admin routes
+- effective workspace role reads use highest-role-wins resolution across direct and group grants
+- bookmark write guards consume the shared access resolver instead of legacy `workspace_members` checks
+- manual validation notes live in `README.md` alongside the runtime/admin endpoint summary
+
 ## Viewer Local Override Policy
 
 - Viewer users must never change canonical shared bookmark semantics in the backend.

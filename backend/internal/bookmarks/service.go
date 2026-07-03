@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/furia/shared-bookmark-sync/backend/internal/access"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -20,7 +21,8 @@ var (
 )
 
 type Service struct {
-	pool *pgxpool.Pool
+	pool   *pgxpool.Pool
+	access *access.Service
 }
 
 type Folder struct {
@@ -102,8 +104,12 @@ func (o *OptionalInt) UnmarshalJSON(data []byte) error {
 	return json.Unmarshal(data, &o.Value)
 }
 
-func NewService(pool *pgxpool.Pool) *Service {
-	return &Service{pool: pool}
+func NewService(pool *pgxpool.Pool, accessService *access.Service) *Service {
+	if accessService == nil {
+		accessService = access.NewService(pool)
+	}
+
+	return &Service{pool: pool, access: accessService}
 }
 
 func (s *Service) CreateFolder(ctx context.Context, userID, workspaceID string, input CreateFolderInput) (Folder, error) {
@@ -528,17 +534,13 @@ func (s *Service) DeleteBookmarkTx(ctx context.Context, tx pgx.Tx, userID, bookm
 }
 
 func (s *Service) requireMutatingRole(ctx context.Context, tx pgx.Tx, userID, workspaceID string) error {
-	var role string
-	err := tx.QueryRow(ctx, `SELECT role FROM workspace_members WHERE user_id = $1 AND workspace_id = $2`, userID, workspaceID).Scan(&role)
-	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
+	if _, err := access.RequireWorkspaceWriteAccess(ctx, tx, userID, workspaceID); err != nil {
+		if errors.Is(err, access.ErrForbidden) {
 			return ErrForbidden
 		}
-		return fmt.Errorf("load workspace role: %w", err)
+		return err
 	}
-	if role != "admin" && role != "editor" {
-		return ErrForbidden
-	}
+
 	return nil
 }
 
