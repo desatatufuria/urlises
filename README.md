@@ -284,12 +284,12 @@ Manual Chromium validation for this follow-up:
 - The background projection state now exposes optional online/activity metadata so the UI can show calm online presence and a blue fresh-activity indicator without changing backend sync contracts.
 - Fresh activity is acknowledged only after popup or options renders the current premium status view through `ui/mark-activity-seen`.
 
-Manual Chromium validation still required for this redesign slice:
+Manual Chromium validation completed on the current branch:
 
-1. Confirm popup and options render the shared dark theme with readable hierarchy.
-2. Confirm healthy live workspaces show the online indicator without noisy banners.
-3. Confirm the blue activity indicator appears after remote activity and clears after popup or options displays the status view.
-4. Confirm degraded workspaces remain visually explicit and keep recovery actions visible.
+1. Popup and options render the shared dark theme with readable hierarchy.
+2. Healthy live workspaces show the online indicator without noisy banners.
+3. The blue activity indicator appears after remote activity and clears after popup or options displays the status view.
+4. Degraded workspaces remain visually explicit and keep recovery actions visible.
 
 ## Canonical Domain Rules in This Slice
 

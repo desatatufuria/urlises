@@ -1,3 +1,4 @@
+import { UI_TIME_LOCALE, UI_TIME_ZONE } from "../runtime.js";
 import type { ActivitySignal, ExtensionState, ProjectionActivityDetail, ProjectionState, StatusOverview } from "../types.js";
 
 export type StatusTone = "neutral" | "live" | "attention";
@@ -49,8 +50,8 @@ export interface ToolbarBadgeModel {
 const DEFAULT_EXTENSION_TITLE = "Shared Bookmarks Sync";
 const TOOLBAR_ACTIVITY_BADGE_COLOR = "#7e9cd8";
 const TOOLBAR_DEGRADED_BADGE_COLOR = "#c34043";
-const MADRID_TIMESTAMP_FORMATTER = new Intl.DateTimeFormat("en-GB", {
-  timeZone: "Europe/Madrid",
+const MADRID_TIMESTAMP_FORMATTER = new Intl.DateTimeFormat(UI_TIME_LOCALE, {
+  timeZone: UI_TIME_ZONE,
   year: "numeric",
   month: "2-digit",
   day: "2-digit",

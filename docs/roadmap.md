@@ -117,5 +117,8 @@ Delivered implementation scope:
 - premium options workspace cards with explicit degraded state, calm healthy state, online presence, and blue fresh-activity cues
 - activity-seen acknowledgement path that clears the blue indicator after a premium status surface renders
 
+Validation status:
+- Manual Chromium validation completed for dark theme rendering, popup/options readability, online indicator visibility, blue activity indicator clearing, and refined icon/badge presentation.
+
 Outstanding verification:
-- Manual Chromium validation is still required for dark theme, motion calmness, online indicator visibility, blue indicator clear-on-open, and degraded prominence.
+- No additional premium-UI-specific manual blockers remain on this branch.

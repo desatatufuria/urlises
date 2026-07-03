@@ -8,12 +8,12 @@
 | 400-line budget risk | High |
 | Chained PRs recommended | Yes |
 | Suggested split | PR 1 -> PR 2 -> PR 3 |
-| Delivery strategy | ask-on-risk |
-| Chain strategy | pending |
+| Delivery strategy | size:exception |
+| Chain strategy | approved single PR |
 
-Decision needed before apply: Yes
-Chained PRs recommended: Yes
-Chain strategy: pending
+Decision needed before apply: No — approved size exception
+Chained PRs recommended: Yes, but exception approved
+Chain strategy: approved single PR
 400-line budget risk: High
 
 ### Suggested Work Units
@@ -50,9 +50,11 @@ Chain strategy: pending
 - [x] 4.1 Add Node unit tests for `extension/src/shared/ui/status.ts` covering dark-surface models, online visibility, unseen-activity hide/show, and degraded emphasis rules.
 - [x] 4.2 Extend `extension/tests/projection-behavior.test.mjs` for activity revision updates and `ui/mark-activity-seen` state transitions after replay/live events.
 - [x] 4.2a Add focused status-helper coverage for toolbar badge precedence and clearing behavior.
-- [ ] 4.3 Manual Chromium check: popup/options dark theme, readable hierarchy, calm state transitions, online dot visibility, blue indicator clear-on-open, and degraded prominence.
+- [x] 4.3 Manual Chromium check: popup/options dark theme, readable hierarchy, calm state transitions, online dot visibility, blue indicator clear-on-open, and degraded prominence.
 
 ## Phase 5: Documentation and Boundaries
 
 - [x] 5.1 Update `README.md` and `docs/roadmap.md` with Gitflow slice intent, premium UI scope, and manual validation notes for popup/options/status only.
 - [x] 5.2 Review touched extension files to confirm no backend/admin/bookmark-management scope leaked into the redesign before implementation closes.
+
+Manual Chromium validation was completed iteratively during the redesign loop on the current branch, covering dark theme rendering, popup/options hierarchy, online indicator visibility, blue activity clearing, and the refined icon/badge behavior.
