@@ -63,12 +63,18 @@ Delivered follow-up on `feature/shared-bookmark-sync-wu4-extension`:
 - Local delete/move `404` or parent-miss failures are abandoned once recovery starts so the same stale mutation does not loop.
 - Descendant mappings and exclusions are removed deterministically after canonical subtree deletes.
 - Scope remains explicitly narrow: this follow-up does NOT include broad Work Unit 5 hardening.
+- Chromium validation for the missing-parent-specific recovery scenarios is still pending.
 
 Delivered follow-up on `feature/shared-bookmark-sync-wu4-extension`:
 - `extension-remote-bookmark-loop-fix` narrows the next extension remediation to remote bookmark update/move apply that was being re-emitted through Chrome `onChanged` / `onMoved` listeners.
 - The runtime now correlates remote bookmark side effects by bookmark identity plus expected title/url and target parent/index so only equivalent listener events are swallowed.
 - Backend-authoritative parent/index is verified after bookmark apply, and repeated same-bookmark update/move retries are abandoned once recovery starts.
 - Scope remains explicitly narrow: this follow-up does NOT expand into generic Work Unit 5 hardening.
+- Chromium validation has confirmed remote bookmark update and reorder behavior on the branch; degraded-threshold validation remains pending.
+
+Delivered follow-up on `feature/shared-bookmark-sync-wu4-extension`:
+- `extension-mv3-websocket-keepalive` adds a narrow idle keepalive around the existing MV3 websocket session without changing backend contracts.
+- Chromium validation has confirmed websocket delivery and replay behavior, and current idle behavior appears improved on the branch.
 
 ### Work Unit 5
 - Documentation must reflect delivered behavior and open questions.

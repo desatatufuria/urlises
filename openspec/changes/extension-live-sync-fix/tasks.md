@@ -51,9 +51,9 @@ Chain strategy: pending
 
 ## Manual Validation Checklist
 
-- [ ] Remote shared folder/bookmark changes appear in Chrome within a few seconds without manual reload or manual resync.
+- [x] Remote shared folder/bookmark changes appear in Chrome within a few seconds without manual reload or manual resync.
 - [ ] Brief websocket interruptions recover silently through reconnect/replay without showing a degraded message.
 - [ ] The degraded indicator appears only after repeated silent recovery failure exhausts the bounded retry budget.
 - [ ] Stale or missing mappings reuse the existing canonical Chrome node under the expected parent instead of creating duplicates.
 
-Manual validation remains pending. Automated projection/storage coverage is implemented, but the checklist above still requires Chromium verification before it can be marked complete.
+Partial Chromium validation is complete: remote folder create, remote bookmark create, websocket delivery, and replay behavior were exercised successfully on the current branch. Interruption-specific recovery, degraded-threshold behavior, and duplicate-prevention repro coverage remain pending.

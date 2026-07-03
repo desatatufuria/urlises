@@ -45,6 +45,6 @@ Chain strategy: pending
 
 ## Phase 4: Manual Validation
 
-- [ ] 4.1 On the Gitflow follow-up branch, manually replay a remote bookmark title/URL update in Chromium and confirm no duplicate backend mutation is emitted.
-- [ ] 4.2 Manually replay a remote bookmark reorder/move in Chromium and confirm final Chrome ordering matches backend order without repeated churn or premature degraded state.
+- [x] 4.1 On the Gitflow follow-up branch, manually replay a remote bookmark title/URL update in Chromium and confirm no duplicate backend mutation is emitted.
+- [x] 4.2 Manually replay a remote bookmark reorder/move in Chromium and confirm final Chrome ordering matches backend order without repeated churn or premature degraded state.
 - [x] 4.3 Update `docs/roadmap.md` or `README.md` with the validation note and branch/documentation status for this runtime remediation.

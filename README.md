@@ -4,7 +4,7 @@ Shared Bookmark Sync is a greenfield MVP that keeps organization and workspace b
 
 ## Current Slice
 
-This repository is currently on **Work Unit 4 / PR 4** of a chained Gitflow delivery plan:
+This repository contains the **Work Unit 4 / PR 4 baseline plus extension-only follow-up remediations** on `feature/shared-bookmark-sync-wu4-extension`:
 
 - auth, durable client bindings, and JWT-protected session reads
 - organization/workspace membership reads and canonical workspace tree reads
@@ -238,6 +238,7 @@ Notes:
 - Replay remains the first recovery path for cursor catch-up and reconnect continuity; full snapshot resync is reserved for replay gaps, stale mapping repair, or explicit recovery fallback.
 - The options page stays quiet during healthy sync and shows a visible degraded message only after the extension exhausts its bounded silent recovery budget.
 - Before creating a managed folder or bookmark from a remote event, the extension reconciles stale mappings against the expected Chrome parent subtree to avoid duplicate Chrome nodes for one canonical backend node.
+- Manual Chromium validation has confirmed remote folder create, remote bookmark create, websocket delivery, and replay behavior on the current branch.
 
 ## Extension Missing-Parent Recovery Follow-up
 
@@ -262,8 +263,8 @@ Manual Chromium validation for this follow-up:
 
 Manual Chromium validation for this follow-up:
 
-1. Replay a remote bookmark title/URL update and confirm no duplicate backend mutation request is emitted.
-2. Replay a remote bookmark reorder/move and confirm final Chrome parent/index matches backend order without repeated churn.
+1. ✅ Replayed a remote bookmark title/URL update and confirmed no duplicate backend mutation request was emitted.
+2. ✅ Replayed a remote bookmark reorder/move and confirmed final Chrome parent/index matched backend order without repeated churn.
 3. Confirm the degraded indicator remains hidden unless repeated recovery attempts are genuinely exhausted.
 
 ## Extension MV3 WebSocket Keepalive Hotfix
@@ -271,6 +272,7 @@ Manual Chromium validation for this follow-up:
 - This narrow extension-only hotfix stays on `feature/shared-bookmark-sync-wu4-extension` and adds no backend contract changes.
 - The MV3 background websocket now sends a quiet keepalive only after ~20 seconds of socket idle time so healthy service-worker sessions are less likely to be idled away by Chrome.
 - Normal sync traffic resets the idle timer, so healthy event flow does not produce noisy extra diagnostics or visible churn.
+- Manual Chromium validation suggests idle/keepalive behavior is improved on the current branch.
 
 ## Canonical Domain Rules in This Slice
 
