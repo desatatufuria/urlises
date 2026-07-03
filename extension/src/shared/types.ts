@@ -117,6 +117,25 @@ export interface DiagnosticEntry {
   message: string;
 }
 
+export interface ActivitySignal {
+  revision: number;
+  lastSeenRevision: number;
+}
+
+export interface ProjectionActivityDetail {
+  entityType: "workspace" | "folder" | "bookmark";
+  action: "created" | "updated" | "deleted" | "resynced";
+  label: string;
+  parentLabel?: string;
+}
+
+export interface StatusOverview {
+  selectedWorkspaceCount: number;
+  activeWorkspaceCount: number;
+  liveWorkspaceCount: number;
+  degradedWorkspaceCount: number;
+}
+
 export type ProjectionHealth = "bootstrap" | "live" | "recovering" | "degraded";
 
 export interface ProjectionState {
@@ -138,6 +157,9 @@ export interface ProjectionState {
   recoveryStartedAt?: string;
   degradedAt?: string;
   degradedReason?: string;
+  lastActivityAt?: string;
+  lastActivity?: ProjectionActivityDetail;
+  activityRevision?: number;
 }
 
 export interface ExtensionState {
@@ -148,6 +170,8 @@ export interface ExtensionState {
   cachedWorkspacesByOrganization: Record<string, WorkspaceAccess[]>;
   projectionsByWorkspaceId: Record<string, ProjectionState>;
   diagnostics: DiagnosticEntry[];
+  activitySignal?: ActivitySignal;
+  statusOverview?: StatusOverview;
 }
 
 export interface LoginRequest {

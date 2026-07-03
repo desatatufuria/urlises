@@ -220,6 +220,7 @@ import {
   handleBookmarkChanged,
   handleBookmarkMoved,
   handleBookmarkRemoved,
+  markActivitySeen,
   projectionTestHooks,
   runCoalescedWorkspaceTask,
 } from "../dist/background/projection.js";
@@ -765,6 +766,62 @@ test("connectWorkspace silently reconnects after socket close and restores live 
   assert.equal(projection.health, "live");
   assert.equal(projection.status, "ready");
   assert.equal(projection.recoveryAttemptCount, 0);
+});
+
+test("live remote activity updates revision metadata and markActivitySeen acknowledges it", async () => {
+  bookmarkNodes.set("workspace-node", createBookmarkNode({ id: "workspace-node", parentId: "1", title: "Workspace", index: 0 }));
+  bookmarkNodes.set("folder-a", createBookmarkNode({ id: "folder-a", parentId: "workspace-node", title: "Docs", index: 0 }));
+  bookmarkNodes.set("bookmark-node", createBookmarkNode({ id: "bookmark-node", parentId: "folder-a", title: "Local Bookmark", url: "https://example.com/local", index: 0 }));
+  rebuildBookmarkChildren();
+
+  await setState({
+    ...createRuntimeState({ lastCursor: 7, socketConnected: true }),
+    activitySignal: { revision: 0, lastSeenRevision: 0 },
+    projectionsByWorkspaceId: {
+      "workspace-1": createEditorProjection({
+        workspaceChromeId: "workspace-node",
+        chromeIdByBackendId: { "folder-a": "folder-a", "bookmark-1": "bookmark-node" },
+        backendIdByChromeId: { "folder-a": "folder-a", "bookmark-node": "bookmark-1" },
+        entityTypeByBackendId: { "folder-a": "folder", "bookmark-1": "bookmark" },
+        lastCursor: 7,
+        activityRevision: 0,
+      }),
+    },
+  });
+
+  await projectionTestHooks.connectWorkspace("workspace-1");
+  await MockWebSocket.instances[0].emitMessage({ type: "ack", currentCursor: 7 });
+  await MockWebSocket.instances[0].emitMessage({
+    type: "event",
+    event: createSyncEvent({
+      payload: {
+        id: "bookmark-1",
+        workspaceId: "workspace-1",
+        folderId: "folder-a",
+        title: "Remote Bookmark",
+        url: "https://example.com/remote",
+        position: 0,
+        createdAt: "2026-07-03T16:00:00.000Z",
+        updatedAt: "2026-07-03T16:00:00.000Z",
+      },
+      createdAt: "2026-07-03T16:00:00.000Z",
+    }),
+  });
+
+  let state = await getState();
+  assert.equal(state.activitySignal?.revision, 1);
+  assert.equal(state.activitySignal?.lastSeenRevision, 0);
+  assert.equal(state.projectionsByWorkspaceId["workspace-1"].activityRevision, 1);
+  assert.equal(state.projectionsByWorkspaceId["workspace-1"].lastActivityAt, "2026-07-03T16:00:00.000Z");
+  assert.deepEqual(state.projectionsByWorkspaceId["workspace-1"].lastActivity, {
+    entityType: "bookmark",
+    action: "updated",
+    label: "Remote Bookmark",
+  });
+
+  await markActivitySeen();
+  state = await getState();
+  assert.equal(state.activitySignal?.lastSeenRevision, 1);
 });
 
 test("connectWorkspace falls back to full resync when replay reports a gap", async () => {

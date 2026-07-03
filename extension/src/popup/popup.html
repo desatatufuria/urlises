@@ -3,42 +3,67 @@
   <head>
     <meta charset="UTF-8" />
     <title>Shared Bookmark Sync</title>
-    <style>
-      body { font-family: Arial, sans-serif; margin: 16px; min-width: 320px; }
-      form, .stack { display: grid; gap: 8px; }
-      input, button { padding: 8px; font: inherit; }
-      small { color: #555; }
-      .hidden { display: none; }
-      .row { display: flex; gap: 8px; }
-      .status { background: #f4f4f4; padding: 12px; border-radius: 8px; }
-    </style>
+    <link rel="stylesheet" href="../shared/ui/theme.css" />
   </head>
-  <body>
-    <section id="signed-out" class="stack">
-      <h1>Shared Bookmark Sync</h1>
-      <form id="login-form">
-        <input id="backend-url" type="url" placeholder="Backend URL" required />
-        <input id="email" type="email" placeholder="Email" required />
-        <input id="password" type="password" placeholder="Password" required />
-        <input id="device-name" type="text" placeholder="Device name" value="Chrome Extension" />
-        <button type="submit">Sign in</button>
+  <body class="ui-shell ui-shell--popup">
+    <section class="ui-hero">
+      <div class="ui-eyebrow">Workspace sync</div>
+      <h1 class="ui-title">Shared Bookmark Sync</h1>
+      <p class="ui-subtitle">Shared Bookmarks / Organization / Workspace.</p>
+    </section>
+
+    <section id="signed-out" class="ui-surface ui-panel ui-grid">
+      <div class="ui-grid ui-grid--compact">
+        <div class="ui-eyebrow">Sign in</div>
+        <h2 class="ui-card-title">Connect this browser</h2>
+        <p class="ui-card-copy">Status, workspace selection, and sync health stay here.</p>
+      </div>
+      <form id="login-form" class="ui-form">
+        <label class="ui-field-label">Backend URL<input id="backend-url" type="url" placeholder="https://backend.example.com" required /></label>
+        <label class="ui-field-label">Email<input id="email" type="email" placeholder="you@example.com" required /></label>
+        <label class="ui-field-label">Password<input id="password" type="password" placeholder="Password" required /></label>
+        <label class="ui-field-label">Device name<input id="device-name" type="text" placeholder="Chrome Extension" value="Chrome Extension" /></label>
+        <div class="ui-actions">
+          <button class="ui-button-primary" type="submit">Sign in</button>
+        </div>
       </form>
-      <small>Projects only the managed path: Shared Bookmarks / Organization / Workspace.</small>
+      <small>Authentication, summary, and a direct path to Settings.</small>
     </section>
 
-    <section id="signed-in" class="stack hidden">
-      <h1>Session Ready</h1>
-      <div class="status">
-        <div id="session-summary"></div>
-        <div id="workspace-summary"></div>
-      </div>
-      <div class="row">
-        <button id="open-options" type="button">Open workspace settings</button>
-        <button id="logout" type="button">Sign out</button>
-      </div>
+    <section id="signed-in" class="ui-grid hidden">
+      <section class="ui-surface ui-panel ui-grid">
+        <div class="ui-status-row">
+          <span class="ui-eyebrow">Session ready</span>
+          <div id="status-indicators" class="ui-inline-list"></div>
+        </div>
+        <div class="ui-grid ui-grid--compact">
+          <div id="session-summary" class="ui-card-copy"></div>
+          <div id="workspace-summary" class="ui-card-copy"></div>
+        </div>
+        <div class="ui-kpi-grid" id="workspace-metrics"></div>
+      </section>
+
+      <section class="ui-surface ui-panel ui-grid">
+        <div class="ui-grid ui-grid--compact">
+          <h2 id="status-headline" class="ui-card-title"></h2>
+          <p id="status-detail" class="ui-card-copy"></p>
+        </div>
+        <div class="ui-actions">
+          <button id="open-options" class="ui-button-primary" type="button">Open settings</button>
+          <button id="logout" class="ui-button-secondary" type="button">Sign out</button>
+        </div>
+      </section>
+
+      <section id="recent-activity" class="ui-surface ui-panel ui-grid hidden">
+        <div class="ui-grid ui-grid--compact">
+          <h2 class="ui-card-title">Recent updates</h2>
+          <p class="ui-card-copy">Review the latest workspace activity here. Opening this panel marks it as attended.</p>
+        </div>
+        <ul id="recent-activity-list" class="ui-list"></ul>
+      </section>
     </section>
 
-    <p id="error" role="alert"></p>
+    <p id="error" class="ui-error" role="alert"></p>
     <script type="module" src="../../dist/popup/popup.js"></script>
   </body>
 </html>

@@ -27,13 +27,17 @@ import {
 import { setBackendUrl, saveSession, clearSession, ensureClientId } from "../shared/session.js";
 import { createProjectionState, getState, resetStatePreservingSettings, setState, updateState } from "../shared/storage.js";
 import type {
+  ActivitySignal,
   BookmarkNode,
   BookmarkResource,
+  ExtensionState,
   FolderNode,
   FolderResource,
   LoginRequest,
+  ProjectionActivityDetail,
   ProjectionState,
   SessionData,
+  StatusOverview,
   SyncEnvelope,
   TreeResponse,
   UiState,
@@ -156,7 +160,7 @@ export async function logout(): Promise<UiState> {
 }
 
 export async function getUiState(): Promise<UiState> {
-  return { state: await getState() };
+  return buildUiState(await getState());
 }
 
 export async function loadOptionsState(): Promise<UiState> {
@@ -164,6 +168,20 @@ export async function loadOptionsState(): Promise<UiState> {
   if (state.session) {
     await refreshWorkspaceCatalog(state.session, state.settings.backendUrl);
   }
+  return getUiState();
+}
+
+export async function markActivitySeen(): Promise<UiState> {
+  await updateState((state) => {
+    const revision = state.activitySignal?.revision ?? 0;
+    return {
+      ...state,
+      activitySignal: {
+        revision,
+        lastSeenRevision: revision,
+      },
+    };
+  });
   return getUiState();
 }
 
@@ -616,6 +634,39 @@ function describeError(error: unknown): string {
   return String(error);
 }
 
+function buildUiState(state: ExtensionState): UiState {
+  const activitySignal = ensureActivitySignal(state);
+  const statusOverview = buildStatusOverview(state);
+  return {
+    state: {
+      ...state,
+      activitySignal,
+      statusOverview,
+    },
+  };
+}
+
+function ensureActivitySignal(state: Pick<ExtensionState, "activitySignal" | "projectionsByWorkspaceId">): ActivitySignal {
+  const revision = Math.max(
+    state.activitySignal?.revision ?? 0,
+    ...Object.values(state.projectionsByWorkspaceId).map((projection) => projection.activityRevision ?? 0),
+  );
+  return {
+    revision,
+    lastSeenRevision: Math.min(state.activitySignal?.lastSeenRevision ?? 0, revision),
+  };
+}
+
+function buildStatusOverview(state: ExtensionState): StatusOverview {
+  const projections = Object.values(state.projectionsByWorkspaceId);
+  return {
+    selectedWorkspaceCount: state.selectedWorkspaceIds.length,
+    activeWorkspaceCount: projections.length,
+    liveWorkspaceCount: projections.filter((projection) => projection.socketConnected || projection.health === "live").length,
+    degradedWorkspaceCount: projections.filter((projection) => projection.health === "degraded").length,
+  };
+}
+
 async function doResyncWorkspace(workspaceId: string, reason: string, targetHealth: ProjectionState["health"] = "bootstrap"): Promise<void> {
   const state = await getState();
   if (!state.session) {
@@ -689,6 +740,7 @@ async function doResyncWorkspace(workspaceId: string, reason: string, targetHeal
         projectionState.degradedReason = undefined;
       }
     }, tree.workspace);
+    await recordActivity(workspaceId);
     await log(`sync:${workspaceId}`, `resynced workspace (${reason})`, "info");
   } catch (error) {
     await updateProjectionState(workspaceId, (projection) => {
@@ -761,20 +813,36 @@ async function applyRemoteEnvelope(workspaceId: string, event: SyncEnvelope, all
   }
 
   try {
+    let shouldRecordActivity = false;
+    let activityDetail: ProjectionActivityDetail | undefined;
     switch (event.kind) {
       case "folder.created":
       case "folder.updated":
         await applyRemoteFolderUpsert(workspaceId, event, event.payload as FolderResource, action);
+        shouldRecordActivity = true;
+        activityDetail = createEntityActivityDetail(
+          "folder",
+          event.kind === "folder.created" ? "created" : "updated",
+          (event.payload as FolderResource).name,
+        );
         break;
       case "folder.deleted":
-        await applyRemoteFolderDelete(workspaceId, event, parseFolderDeletePayload(event.payload), action, allowReplayCatchup);
+        activityDetail = await applyRemoteFolderDelete(workspaceId, event, parseFolderDeletePayload(event.payload), action, allowReplayCatchup);
+        shouldRecordActivity = true;
         break;
       case "bookmark.created":
       case "bookmark.updated":
         await applyRemoteBookmarkUpsert(workspaceId, event, event.payload as BookmarkResource, action);
+        shouldRecordActivity = true;
+        activityDetail = createEntityActivityDetail(
+          "bookmark",
+          event.kind === "bookmark.created" ? "created" : "updated",
+          (event.payload as BookmarkResource).title,
+        );
         break;
       case "bookmark.deleted":
-        await applyRemoteBookmarkDelete(workspaceId, event, parseBookmarkDeletePayload(event.payload), action, allowReplayCatchup);
+        activityDetail = await applyRemoteBookmarkDelete(workspaceId, event, parseBookmarkDeletePayload(event.payload), action, allowReplayCatchup);
+        shouldRecordActivity = true;
         break;
       default:
         await log(`sync:${workspaceId}`, `ignored unsupported event ${event.kind}`, "warn");
@@ -787,6 +855,12 @@ async function applyRemoteEnvelope(workspaceId: string, event: SyncEnvelope, all
       current.health = current.socketConnected ? "live" : current.health;
       current.lastError = undefined;
     });
+    if (shouldRecordActivity) {
+      await recordActivity(workspaceId, {
+        occurredAt: event.createdAt,
+        detail: activityDetail,
+      });
+    }
   } catch (error) {
     const context = error instanceof RemoteApplyError ? error.context : baseContext;
     const detail = error instanceof Error ? error.message : String(error);
@@ -1037,10 +1111,10 @@ async function applyRemoteFolderDelete(
   payload: { id: string; parentId?: string },
   action: "live-apply" | "replay",
   allowReplayCatchup = false,
-): Promise<void> {
+): Promise<ProjectionActivityDetail | undefined> {
   const projection = (await getState()).projectionsByWorkspaceId[workspaceId];
   if (!projection) {
-    return;
+    return undefined;
   }
   const scope = createRecoveryScope({
     workspaceId,
@@ -1058,7 +1132,7 @@ async function applyRemoteFolderDelete(
     if (!allowReplayCatchup) {
       await recoverSubtreeThenWorkspace(scope, validation.reason, validation.invalidateBackendIds);
     }
-    return;
+    return createEntityActivityDetail("folder", "deleted", `Folder ${payload.id}`);
   }
   const chromeId = projection.chromeIdByBackendId[payload.id];
   if (!chromeId) {
@@ -1071,8 +1145,9 @@ async function applyRemoteFolderDelete(
     if (!allowReplayCatchup) {
       await recoverSubtreeThenWorkspace(scope, "remote folder delete pruned stale mapping", [payload.id]);
     }
-    return;
+    return createEntityActivityDetail("folder", "deleted", `Folder ${payload.id}`);
   }
+  const existing = await getNode(chromeId);
   await logRemoteApplyDiagnostic(workspaceId, createRemoteEventContext(event, {
     action,
     operation: "folder-delete",
@@ -1082,6 +1157,7 @@ async function applyRemoteFolderDelete(
   if (!allowReplayCatchup) {
     await recoverSubtreeThenWorkspace(scope, "remote folder delete pruned excluded descendants");
   }
+  return createEntityActivityDetail("folder", "deleted", existing?.title ?? `Folder ${payload.id}`);
 }
 
 async function applyRemoteBookmarkDelete(
@@ -1090,10 +1166,10 @@ async function applyRemoteBookmarkDelete(
   payload: { id: string; folderId?: string },
   action: "live-apply" | "replay",
   allowReplayCatchup = false,
-): Promise<void> {
+): Promise<ProjectionActivityDetail | undefined> {
   const projection = (await getState()).projectionsByWorkspaceId[workspaceId];
   if (!projection) {
-    return;
+    return undefined;
   }
   const scope = createRecoveryScope({
     workspaceId,
@@ -1111,7 +1187,7 @@ async function applyRemoteBookmarkDelete(
     if (!allowReplayCatchup) {
       await recoverSubtreeThenWorkspace(scope, validation.reason, validation.invalidateBackendIds);
     }
-    return;
+    return createEntityActivityDetail("bookmark", "deleted", `Bookmark ${payload.id}`);
   }
   const chromeId = projection.chromeIdByBackendId[payload.id];
   if (!chromeId) {
@@ -1121,14 +1197,16 @@ async function applyRemoteBookmarkDelete(
       branch: "mapping-miss",
     }));
     await invalidateSubtreeMappings(scope, [payload.id]);
-    return;
+    return createEntityActivityDetail("bookmark", "deleted", `Bookmark ${payload.id}`);
   }
+  const existing = await getNode(chromeId);
   await logRemoteApplyDiagnostic(workspaceId, createRemoteEventContext(event, {
     action,
     operation: "bookmark-delete",
     currentChromeId: chromeId,
   }));
   await deleteChromeNode(workspaceId, chromeId, payload.id, "bookmark", scope.pruneExclusions);
+  return createEntityActivityDetail("bookmark", "deleted", existing?.title ?? `Bookmark ${payload.id}`);
 }
 
 async function deleteChromeNode(
@@ -1233,6 +1311,55 @@ async function markProjectionLive(workspaceId: string, currentCursor?: number): 
     projection.degradedReason = undefined;
     projection.socketConnected = true;
   });
+}
+
+async function recordActivity(
+  workspaceId: string,
+  activity: { occurredAt?: string; detail?: ProjectionActivityDetail } = {},
+): Promise<void> {
+  const occurredAt = activity.occurredAt ?? new Date().toISOString();
+  await updateState((state) => {
+    const projection = state.projectionsByWorkspaceId[workspaceId];
+    if (!projection) {
+      return state;
+    }
+    const currentSignal = ensureActivitySignal(state);
+    const nextRevision = currentSignal.revision + 1;
+    projection.lastActivityAt = occurredAt;
+    projection.lastActivity = activity.detail ?? createWorkspaceActivityDetail(projection.workspace.workspaceName);
+    projection.activityRevision = nextRevision;
+    return {
+      ...state,
+      activitySignal: {
+        revision: nextRevision,
+        lastSeenRevision: currentSignal.lastSeenRevision,
+      },
+      projectionsByWorkspaceId: {
+        ...state.projectionsByWorkspaceId,
+        [workspaceId]: projection,
+      },
+    };
+  });
+}
+
+function createEntityActivityDetail(
+  entityType: "folder" | "bookmark",
+  action: "created" | "updated" | "deleted",
+  label: string,
+): ProjectionActivityDetail {
+  return {
+    entityType,
+    action,
+    label,
+  };
+}
+
+function createWorkspaceActivityDetail(workspaceName: string): ProjectionActivityDetail {
+  return {
+    entityType: "workspace",
+    action: "resynced",
+    label: workspaceName,
+  };
 }
 
 async function recoverWorkspace(
@@ -1655,6 +1782,7 @@ async function attemptSubtreeRecovery(
     current.degradedReason = undefined;
     current.socketConnected = true;
   }, tree.workspace);
+  await recordActivity(scope.workspaceId);
   await log(`sync:${scope.workspaceId}`, `recovered subtree (${reason})`, "info");
   return true;
 }
