@@ -13,12 +13,21 @@ import (
 	"github.com/furia/shared-bookmark-sync/backend/internal/bookmarks"
 	"github.com/furia/shared-bookmark-sync/backend/internal/config"
 	"github.com/furia/shared-bookmark-sync/backend/internal/database"
+	"github.com/furia/shared-bookmark-sync/backend/internal/groups"
 	"github.com/furia/shared-bookmark-sync/backend/internal/httpapi"
 	"github.com/furia/shared-bookmark-sync/backend/internal/organizations"
 	syncapi "github.com/furia/shared-bookmark-sync/backend/internal/sync"
 	wsapi "github.com/furia/shared-bookmark-sync/backend/internal/websocket"
 	"github.com/furia/shared-bookmark-sync/backend/internal/workspaces"
 )
+
+type invitationAccepterAdapter struct {
+	service *organizations.Service
+}
+
+func (a invitationAccepterAdapter) AcceptInvitation(ctx context.Context, userID, token string) (any, error) {
+	return a.service.AcceptInvitation(ctx, userID, token)
+}
 
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -44,6 +53,7 @@ func main() {
 	mux := http.NewServeMux()
 	authService := auth.NewService(pool, cfg.Auth)
 	organizationsService := organizations.NewService(pool)
+	groupsService := groups.NewService(pool)
 	workspacesService := workspaces.NewService(pool)
 	bookmarksService := bookmarks.NewService(pool)
 	websocketHub := wsapi.NewHub()
@@ -73,8 +83,9 @@ func main() {
 		})
 	})
 
-	auth.RegisterRoutes(mux, authService)
+	auth.RegisterRoutes(mux, authService, invitationAccepterAdapter{service: organizationsService})
 	organizations.RegisterRoutes(mux, authService.Middleware, organizationsService)
+	groups.RegisterRoutes(mux, authService.Middleware, groupsService)
 	workspaces.RegisterRoutes(mux, authService.Middleware, workspacesService)
 	syncapi.RegisterBookmarkRoutes(mux, authService.Middleware, syncService)
 	syncapi.RegisterRoutes(mux, authService.Middleware, syncService)

@@ -2,10 +2,32 @@ package organizations
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"errors"
 	"fmt"
+	"strings"
+	"time"
 
+	"github.com/furia/shared-bookmark-sync/backend/internal/access"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+var (
+	ErrForbidden               = errors.New("forbidden")
+	ErrNotFound                = errors.New("not found")
+	ErrLastOwner               = errors.New("last owner cannot be removed or demoted")
+	ErrInvitationNotPending    = errors.New("invitation is not pending")
+	ErrInvitationEmailMismatch = errors.New("invitation email does not match authenticated user")
+)
+
+type dbQuerier interface {
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
+	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
+}
 
 type Service struct {
 	pool *pgxpool.Pool
@@ -15,6 +37,63 @@ type Membership struct {
 	OrganizationID   string `json:"organizationId"`
 	OrganizationName string `json:"organizationName"`
 	Role             string `json:"role"`
+}
+
+type CreateOrganizationInput struct {
+	Name string `json:"name"`
+}
+
+type OrganizationMember struct {
+	UserID string `json:"userId"`
+	Email  string `json:"email"`
+	Name   string `json:"name,omitempty"`
+	Role   string `json:"role"`
+}
+
+type PatchMemberInput struct {
+	UserID string  `json:"userId"`
+	Role   *string `json:"role,omitempty"`
+	Remove bool    `json:"remove,omitempty"`
+}
+
+type CreateInvitationInput struct {
+	Email string `json:"email"`
+	Role  string `json:"role"`
+}
+
+type Invitation struct {
+	ID               string  `json:"id"`
+	OrganizationID   string  `json:"organizationId"`
+	Email            string  `json:"email"`
+	Role             string  `json:"role"`
+	Status           string  `json:"status"`
+	Token            string  `json:"token"`
+	InvitedByUserID  string  `json:"invitedByUserId"`
+	AcceptedByUserID *string `json:"acceptedByUserId,omitempty"`
+	ExpiresAt        *string `json:"expiresAt,omitempty"`
+	AcceptedAt       *string `json:"acceptedAt,omitempty"`
+	CreatedAt        string  `json:"createdAt"`
+	UpdatedAt        string  `json:"updatedAt"`
+}
+
+type AcceptedInvitation struct {
+	OrganizationID   string `json:"organizationId"`
+	OrganizationName string `json:"organizationName"`
+	Role             string `json:"role"`
+}
+
+type invitationRecord struct {
+	ID               string
+	OrganizationID   string
+	OrganizationName string
+	Email            string
+	Role             access.OrganizationRole
+	Status           string
+	ExpiresAt        *time.Time
+	AcceptedByUserID *string
+	AcceptedAt       *string
+	CreatedAt        string
+	UpdatedAt        string
 }
 
 func NewService(pool *pgxpool.Pool) *Service {
@@ -48,4 +127,431 @@ func (s *Service) ListMemberships(ctx context.Context, userID string) ([]Members
 	}
 
 	return memberships, nil
+}
+
+func (s *Service) CreateOrganization(ctx context.Context, userID string, input CreateOrganizationInput) (Membership, error) {
+	name := strings.TrimSpace(input.Name)
+	if name == "" {
+		return Membership{}, fmt.Errorf("organization name is required")
+	}
+
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return Membership{}, fmt.Errorf("begin create organization tx: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	var membership Membership
+	err = tx.QueryRow(ctx, `
+		WITH new_org AS (
+			INSERT INTO organizations (name)
+			VALUES ($1)
+			RETURNING id, name
+		), new_member AS (
+			INSERT INTO organization_members (organization_id, user_id, role)
+			SELECT id, $2, $3 FROM new_org
+			RETURNING organization_id, role
+		)
+		SELECT new_org.id, new_org.name, new_member.role
+		FROM new_org
+		JOIN new_member ON new_member.organization_id = new_org.id
+	`, name, userID, access.OrganizationRoleOwner).Scan(
+		&membership.OrganizationID,
+		&membership.OrganizationName,
+		&membership.Role,
+	)
+	if err != nil {
+		return Membership{}, fmt.Errorf("create organization: %w", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return Membership{}, fmt.Errorf("commit create organization tx: %w", err)
+	}
+
+	return membership, nil
+}
+
+func (s *Service) ListMembers(ctx context.Context, requesterUserID, organizationID string) ([]OrganizationMember, error) {
+	if err := requireOrganizationAdmin(ctx, s.pool, requesterUserID, organizationID); err != nil {
+		return nil, err
+	}
+
+	rows, err := s.pool.Query(ctx, `
+		SELECT u.id, u.email, COALESCE(u.name, ''), om.role
+		FROM organization_members om
+		JOIN users u ON u.id = om.user_id
+		WHERE om.organization_id = $1
+		ORDER BY CASE om.role
+			WHEN 'owner' THEN 1
+			WHEN 'admin' THEN 2
+			ELSE 3
+		END, u.email, u.id
+	`, organizationID)
+	if err != nil {
+		return nil, fmt.Errorf("query organization members: %w", err)
+	}
+	defer rows.Close()
+
+	members := make([]OrganizationMember, 0)
+	for rows.Next() {
+		var member OrganizationMember
+		if err := rows.Scan(&member.UserID, &member.Email, &member.Name, &member.Role); err != nil {
+			return nil, fmt.Errorf("scan organization member: %w", err)
+		}
+		members = append(members, member)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate organization members: %w", err)
+	}
+
+	return members, nil
+}
+
+func (s *Service) PatchMember(ctx context.Context, requesterUserID, organizationID string, input PatchMemberInput) (OrganizationMember, error) {
+	userID := strings.TrimSpace(input.UserID)
+	if userID == "" {
+		return OrganizationMember{}, fmt.Errorf("userId is required")
+	}
+	if input.Remove && input.Role != nil {
+		return OrganizationMember{}, fmt.Errorf("role cannot be set when remove is true")
+	}
+	if !input.Remove && input.Role == nil {
+		return OrganizationMember{}, fmt.Errorf("role is required when remove is false")
+	}
+
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return OrganizationMember{}, fmt.Errorf("begin patch member tx: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	if err := requireOrganizationAdmin(ctx, tx, requesterUserID, organizationID); err != nil {
+		return OrganizationMember{}, err
+	}
+
+	currentMember, currentRole, err := loadOrganizationMember(ctx, tx, organizationID, userID)
+	if err != nil {
+		return OrganizationMember{}, err
+	}
+
+	if currentRole == access.OrganizationRoleOwner {
+		remainingOwners, err := countOwners(ctx, tx, organizationID)
+		if err != nil {
+			return OrganizationMember{}, err
+		}
+		if remainingOwners == 1 {
+			if input.Remove {
+				return OrganizationMember{}, ErrLastOwner
+			}
+			nextRole, err := normalizeOrganizationRole(*input.Role)
+			if err != nil {
+				return OrganizationMember{}, err
+			}
+			if nextRole != access.OrganizationRoleOwner {
+				return OrganizationMember{}, ErrLastOwner
+			}
+		}
+	}
+
+	if input.Remove {
+		if _, err := tx.Exec(ctx, `
+			DELETE FROM organization_members
+			WHERE organization_id = $1 AND user_id = $2
+		`, organizationID, userID); err != nil {
+			return OrganizationMember{}, fmt.Errorf("delete organization member: %w", err)
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return OrganizationMember{}, fmt.Errorf("commit remove member tx: %w", err)
+		}
+		return currentMember, nil
+	}
+
+	nextRole, err := normalizeOrganizationRole(*input.Role)
+	if err != nil {
+		return OrganizationMember{}, err
+	}
+
+	updatedMember, err := updateOrganizationMemberRole(ctx, tx, organizationID, userID, nextRole)
+	if err != nil {
+		return OrganizationMember{}, err
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return OrganizationMember{}, fmt.Errorf("commit patch member tx: %w", err)
+	}
+
+	return updatedMember, nil
+}
+
+func (s *Service) CreateInvitation(ctx context.Context, requesterUserID, organizationID string, input CreateInvitationInput) (Invitation, error) {
+	if err := requireOrganizationAdmin(ctx, s.pool, requesterUserID, organizationID); err != nil {
+		return Invitation{}, err
+	}
+
+	email := strings.TrimSpace(strings.ToLower(input.Email))
+	if email == "" {
+		return Invitation{}, fmt.Errorf("email is required")
+	}
+	role, err := normalizeOrganizationRole(input.Role)
+	if err != nil {
+		return Invitation{}, err
+	}
+	token, err := generateInviteToken()
+	if err != nil {
+		return Invitation{}, err
+	}
+
+	var invitation Invitation
+	err = s.pool.QueryRow(ctx, `
+		INSERT INTO invitations (organization_id, email, role, token, invited_by_user_id)
+		VALUES ($1, $2, $3, $4, $5)
+		RETURNING id, organization_id, email, role, status, token, invited_by_user_id,
+			accepted_by_user_id, expires_at::text, accepted_at::text, created_at::text, updated_at::text
+	`, organizationID, email, role, token, requesterUserID).Scan(
+		&invitation.ID,
+		&invitation.OrganizationID,
+		&invitation.Email,
+		&invitation.Role,
+		&invitation.Status,
+		&invitation.Token,
+		&invitation.InvitedByUserID,
+		&invitation.AcceptedByUserID,
+		&invitation.ExpiresAt,
+		&invitation.AcceptedAt,
+		&invitation.CreatedAt,
+		&invitation.UpdatedAt,
+	)
+	if err != nil {
+		return Invitation{}, fmt.Errorf("create invitation: %w", err)
+	}
+
+	return invitation, nil
+}
+
+func (s *Service) AcceptInvitation(ctx context.Context, userID, token string) (AcceptedInvitation, error) {
+	token = strings.TrimSpace(token)
+	if token == "" {
+		return AcceptedInvitation{}, fmt.Errorf("invitation token is required")
+	}
+
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return AcceptedInvitation{}, fmt.Errorf("begin accept invitation tx: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	userEmail, err := loadUserEmail(ctx, tx, userID)
+	if err != nil {
+		return AcceptedInvitation{}, err
+	}
+
+	record, err := loadInvitationForUpdate(ctx, tx, token)
+	if err != nil {
+		return AcceptedInvitation{}, err
+	}
+	if record.Status != "pending" {
+		return AcceptedInvitation{}, ErrInvitationNotPending
+	}
+	if record.ExpiresAt != nil && !record.ExpiresAt.After(time.Now().UTC()) {
+		return AcceptedInvitation{}, ErrInvitationNotPending
+	}
+	if strings.TrimSpace(strings.ToLower(record.Email)) != userEmail {
+		return AcceptedInvitation{}, ErrInvitationEmailMismatch
+	}
+
+	result, err := tx.Exec(ctx, `
+		INSERT INTO organization_members (organization_id, user_id, role)
+		VALUES ($1, $2, $3)
+		ON CONFLICT (organization_id, user_id) DO NOTHING
+	`, record.OrganizationID, userID, record.Role)
+	if err != nil {
+		return AcceptedInvitation{}, fmt.Errorf("create organization member from invitation: %w", err)
+	}
+	if result.RowsAffected() == 0 {
+		return AcceptedInvitation{}, fmt.Errorf("user is already a member of organization")
+	}
+
+	if _, err := tx.Exec(ctx, `
+		UPDATE invitations
+		SET status = 'accepted',
+			accepted_by_user_id = $2,
+			accepted_at = NOW(),
+			updated_at = NOW()
+		WHERE id = $1
+	`, record.ID, userID); err != nil {
+		return AcceptedInvitation{}, fmt.Errorf("mark invitation accepted: %w", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return AcceptedInvitation{}, fmt.Errorf("commit accept invitation tx: %w", err)
+	}
+
+	return AcceptedInvitation{
+		OrganizationID:   record.OrganizationID,
+		OrganizationName: record.OrganizationName,
+		Role:             string(record.Role),
+	}, nil
+}
+
+func requireOrganizationAdmin(ctx context.Context, querier dbQuerier, userID, organizationID string) error {
+	role, err := loadOrganizationRole(ctx, querier, organizationID, userID)
+	if err != nil {
+		return err
+	}
+	if role != access.OrganizationRoleOwner && role != access.OrganizationRoleAdmin {
+		return ErrForbidden
+	}
+
+	return nil
+}
+
+func loadOrganizationRole(ctx context.Context, querier dbQuerier, organizationID, userID string) (access.OrganizationRole, error) {
+	var role string
+	err := querier.QueryRow(ctx, `
+		SELECT role
+		FROM organization_members
+		WHERE organization_id = $1 AND user_id = $2
+	`, organizationID, userID).Scan(&role)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return "", ErrForbidden
+		}
+		return "", fmt.Errorf("query organization role: %w", err)
+	}
+
+	normalizedRole, err := normalizeOrganizationRole(role)
+	if err != nil {
+		return "", err
+	}
+
+	return normalizedRole, nil
+}
+
+func loadOrganizationMember(ctx context.Context, querier dbQuerier, organizationID, userID string) (OrganizationMember, access.OrganizationRole, error) {
+	var member OrganizationMember
+	var role string
+	err := querier.QueryRow(ctx, `
+		SELECT u.id, u.email, COALESCE(u.name, ''), om.role
+		FROM organization_members om
+		JOIN users u ON u.id = om.user_id
+		WHERE om.organization_id = $1 AND om.user_id = $2
+	`, organizationID, userID).Scan(&member.UserID, &member.Email, &member.Name, &role)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return OrganizationMember{}, "", ErrNotFound
+		}
+		return OrganizationMember{}, "", fmt.Errorf("query organization member: %w", err)
+	}
+	member.Role = role
+
+	normalizedRole, err := normalizeOrganizationRole(role)
+	if err != nil {
+		return OrganizationMember{}, "", err
+	}
+
+	return member, normalizedRole, nil
+}
+
+func countOwners(ctx context.Context, querier dbQuerier, organizationID string) (int, error) {
+	var count int
+	err := querier.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM organization_members
+		WHERE organization_id = $1 AND role = $2
+	`, organizationID, access.OrganizationRoleOwner).Scan(&count)
+	if err != nil {
+		return 0, fmt.Errorf("count organization owners: %w", err)
+	}
+
+	return count, nil
+}
+
+func updateOrganizationMemberRole(ctx context.Context, querier dbQuerier, organizationID, userID string, role access.OrganizationRole) (OrganizationMember, error) {
+	var member OrganizationMember
+	err := querier.QueryRow(ctx, `
+		UPDATE organization_members om
+		SET role = $3
+		FROM users u
+		WHERE om.organization_id = $1 AND om.user_id = $2 AND u.id = om.user_id
+		RETURNING u.id, u.email, COALESCE(u.name, ''), om.role
+	`, organizationID, userID, role).Scan(&member.UserID, &member.Email, &member.Name, &member.Role)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return OrganizationMember{}, ErrNotFound
+		}
+		return OrganizationMember{}, fmt.Errorf("update organization member role: %w", err)
+	}
+
+	return member, nil
+}
+
+func loadUserEmail(ctx context.Context, querier dbQuerier, userID string) (string, error) {
+	var email string
+	err := querier.QueryRow(ctx, `
+		SELECT email
+		FROM users
+		WHERE id = $1
+	`, userID).Scan(&email)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return "", ErrNotFound
+		}
+		return "", fmt.Errorf("query user email: %w", err)
+	}
+
+	return strings.TrimSpace(strings.ToLower(email)), nil
+}
+
+func loadInvitationForUpdate(ctx context.Context, querier dbQuerier, token string) (invitationRecord, error) {
+	var record invitationRecord
+	err := querier.QueryRow(ctx, `
+		SELECT i.id, i.organization_id, o.name, i.email, i.role, i.status,
+			i.expires_at, i.accepted_by_user_id, i.accepted_at::text, i.created_at::text, i.updated_at::text
+		FROM invitations i
+		JOIN organizations o ON o.id = i.organization_id
+		WHERE i.token = $1
+		FOR UPDATE
+	`, token).Scan(
+		&record.ID,
+		&record.OrganizationID,
+		&record.OrganizationName,
+		&record.Email,
+		&record.Role,
+		&record.Status,
+		&record.ExpiresAt,
+		&record.AcceptedByUserID,
+		&record.AcceptedAt,
+		&record.CreatedAt,
+		&record.UpdatedAt,
+	)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return invitationRecord{}, ErrNotFound
+		}
+		return invitationRecord{}, fmt.Errorf("query invitation: %w", err)
+	}
+
+	return record, nil
+}
+
+func normalizeOrganizationRole(raw string) (access.OrganizationRole, error) {
+	switch access.OrganizationRole(strings.TrimSpace(strings.ToLower(raw))) {
+	case access.OrganizationRoleOwner:
+		return access.OrganizationRoleOwner, nil
+	case access.OrganizationRoleAdmin:
+		return access.OrganizationRoleAdmin, nil
+	case access.OrganizationRoleMember:
+		return access.OrganizationRoleMember, nil
+	default:
+		return "", fmt.Errorf("unsupported organization role %q", raw)
+	}
+}
+
+func generateInviteToken() (string, error) {
+	buffer := make([]byte, 24)
+	if _, err := rand.Read(buffer); err != nil {
+		return "", fmt.Errorf("generate invite token: %w", err)
+	}
+
+	return hex.EncodeToString(buffer), nil
 }

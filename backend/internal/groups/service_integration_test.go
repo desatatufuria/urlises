@@ -1,0 +1,157 @@
+package groups
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/furia/shared-bookmark-sync/backend/internal/database"
+	"github.com/jackc/pgx/v5/pgxpool"
+)
+
+func TestAddMemberRejectsUserOutsideOrganization(t *testing.T) {
+	t.Parallel()
+
+	ctx, pool := openGroupsTestPool(t)
+	service := NewService(pool)
+	adminID := insertGroupsTestUser(t, ctx, pool, "admin@example.com")
+	outsiderID := insertGroupsTestUser(t, ctx, pool, "outsider@example.com")
+	organizationID := insertGroupsTestOrganization(t, ctx, pool, "Groups Org")
+	insertGroupsTestMember(t, ctx, pool, organizationID, adminID, "admin")
+	groupID := insertGroupsTestGroup(t, ctx, pool, organizationID, "devops")
+
+	_, err := service.AddMember(ctx, adminID, groupID, AddGroupMemberInput{UserID: outsiderID})
+	if err == nil {
+		t.Fatal("expected outsider group membership to be rejected")
+	}
+	if err != ErrForbidden {
+		t.Fatalf("err = %v, want %v", err, ErrForbidden)
+	}
+
+	var memberCount int
+	err = pool.QueryRow(ctx, `SELECT COUNT(*) FROM group_members WHERE group_id = $1`, groupID).Scan(&memberCount)
+	if err != nil {
+		t.Fatalf("count group members: %v", err)
+	}
+	if memberCount != 0 {
+		t.Fatalf("memberCount = %d, want 0", memberCount)
+	}
+}
+
+func openGroupsTestPool(t *testing.T) (context.Context, *pgxpool.Pool) {
+	t.Helper()
+	if testing.Short() {
+		t.Skip("skipping PostgreSQL integration test in short mode")
+	}
+
+	databaseURL := strings.TrimSpace(os.Getenv("GROUPS_TEST_DATABASE_URL"))
+	if databaseURL == "" {
+		databaseURL = strings.TrimSpace(os.Getenv("DATABASE_URL"))
+	}
+	if databaseURL == "" {
+		t.Skip("set GROUPS_TEST_DATABASE_URL or DATABASE_URL to run PostgreSQL tests")
+	}
+
+	ctx := context.Background()
+	adminPool, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		t.Fatalf("open admin pool: %v", err)
+	}
+	if err := adminPool.Ping(ctx); err != nil {
+		adminPool.Close()
+		t.Skipf("skipping PostgreSQL test: %v", err)
+	}
+
+	schemaName := fmt.Sprintf("groups_test_%d", time.Now().UnixNano())
+	if _, err := adminPool.Exec(ctx, fmt.Sprintf("CREATE SCHEMA %s", schemaName)); err != nil {
+		adminPool.Close()
+		t.Fatalf("create schema: %v", err)
+	}
+	t.Cleanup(func() {
+		if _, err := adminPool.Exec(ctx, fmt.Sprintf("DROP SCHEMA %s CASCADE", schemaName)); err != nil {
+			t.Fatalf("drop schema: %v", err)
+		}
+		adminPool.Close()
+	})
+
+	poolConfig, err := pgxpool.ParseConfig(databaseURL)
+	if err != nil {
+		t.Fatalf("parse database url: %v", err)
+	}
+	poolConfig.ConnConfig.RuntimeParams["search_path"] = schemaName
+
+	pool, err := pgxpool.NewWithConfig(ctx, poolConfig)
+	if err != nil {
+		t.Fatalf("open test pool: %v", err)
+	}
+	t.Cleanup(pool.Close)
+
+	if err := database.Migrate(ctx, pool, filepath.Clean(filepath.Join("..", "..", "migrations"))); err != nil {
+		t.Fatalf("migrate test schema: %v", err)
+	}
+
+	return ctx, pool
+}
+
+func insertGroupsTestUser(t *testing.T, ctx context.Context, pool *pgxpool.Pool, email string) string {
+	t.Helper()
+
+	var userID string
+	err := pool.QueryRow(ctx, `
+		INSERT INTO users (email, password_hash)
+		VALUES ($1, $2)
+		RETURNING id
+	`, email, "hash").Scan(&userID)
+	if err != nil {
+		t.Fatalf("insert user: %v", err)
+	}
+
+	return userID
+}
+
+func insertGroupsTestOrganization(t *testing.T, ctx context.Context, pool *pgxpool.Pool, name string) string {
+	t.Helper()
+
+	var organizationID string
+	err := pool.QueryRow(ctx, `
+		INSERT INTO organizations (name)
+		VALUES ($1)
+		RETURNING id
+	`, name).Scan(&organizationID)
+	if err != nil {
+		t.Fatalf("insert organization: %v", err)
+	}
+
+	return organizationID
+}
+
+func insertGroupsTestMember(t *testing.T, ctx context.Context, pool *pgxpool.Pool, organizationID, userID, role string) {
+	t.Helper()
+
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO organization_members (organization_id, user_id, role)
+		VALUES ($1, $2, $3)
+	`, organizationID, userID, role); err != nil {
+		t.Fatalf("insert organization member: %v", err)
+	}
+}
+
+func insertGroupsTestGroup(t *testing.T, ctx context.Context, pool *pgxpool.Pool, organizationID, name string) string {
+	t.Helper()
+
+	var groupID string
+	err := pool.QueryRow(ctx, `
+		INSERT INTO groups (organization_id, name)
+		VALUES ($1, $2)
+		RETURNING id
+	`, organizationID, name).Scan(&groupID)
+	if err != nil {
+		t.Fatalf("insert group: %v", err)
+	}
+
+	return groupID
+}
