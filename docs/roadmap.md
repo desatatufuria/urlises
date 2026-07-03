@@ -104,3 +104,18 @@ Delivered follow-up on `feature/shared-bookmark-sync-wu4-extension`:
 ## Documentation Rule for Every Slice
 
 No work unit is complete unless its repository-facing documentation is updated in the same PR.
+
+## Extension Premium UI Follow-up Slice
+
+- Branch: `feature/extension-premium-ui`
+- Delivery exception: approved as a single larger PR for this redesign only
+- Scope guardrail: popup, options, and status surfaces only — no backend, admin, or bookmark-management expansion
+
+Delivered implementation scope:
+- shared extension UI foundation under `extension/src/shared/ui/` with dark theme, hierarchy tokens, and subtle motion rules
+- premium popup summary/status surface with clearer session + workspace hierarchy
+- premium options workspace cards with explicit degraded state, calm healthy state, online presence, and blue fresh-activity cues
+- activity-seen acknowledgement path that clears the blue indicator after a premium status surface renders
+
+Outstanding verification:
+- Manual Chromium validation is still required for dark theme, motion calmness, online indicator visibility, blue indicator clear-on-open, and degraded prominence.

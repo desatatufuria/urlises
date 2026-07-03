@@ -4,7 +4,7 @@ Shared Bookmark Sync is a greenfield MVP that keeps organization and workspace b
 
 ## Current Slice
 
-This repository contains the **Work Unit 4 / PR 4 baseline plus extension-only follow-up remediations** on `feature/shared-bookmark-sync-wu4-extension`:
+This repository contains the **Work Unit 4 / PR 4 baseline plus extension-only follow-up remediations and the premium UI redesign slice** on `feature/extension-premium-ui`:
 
 - auth, durable client bindings, and JWT-protected session reads
 - organization/workspace membership reads and canonical workspace tree reads
@@ -12,6 +12,7 @@ This repository contains the **Work Unit 4 / PR 4 baseline plus extension-only f
 - transactional sync-event writes, per-workspace cursors, replay endpoint, and websocket fan-out with origin suppression
 - minimal local backend + PostgreSQL Compose bring-up
 - Manifest V3 extension login, workspace selection, managed projection, cursor replay, websocket subscription, viewer-local exclusions, and resync diagnostics
+- premium popup/options/status surfaces with shared dark-theme tokens, online presence, and blue fresh-activity indicators
 
 ## Architecture Baseline
 
@@ -146,6 +147,7 @@ Current automated extension coverage for this slice focuses on:
 - exclusion pruning during snapshot-driven reconciliation
 - duplicate-safe remote node reuse before create/rebuild
 - legacy projection-state hydration for live-sync health metadata
+- premium UI status helpers plus activity seen/unseen state transitions
 
 Current automated backend coverage for this slice focuses on:
 
@@ -185,6 +187,7 @@ The backend container is built from `backend/Dockerfile`, bakes in the Go binary
 2. Build the extension from `extension/`.
 3. Open `chrome://extensions`, enable Developer Mode, and load `extension/` as an unpacked extension.
 4. Sign in from the popup, open Options, select accessible workspaces, and use `Resync all selected workspaces` when diagnostics indicate replay or reconciliation drift.
+5. Premium UI validation remains extension-only: popup/options must show the shared dark theme, stronger hierarchy, a calm online indicator, and a blue activity dot that clears after the status view is shown.
 
 ## Operator Script for Remote Folder/Bookmark Creation
 
@@ -273,6 +276,20 @@ Manual Chromium validation for this follow-up:
 - The MV3 background websocket now sends a quiet keepalive only after ~20 seconds of socket idle time so healthy service-worker sessions are less likely to be idled away by Chrome.
 - Normal sync traffic resets the idle timer, so healthy event flow does not produce noisy extra diagnostics or visible churn.
 - Manual Chromium validation suggests idle/keepalive behavior is improved on the current branch.
+
+## Extension Premium UI Redesign Slice
+
+- This Gitflow slice stays on `feature/extension-premium-ui` and is limited to popup, options, and status surfaces only.
+- Popup and Options now share `extension/src/shared/ui/theme.css` plus pure status helpers under `extension/src/shared/ui/status.ts` instead of page-local styling.
+- The background projection state now exposes optional online/activity metadata so the UI can show calm online presence and a blue fresh-activity indicator without changing backend sync contracts.
+- Fresh activity is acknowledged only after popup or options renders the current premium status view through `ui/mark-activity-seen`.
+
+Manual Chromium validation still required for this redesign slice:
+
+1. Confirm popup and options render the shared dark theme with readable hierarchy.
+2. Confirm healthy live workspaces show the online indicator without noisy banners.
+3. Confirm the blue activity indicator appears after remote activity and clears after popup or options displays the status view.
+4. Confirm degraded workspaces remain visually explicit and keep recovery actions visible.
 
 ## Canonical Domain Rules in This Slice
 
