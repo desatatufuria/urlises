@@ -53,9 +53,47 @@ Delivered in PR 4:
 - snapshot bootstrap, replay catch-up, websocket subscription, managed-root projection, remote apply suppression, and manual resync diagnostics are wired for selected workspaces only
 - focused projection behavior tests now cover exclusion-preserving snapshot filtering and descendant exclusion cleanup after canonical folder deletion
 
+Live-sync remediation guardrail:
+- Keep the fix extension-first on `feature/shared-bookmark-sync-wu4-extension`; backend changes are allowed only if current replay/websocket contracts cannot distinguish resume, replay-gap, or resync-required states.
+- Healthy runtime should stay effectively invisible: replay-first silent recovery precedes any visible degraded message, and duplicate-safe subtree reconciliation must run before remote create/rebuild paths.
+
+Delivered follow-up on `feature/shared-bookmark-sync-wu4-extension`:
+- `extension-missing-parent-recovery` adds subtree-first repair for destructive delete/move cascades where mapped Chrome parents or nodes disappear mid-apply.
+- Remote folder/bookmark apply now validates the expected parent path before create/move/delete continues, then prunes stale mappings and replays from the last trusted cursor after rebuilding the nearest recoverable managed subtree.
+- Local delete/move `404` or parent-miss failures are abandoned once recovery starts so the same stale mutation does not loop.
+- Descendant mappings and exclusions are removed deterministically after canonical subtree deletes.
+- Scope remains explicitly narrow: this follow-up does NOT include broad Work Unit 5 hardening.
+
+Delivered follow-up on `feature/shared-bookmark-sync-wu4-extension`:
+- `extension-remote-bookmark-loop-fix` narrows the next extension remediation to remote bookmark update/move apply that was being re-emitted through Chrome `onChanged` / `onMoved` listeners.
+- The runtime now correlates remote bookmark side effects by bookmark identity plus expected title/url and target parent/index so only equivalent listener events are swallowed.
+- Backend-authoritative parent/index is verified after bookmark apply, and repeated same-bookmark update/move retries are abandoned once recovery starts.
+- Scope remains explicitly narrow: this follow-up does NOT expand into generic Work Unit 5 hardening.
+
 ### Work Unit 5
 - Documentation must reflect delivered behavior and open questions.
 - Verification notes must state what is automated versus manual.
+
+## Product / Admin Direction
+
+- Roles and memberships will be managed through a dedicated admin web application, not through the Chrome extension.
+- The first user who creates an organization becomes its initial admin/owner.
+- That organization admin is responsible for inviting members, assigning organization/workspace access, and setting `admin` / `editor` / `viewer` workspace roles.
+- The extension remains an operational sync client: login, workspace selection, projection, replay, websocket sync, and local viewer exclusions.
+
+## Viewer Local Override Policy
+
+- Viewer users must never change canonical shared bookmark semantics in the backend.
+- Viewer-local changes that only affect personal presentation may remain local in the browser.
+- Allowed viewer-local behavior for MVP:
+  - hide/exclude folders or bookmarks locally
+  - reorder visible content locally for that viewer only
+- Rejected/reverted viewer behavior for MVP:
+  - changing shared bookmark URLs
+  - renaming shared folders or bookmarks
+  - moving shared folders/bookmarks as a canonical change
+  - deleting shared nodes canonically
+- Product rule: if a change alters shared meaning, revert it; if it only alters the local view, keep it local.
 
 ## Documentation Rule for Every Slice
 

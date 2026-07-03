@@ -456,6 +456,13 @@ Can:
 - sync bookmarks locally
 - not modify shared data
 
+Viewer local override policy for MVP:
+
+- A viewer may keep local-only presentation changes in the browser, such as exclusions/hiding and local ordering.
+- A viewer must not change canonical shared meaning.
+- If a viewer changes a shared bookmark URL, renames shared content, moves shared nodes, or attempts canonical deletion, the extension/backend must reject or revert that shared mutation.
+- If a viewer applies a local-only visibility/order preference, it may remain in that browser without affecting backend state or other users.
+
 For MVP, do not implement complex permission inheritance.
 
 ## 14. Backend Business Rules
