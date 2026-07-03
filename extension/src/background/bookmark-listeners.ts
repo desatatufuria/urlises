@@ -23,15 +23,31 @@ export interface BookmarkListenerHandlers {
   onRemoved: (id: string, removeInfo: BookmarkRemoveInfo) => Promise<void>;
 }
 
+function normalizeBookmarkChangeInfo(changeInfo: BookmarkChangeInfo): BookmarkChangeInfo {
+  return {
+    title: changeInfo.title,
+    url: changeInfo.url,
+  };
+}
+
+function normalizeBookmarkMoveInfo(moveInfo: BookmarkMoveInfo): BookmarkMoveInfo {
+  return {
+    parentId: moveInfo.parentId,
+    oldParentId: moveInfo.oldParentId,
+    index: moveInfo.index,
+    oldIndex: moveInfo.oldIndex,
+  };
+}
+
 export function registerBookmarkListeners(handlers: BookmarkListenerHandlers): void {
   chrome.bookmarks.onCreated.addListener((id, node) => {
     void handlers.onCreated(id, node);
   });
   chrome.bookmarks.onChanged.addListener((id, changeInfo) => {
-    void handlers.onChanged(id, changeInfo);
+    void handlers.onChanged(id, normalizeBookmarkChangeInfo(changeInfo));
   });
   chrome.bookmarks.onMoved.addListener((id, moveInfo) => {
-    void handlers.onMoved(id, moveInfo);
+    void handlers.onMoved(id, normalizeBookmarkMoveInfo(moveInfo));
   });
   chrome.bookmarks.onRemoved.addListener((id, removeInfo) => {
     void handlers.onRemoved(id, removeInfo);

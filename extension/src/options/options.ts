@@ -2,6 +2,8 @@ import type { ExtensionState, UiState } from "../shared/types.js";
 
 const summary = document.querySelector<HTMLElement>("#summary")!;
 const workspaceGroups = document.querySelector<HTMLElement>("#workspace-groups")!;
+const liveSyncStatusNode = document.querySelector<HTMLElement>("#live-sync-status")!;
+const liveSyncStatusTextNode = document.querySelector<HTMLElement>("#live-sync-status-text")!;
 const diagnosticsNode = document.querySelector<HTMLElement>("#diagnostics")!;
 
 document.querySelector<HTMLButtonElement>("#save-selection")!.addEventListener("click", () => {
@@ -27,6 +29,8 @@ function render(ui: UiState): void {
   if (!state.session) {
     summary.textContent = "Sign in from the popup before selecting workspaces.";
     workspaceGroups.innerHTML = "";
+    liveSyncStatusNode.hidden = true;
+    liveSyncStatusTextNode.textContent = "";
     diagnosticsNode.textContent = "No active session.";
     return;
   }
@@ -58,16 +62,25 @@ function render(ui: UiState): void {
     workspaceGroups.appendChild(panel);
   }
 
+  const degradedSummaries = getDegradedProjectionSummaries(state);
+  liveSyncStatusNode.hidden = degradedSummaries.length === 0;
+  liveSyncStatusTextNode.textContent = degradedSummaries.join(" ");
   diagnosticsNode.textContent = formatDiagnostics(state);
 }
 
-function formatDiagnostics(state: ExtensionState): string {
-  const projectionLines = Object.values(state.projectionsByWorkspaceId).map((projection) => {
-    return `${projection.workspace.workspaceName}: status=${projection.status}, cursor=${projection.lastCursor}, socket=${projection.socketConnected ? "connected" : "disconnected"}, exclusions=${projection.excludedBackendNodeIds.length}${projection.lastError ? `, error=${projection.lastError}` : ""}`;
-  });
+function getDegradedProjectionSummaries(state: ExtensionState): string[] {
+  return Object.values(state.projectionsByWorkspaceId)
+    .filter((projection) => projection.health === "degraded")
+    .map((projection) => {
+      const reason = projection.degradedReason ?? projection.lastError ?? "silent recovery budget exhausted";
+      return `Live sync is degraded for ${projection.workspace.workspaceName}. Resync is required: ${reason}.`;
+    });
+}
 
+function formatDiagnostics(state: ExtensionState): string {
+  const degradedLines = getDegradedProjectionSummaries(state);
   const diagnosticLines = state.diagnostics.map((entry) => `${entry.time} [${entry.level}] ${entry.scope}: ${entry.message}`);
-  return [...projectionLines, "", ...diagnosticLines].join("\n").trim() || "No diagnostics yet.";
+  return [...degradedLines, ...diagnosticLines].join("\n").trim() || "No diagnostics yet.";
 }
 
 function showError(error: unknown): void {

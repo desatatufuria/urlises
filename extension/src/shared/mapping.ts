@@ -25,6 +25,13 @@ export function removeMappingsByChromeIds(projection: ProjectionState, chromeIds
   return projection;
 }
 
+export function removeMappingsByBackendIds(projection: ProjectionState, backendIds: Iterable<string>): ProjectionState {
+  for (const backendId of backendIds) {
+    removeMappingByBackendId(projection, backendId);
+  }
+  return projection;
+}
+
 export function removeMappingByBackendId(projection: ProjectionState, backendId: string): ProjectionState {
   const chromeId = projection.chromeIdByBackendId[backendId];
   if (chromeId) {

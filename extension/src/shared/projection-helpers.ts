@@ -48,3 +48,20 @@ export function collectBackendIdsByChromeIds(
   }
   return [...backendIds];
 }
+
+export function findReusableFolderNode(
+  children: chrome.bookmarks.BookmarkTreeNode[],
+  title: string,
+): chrome.bookmarks.BookmarkTreeNode | null {
+  const matches = children.filter((child) => !child.url && child.title === title);
+  return matches.length === 1 ? matches[0] : null;
+}
+
+export function findReusableBookmarkNode(
+  children: chrome.bookmarks.BookmarkTreeNode[],
+  title: string,
+  url: string,
+): chrome.bookmarks.BookmarkTreeNode | null {
+  const matches = children.filter((child) => child.url === url && child.title === title);
+  return matches.length === 1 ? matches[0] : null;
+}

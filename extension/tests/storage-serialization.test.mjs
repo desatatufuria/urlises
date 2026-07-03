@@ -81,3 +81,32 @@ test("updateState serializes concurrent mutations so session and workspace selec
   assert.deepEqual(finalState.selectedWorkspaceIds, ["workspace-a", "workspace-b"]);
   assert.equal(finalState.session?.accessToken, "token-1");
 });
+
+test("getState hydrates new projection health defaults from legacy persisted projection state", async () => {
+  storageData.clear();
+  await setState(createState({
+    projectionsByWorkspaceId: {
+      "workspace-a": {
+        workspace: {
+          workspaceId: "workspace-a",
+          workspaceName: "Workspace A",
+          workspaceType: "shared",
+          organizationId: "org-1",
+          organizationName: "Org",
+          role: "viewer",
+        },
+        chromeIdByBackendId: {},
+        backendIdByChromeId: {},
+        entityTypeByBackendId: {},
+        excludedBackendNodeIds: [],
+        lastCursor: 5,
+        status: "ready",
+        socketConnected: true,
+      },
+    },
+  }));
+
+  const finalState = await getState();
+  assert.equal(finalState.projectionsByWorkspaceId["workspace-a"].health, "live");
+  assert.equal(finalState.projectionsByWorkspaceId["workspace-a"].recoveryAttemptCount, 0);
+});

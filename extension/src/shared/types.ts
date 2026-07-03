@@ -117,6 +117,8 @@ export interface DiagnosticEntry {
   message: string;
 }
 
+export type ProjectionHealth = "bootstrap" | "live" | "recovering" | "degraded";
+
 export interface ProjectionState {
   workspace: WorkspaceAccess;
   rootChromeId?: string;
@@ -131,6 +133,11 @@ export interface ProjectionState {
   lastError?: string;
   status: "idle" | "syncing" | "ready" | "error";
   socketConnected?: boolean;
+  health: ProjectionHealth;
+  recoveryAttemptCount: number;
+  recoveryStartedAt?: string;
+  degradedAt?: string;
+  degradedReason?: string;
 }
 
 export interface ExtensionState {

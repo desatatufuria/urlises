@@ -20,7 +20,13 @@ function defaultState(): ExtensionState {
 
 export async function getState(): Promise<ExtensionState> {
   const result = await chromeStorageGet<ExtensionState>(STORAGE_KEY);
-  return { ...defaultState(), ...(result ?? {}) };
+  const next = { ...defaultState(), ...(result ?? {}) };
+  return {
+    ...next,
+    projectionsByWorkspaceId: Object.fromEntries(
+      Object.entries(next.projectionsByWorkspaceId).map(([workspaceId, projection]) => [workspaceId, normalizeProjectionState(projection)]),
+    ),
+  };
 }
 
 export async function setState(state: ExtensionState): Promise<void> {
@@ -54,7 +60,31 @@ export function createProjectionState(workspace: ProjectionState["workspace"]): 
     lastCursor: 0,
     status: "idle",
     socketConnected: false,
+    health: "bootstrap",
+    recoveryAttemptCount: 0,
   };
+}
+
+function normalizeProjectionState(projection: ProjectionState): ProjectionState {
+  return {
+    ...projection,
+    socketConnected: projection.socketConnected ?? false,
+    health: projection.health ?? deriveLegacyHealth(projection),
+    recoveryAttemptCount: projection.recoveryAttemptCount ?? 0,
+  };
+}
+
+function deriveLegacyHealth(projection: Pick<ProjectionState, "status" | "socketConnected">): ProjectionState["health"] {
+  if (projection.status === "error") {
+    return "degraded";
+  }
+  if (projection.status === "syncing") {
+    return "recovering";
+  }
+  if (projection.socketConnected) {
+    return "live";
+  }
+  return "bootstrap";
 }
 
 function chromeStorageGet<T>(key: string): Promise<T | undefined> {
