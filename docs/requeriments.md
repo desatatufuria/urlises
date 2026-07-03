@@ -378,12 +378,28 @@ GET  /me
 
 GET    /organizations
 POST   /organizations
+GET    /organizations/:organizationId/members
+PATCH  /organizations/:organizationId/members
+POST   /organizations/:organizationId/invitations
+
+POST   /invitations/:token/accept
+
+GET    /organizations/:organizationId/groups
+POST   /organizations/:organizationId/groups
+PATCH  /organizations/:organizationId/groups/:groupId
+DELETE /organizations/:organizationId/groups/:groupId
+POST   /groups/:groupId/members
+DELETE /groups/:groupId/members/:userId
 
 GET    /organizations/:organizationId/workspaces
 POST   /organizations/:organizationId/workspaces
 
 GET    /workspaces/:workspaceId
 GET    /workspaces/:workspaceId/tree
+PUT    /workspaces/:workspaceId/users/:userId/access
+DELETE /workspaces/:workspaceId/users/:userId/access
+PUT    /workspaces/:workspaceId/groups/:groupId/access
+DELETE /workspaces/:workspaceId/groups/:groupId/access
 
 POST   /workspaces/:workspaceId/folders
 PATCH  /folders/:folderId
@@ -465,6 +481,13 @@ Viewer local override policy for MVP:
 
 For MVP, do not implement complex permission inheritance.
 
+Admin/control-plane assumptions for the synchronized operational space:
+
+- The first user who creates an organization becomes its initial `owner`.
+- Organizations manage reusable groups first; groups become access subjects only after an explicit workspace-group grant.
+- Workspace access is explicit through direct user grants or group grants; organization membership alone does not unlock a workspace.
+- Effective workspace access resolves by highest role across all matching grant paths.
+
 ## 14. Backend Business Rules
 
 - A bookmark must belong to one folder.
@@ -472,13 +495,14 @@ For MVP, do not implement complex permission inheritance.
 - A workspace must belong to one organization.
 - Deleted folders and bookmarks should use soft delete.
 - URLs must be validated.
-- Users cannot access workspaces where they are not members.
+- Users cannot access workspaces through organization membership alone; they need an explicit direct or group grant.
 - The backend is the source of truth.
 - Chrome local state is a projection of backend state.
 - Workspace trees must expose stable backend IDs, parent links, and sibling order.
 - Only `admin` and `editor` members may mutate shared folders and bookmarks.
 - `viewer` members may read workspace trees but must not mutate shared semantics.
 - Shared folder/bookmark moves must preserve deterministic sibling ordering after create, update, move, and soft delete operations.
+- New workspaces must start with only their creator as `admin` until additional grants are configured.
 
 ## 15. First Implementation Milestones
 

@@ -37,6 +37,10 @@ type WorkspaceAccessQuerier interface {
 	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
 }
 
+type OrganizationAccessQuerier interface {
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+}
+
 type EffectiveWorkspaceAccess struct {
 	WorkspaceID      string        `json:"workspaceId"`
 	WorkspaceName    string        `json:"workspaceName"`
@@ -65,8 +69,12 @@ func NewService(pool *pgxpool.Pool) *Service {
 }
 
 func (s *Service) IsOrganizationAdmin(ctx context.Context, userID, organizationID string) (bool, error) {
+	return IsOrganizationAdmin(ctx, s.pool, userID, organizationID)
+}
+
+func IsOrganizationAdmin(ctx context.Context, querier OrganizationAccessQuerier, userID, organizationID string) (bool, error) {
 	var role string
-	err := s.pool.QueryRow(ctx, `
+	err := querier.QueryRow(ctx, `
 		SELECT role
 		FROM organization_members
 		WHERE organization_id = $1 AND user_id = $2
@@ -82,7 +90,11 @@ func (s *Service) IsOrganizationAdmin(ctx context.Context, userID, organizationI
 }
 
 func (s *Service) RequireOrganizationAdmin(ctx context.Context, userID, organizationID string) error {
-	allowed, err := s.IsOrganizationAdmin(ctx, userID, organizationID)
+	return RequireOrganizationAdmin(ctx, s.pool, userID, organizationID)
+}
+
+func RequireOrganizationAdmin(ctx context.Context, querier OrganizationAccessQuerier, userID, organizationID string) error {
+	allowed, err := IsOrganizationAdmin(ctx, querier, userID, organizationID)
 	if err != nil {
 		return err
 	}

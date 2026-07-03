@@ -9,6 +9,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/furia/shared-bookmark-sync/backend/internal/access"
 	"github.com/furia/shared-bookmark-sync/backend/internal/auth"
 	"github.com/furia/shared-bookmark-sync/backend/internal/bookmarks"
 	"github.com/furia/shared-bookmark-sync/backend/internal/config"
@@ -52,10 +53,11 @@ func main() {
 
 	mux := http.NewServeMux()
 	authService := auth.NewService(pool, cfg.Auth)
+	accessService := access.NewService(pool)
 	organizationsService := organizations.NewService(pool)
 	groupsService := groups.NewService(pool)
-	workspacesService := workspaces.NewService(pool)
-	bookmarksService := bookmarks.NewService(pool)
+	workspacesService := workspaces.NewService(pool, accessService)
+	bookmarksService := bookmarks.NewService(pool, accessService)
 	websocketHub := wsapi.NewHub()
 	syncService := syncapi.NewService(syncapi.NewPostgresStore(pool, bookmarksService, workspacesService, websocketHub))
 
