@@ -7,3 +7,5 @@ export const SYNC_EVENT_ID_HEADER = "X-Sync-Event-Id";
 export const SYNC_BASE_CURSOR_HEADER = "X-Sync-Base-Cursor";
 export const SYNC_CURSOR_HEADER = "X-Sync-Cursor";
 export const SYNC_DUPLICATE_HEADER = "X-Sync-Duplicate";
+export const UI_TIME_ZONE = "Europe/Madrid";
+export const UI_TIME_LOCALE = "en-GB";

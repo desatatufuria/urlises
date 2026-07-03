@@ -1,5 +1,5 @@
 import { DEFAULT_BACKEND_URL, STORAGE_KEY } from "./runtime.js";
-import type { ExtensionState, ProjectionState } from "./types.js";
+import type { ActivitySignal, ExtensionState, ProjectionState } from "./types.js";
 
 let stateMutationQueue: Promise<unknown> = Promise.resolve();
 
@@ -15,17 +15,23 @@ function defaultState(): ExtensionState {
     cachedWorkspacesByOrganization: {},
     projectionsByWorkspaceId: {},
     diagnostics: [],
+    activitySignal: defaultActivitySignal(),
   };
 }
 
 export async function getState(): Promise<ExtensionState> {
   const result = await chromeStorageGet<ExtensionState>(STORAGE_KEY);
   const next = { ...defaultState(), ...(result ?? {}) };
+  const projectionsByWorkspaceId = Object.fromEntries(
+    Object.entries(next.projectionsByWorkspaceId).map(([workspaceId, projection]) => [workspaceId, normalizeProjectionState(projection)]),
+  );
   return {
     ...next,
-    projectionsByWorkspaceId: Object.fromEntries(
-      Object.entries(next.projectionsByWorkspaceId).map(([workspaceId, projection]) => [workspaceId, normalizeProjectionState(projection)]),
-    ),
+    projectionsByWorkspaceId,
+    activitySignal: normalizeActivitySignal({
+      ...next,
+      projectionsByWorkspaceId,
+    }),
   };
 }
 
@@ -62,6 +68,7 @@ export function createProjectionState(workspace: ProjectionState["workspace"]): 
     socketConnected: false,
     health: "bootstrap",
     recoveryAttemptCount: 0,
+    activityRevision: 0,
   };
 }
 
@@ -71,6 +78,27 @@ function normalizeProjectionState(projection: ProjectionState): ProjectionState 
     socketConnected: projection.socketConnected ?? false,
     health: projection.health ?? deriveLegacyHealth(projection),
     recoveryAttemptCount: projection.recoveryAttemptCount ?? 0,
+    activityRevision: projection.activityRevision ?? 0,
+  };
+}
+
+function defaultActivitySignal(): ActivitySignal {
+  return {
+    revision: 0,
+    lastSeenRevision: 0,
+  };
+}
+
+function normalizeActivitySignal(state: Pick<ExtensionState, "activitySignal" | "projectionsByWorkspaceId">): ActivitySignal {
+  const derivedRevision = Math.max(
+    0,
+    ...Object.values(state.projectionsByWorkspaceId).map((projection) => projection.activityRevision ?? 0),
+  );
+  const revision = Math.max(state.activitySignal?.revision ?? 0, derivedRevision);
+  const lastSeenRevision = Math.min(Math.max(state.activitySignal?.lastSeenRevision ?? 0, 0), revision);
+  return {
+    revision,
+    lastSeenRevision,
   };
 }
 

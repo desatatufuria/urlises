@@ -8,16 +8,27 @@ import {
   initializeBackground,
   loadOptionsState,
   login,
+  markActivitySeen,
   logout,
   resyncAll,
   setSelectedWorkspaces,
 } from "./projection.js";
+import { STORAGE_KEY } from "../shared/runtime.js";
+import { getState } from "../shared/storage.js";
+import { getToolbarBadgeModel } from "../shared/ui/status.js";
 
 registerBookmarkListeners({
   onCreated: handleBookmarkCreated,
   onChanged: handleBookmarkChanged,
   onMoved: handleBookmarkMoved,
   onRemoved: handleBookmarkRemoved,
+});
+
+chrome.storage.onChanged.addListener((changes, areaName) => {
+  if (areaName !== "local" || !(STORAGE_KEY in changes)) {
+    return;
+  }
+  void refreshToolbarBadge();
 });
 
 chrome.runtime.onMessage.addListener((message: { type: string; payload?: unknown }, _sender, sendResponse) => {
@@ -44,6 +55,9 @@ chrome.runtime.onMessage.addListener((message: { type: string; payload?: unknown
       case "diagnostics/get":
         sendResponse(await getUiState());
         return;
+      case "ui/mark-activity-seen":
+        sendResponse(await markActivitySeen());
+        return;
       default:
         sendResponse({ error: `unsupported message type ${message.type}` });
     }
@@ -56,4 +70,32 @@ chrome.runtime.onMessage.addListener((message: { type: string; payload?: unknown
   return true;
 });
 
+void refreshToolbarBadge();
 void initializeBackground();
+
+async function refreshToolbarBadge(): Promise<void> {
+  const badge = getToolbarBadgeModel(await getState());
+  await setActionBadgeText(badge.text);
+  if (badge.backgroundColor) {
+    await setActionBadgeBackgroundColor(badge.backgroundColor);
+  }
+  await setActionTitle(badge.title);
+}
+
+function setActionBadgeText(text: string): Promise<void> {
+  return new Promise((resolve) => {
+    chrome.action.setBadgeText({ text }, resolve);
+  });
+}
+
+function setActionBadgeBackgroundColor(color: string): Promise<void> {
+  return new Promise((resolve) => {
+    chrome.action.setBadgeBackgroundColor({ color }, resolve);
+  });
+}
+
+function setActionTitle(title: string): Promise<void> {
+  return new Promise((resolve) => {
+    chrome.action.setTitle({ title }, resolve);
+  });
+}
