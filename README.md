@@ -144,6 +144,8 @@ Current automated extension coverage for this slice focuses on:
 - managed-root projection filtering for local-only exclusions
 - descendant exclusion cleanup after canonical folder deletion
 - exclusion pruning during snapshot-driven reconciliation
+- duplicate-safe remote node reuse before create/rebuild
+- legacy projection-state hydration for live-sync health metadata
 
 Current automated backend coverage for this slice focuses on:
 
@@ -183,6 +185,92 @@ The backend container is built from `backend/Dockerfile`, bakes in the Go binary
 2. Build the extension from `extension/`.
 3. Open `chrome://extensions`, enable Developer Mode, and load `extension/` as an unpacked extension.
 4. Sign in from the popup, open Options, select accessible workspaces, and use `Resync all selected workspaces` when diagnostics indicate replay or reconciliation drift.
+
+## Operator Script for Remote Folder/Bookmark Creation
+
+Use the repo-local script below when you need repeatable backend mutations during live-sync debugging without retyping raw `curl` commands.
+
+```bash
+# Store a reusable session file (defaults to /tmp/shared-bookmark-sync-session.json)
+node scripts/remote-bookmarks.mjs login \
+  --backend-url http://localhost:8081 \
+  --email you@example.com \
+  --password secret
+
+# Create a remote folder
+node scripts/remote-bookmarks.mjs create-folder \
+  --workspace-id workspace-1 \
+  --name "Debug Folder" \
+  --parent-id folder-parent \
+  --position 0
+
+# Create a remote bookmark
+node scripts/remote-bookmarks.mjs create-bookmark \
+  --workspace-id workspace-1 \
+  --folder-id folder-parent \
+  --title "Debug Bookmark" \
+  --url https://example.com/debug \
+  --position 0
+
+# Inspect the canonical workspace tree
+node scripts/remote-bookmarks.mjs get-tree \
+  --workspace-id workspace-1
+
+# Replay sync events after a known cursor
+node scripts/remote-bookmarks.mjs replay \
+  --workspace-id workspace-1 \
+  --after-cursor 42
+
+# Listen to raw websocket sync messages until interrupted
+node scripts/remote-bookmarks.mjs listen-ws \
+  --workspace-id workspace-1
+```
+
+Notes:
+
+- Pass `--session-file <path>` if you do not want to use the default `/tmp` session file.
+- Pass `--base-cursor <n>` when you want mutation requests to reflect a known extension cursor during repro runs.
+- Successful create commands print both the created resource JSON and the sync ACK headers (`eventId`, `cursor`, `duplicate`).
+
+## Extension Live Sync Remediation
+
+- Healthy live sync now resumes from the stored cursor instead of forcing a full workspace rebuild before every websocket connection.
+- Replay remains the first recovery path for cursor catch-up and reconnect continuity; full snapshot resync is reserved for replay gaps, stale mapping repair, or explicit recovery fallback.
+- The options page stays quiet during healthy sync and shows a visible degraded message only after the extension exhausts its bounded silent recovery budget.
+- Before creating a managed folder or bookmark from a remote event, the extension reconciles stale mappings against the expected Chrome parent subtree to avoid duplicate Chrome nodes for one canonical backend node.
+
+## Extension Missing-Parent Recovery Follow-up
+
+- This Gitflow follow-up stays extension-first on `feature/shared-bookmark-sync-wu4-extension` and fixes only destructive delete/move cascade recovery; it does NOT broaden into generic Work Unit 5 hardening.
+- Remote folder/bookmark create, update, move, and delete now validate the expected parent path plus mapped Chrome node before apply continues.
+- When validation fails, the extension prunes the affected subtree mappings first, rebuilds the nearest recoverable managed subtree, replays from the last trusted cursor, and falls back to workspace resync only if that subtree repair cannot restore the canonical path.
+- Repeated local delete/move `404` or missing-parent failures are abandoned after recovery starts so the same stale mutation does not loop indefinitely.
+- Descendant mappings and local exclusions are pruned deterministically when canonical folder/bookmark deletes invalidate stale subtree state.
+
+Manual Chromium validation for this follow-up:
+
+1. Delete nested managed folders while another client is moving children inside the same subtree.
+2. Confirm remote create/move/delete waits for the canonical parent path to exist before the Chrome apply resumes.
+3. Confirm repeated local delete/move failures do not loop on `HTTP 404` and only surface degraded state after bounded recovery is exhausted.
+
+## Extension Remote Bookmark Loop Follow-up
+
+- This Gitflow follow-up remains extension-first on `feature/shared-bookmark-sync-wu4-extension` and is limited to remote bookmark update/move loop prevention; it does NOT broaden into generic Work Unit 5 hardening.
+- Remote bookmark update/move apply now records a short-lived payload correlation entry so equivalent Chrome `onChanged` / `onMoved` side effects are swallowed as remote effects instead of being re-sent to the backend.
+- Bookmark move/update apply now verifies the final Chrome parent/index against the backend target and enters the existing subtree/workspace recovery ladder only when the final state still diverges.
+- Repeated same-bookmark local update/move retries are abandoned once recovery begins so remote loop churn stops before degraded mode unless recovery is truly exhausted.
+
+Manual Chromium validation for this follow-up:
+
+1. Replay a remote bookmark title/URL update and confirm no duplicate backend mutation request is emitted.
+2. Replay a remote bookmark reorder/move and confirm final Chrome parent/index matches backend order without repeated churn.
+3. Confirm the degraded indicator remains hidden unless repeated recovery attempts are genuinely exhausted.
+
+## Extension MV3 WebSocket Keepalive Hotfix
+
+- This narrow extension-only hotfix stays on `feature/shared-bookmark-sync-wu4-extension` and adds no backend contract changes.
+- The MV3 background websocket now sends a quiet keepalive only after ~20 seconds of socket idle time so healthy service-worker sessions are less likely to be idled away by Chrome.
+- Normal sync traffic resets the idle timer, so healthy event flow does not produce noisy extra diagnostics or visible churn.
 
 ## Canonical Domain Rules in This Slice
 
