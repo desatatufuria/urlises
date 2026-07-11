@@ -1,0 +1,13 @@
+POC final verification: PASS
+
+Commands executed:
+1. DOCKER_CONFIG="$(mktemp -d)" ./scripts/test-poc.sh
+   PASS: Compose services reached readiness; 1 unique user registration/login/session and 1 organization creation completed; Mailpit SMTP smoke passed (1 Go package test).
+2. cd admin-web && npm run typecheck && npm run test && npm run build
+   PASS: typecheck passed; 8 test files and 28 tests passed; production build passed.
+
+Inspections:
+- admin-web/vite.config.ts proxies /api to internal backend http://shared-bookmark-sync-backend:8080.
+- README documents: cd admin-web && VITE_API_BASE_URL=/api npm run dev -- --host 0.0.0.0.
+- Frozen ledger: RESILIENCE-001 corrected; RISK-001, READABILITY-001, READABILITY-002, READABILITY-003, and RELIABILITY-001 are informational.
+- No new deterministic normal POC failure observed.

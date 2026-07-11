@@ -1,0 +1,109 @@
+{
+  "evidence": [
+    {
+      "finding_id": "RISK-001",
+      "class": "inferential",
+      "proof": "Source inspection at backend/internal/organizations/service.go:240-286, backend/internal/organizations/service.go:450-459"
+    },
+    {
+      "finding_id": "RESILIENCE-001",
+      "class": "deterministic",
+      "proof": "Source inspection at admin-web/src/main.tsx:1-31, admin-web/package.json:12-29"
+    },
+    {
+      "finding_id": "RESILIENCE-002",
+      "class": "deterministic",
+      "proof": "Source inspection at backend/internal/organizations/handler.go:132-142, backend/internal/groups/handler.go:141-149, backend/internal/workspaces/handler.go:173-181"
+    },
+    {
+      "finding_id": "RESILIENCE-003",
+      "class": "deterministic",
+      "proof": "Source inspection at openspec/changes/admin-web-ui/proposal.md:50-51, openspec/changes/admin-web-ui/tasks.md:19-26"
+    },
+    {
+      "finding_id": "RESILIENCE-004",
+      "class": "deterministic",
+      "proof": "Source inspection at admin-web/src/app/providers/AuthProvider.tsx:25-90, admin-web/src/app/router.tsx:16-20"
+    },
+    {
+      "finding_id": "RESILIENCE-005",
+      "class": "inferential",
+      "proof": "Source inspection at admin-web/src/lib/api/client.ts:60-82, backend/internal/organizations/service.go:298-340, backend/internal/workspaces/service.go:233-279"
+    },
+    {
+      "finding_id": "RELIABILITY-001",
+      "class": "deterministic",
+      "proof": "Source inspection at backend/internal/workspaces/service.go:161-203, admin-web/src/features/access/AccessPage.tsx:45-66"
+    },
+    {
+      "finding_id": "RELIABILITY-002",
+      "class": "deterministic",
+      "proof": "Source inspection at admin-web/src/features/members/mutations.ts:21-33, admin-web/src/app/providers/OrganizationProvider.tsx:27-37"
+    },
+    {
+      "finding_id": "RELIABILITY-003",
+      "class": "deterministic",
+      "proof": "Source inspection at admin-web/src/features/groups/mutations.ts:20-77, admin-web/src/features/access/queries.ts:5-10"
+    },
+    {
+      "finding_id": "RELIABILITY-004",
+      "class": "deterministic",
+      "proof": "Source inspection at admin-web/src/features/access/mutations.ts:6-64, admin-web/src/features/workspaces/queries.ts:5-10"
+    },
+    {
+      "finding_id": "RELIABILITY-005",
+      "class": "deterministic",
+      "proof": "Source inspection at backend/internal/organizations/service.go:343-382, backend/internal/organizations/service.go:402-413"
+    },
+    {
+      "finding_id": "RELIABILITY-006",
+      "class": "deterministic",
+      "proof": "Source inspection at backend/internal/organizations/service.go:298-340, backend/migrations/000002_admin_backend_foundation.sql:16-33"
+    },
+    {
+      "finding_id": "RELIABILITY-007",
+      "class": "deterministic",
+      "proof": "Source inspection at admin-web/src/features/access/AccessPage.tsx:45-84, admin-web/src/features/groups/GroupsPage.tsx:27-38"
+    },
+    {
+      "finding_id": "RELIABILITY-008",
+      "class": "inferential",
+      "proof": "Source inspection at backend/internal/workspaces/service.go:430-463, backend/internal/workspaces/service.go:605-697"
+    },
+    {
+      "finding_id": "RELIABILITY-009",
+      "class": "inferential",
+      "proof": "Source inspection at backend/internal/organizations/service.go:234-295, backend/internal/organizations/service.go:509-520"
+    },
+    {
+      "finding_id": "RELIABILITY-010",
+      "class": "deterministic",
+      "proof": "Source inspection at admin-web/src/features/access/AccessPage.test.tsx:27-163, admin-web/src/features/access/AccessPage.tsx:263-399"
+    },
+    {
+      "finding_id": "RELIABILITY-011",
+      "class": "deterministic",
+      "proof": "Source inspection at admin-web/src/features/groups/GroupsPage.test.tsx:27-98, admin-web/src/features/groups/GroupsPage.tsx:65-101"
+    },
+    {
+      "finding_id": "RELIABILITY-012",
+      "class": "deterministic",
+      "proof": "Source inspection at admin-web/src/app/providers/AuthProvider.test.tsx:18-141, admin-web/src/app/providers/AuthProvider.tsx:60-91"
+    },
+    {
+      "finding_id": "RELIABILITY-013",
+      "class": "deterministic",
+      "proof": "Source inspection at backend/internal/organizations/handler.go:115-129, backend/internal/groups/handler.go:109-123, backend/internal/workspaces/handler.go:82-96"
+    },
+    {
+      "finding_id": "RELIABILITY-014",
+      "class": "deterministic",
+      "proof": "Source inspection at backend/internal/workspaces/service_integration_test.go:222-244, backend/internal/groups/service_integration_test.go:95-107"
+    },
+    {
+      "finding_id": "RELIABILITY-015",
+      "class": "deterministic",
+      "proof": "Source inspection at admin-web/src/features/members/MembersPage.test.tsx:27-126, openspec/changes/admin-web-ui/specs/admin-web-ui-experience/spec.md:35-39"
+    }
+  ]
+}

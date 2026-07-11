@@ -1,0 +1,16 @@
+{
+  "schema": "gentle-ai.review-receipt/v1",
+  "lineage_id": "poc-feature-finalization",
+  "mode": "ordinary_4r",
+  "generation": 1,
+  "base_tree": "43fad8901a4f26e92ba1b29c44c5d4f7930a7772",
+  "initial_review_tree": "239e4919d74203f85f3bf1ead5b1bde8e382b59f",
+  "final_candidate_tree": "ea18d85cf8c9ff528d5f0ffd1e90fe3d524052c8",
+  "paths_digest": "sha256:e5ab3298ca051b4b9bdeb1e9aa3a750770cf0d517fa899e52ec871fc786cba82",
+  "fix_delta_hash": "sha256:5b4a98c00fcac467de64acc63f7c4fd54ad3bf39cecec0d905372b8dd5cba649",
+  "policy_hash": "sha256:8d2cc48c8f8f26a2b180ae97b85c6ef87b404447014b303b3b847b1397717595",
+  "ledger_hash": "sha256:86c1123facc6d3c522e30d940f872539c68f1c9019d5db584ff6d4d21df30945",
+  "evidence_hash": "sha256:fd864e81f68028be56501cd5af3689e60e775a5793745553cd6309473f9dd3fa",
+  "counters": {"full_reviews": 1, "refuter_batches": 0, "fix_batches": 1, "scoped_fix_validations": 1, "final_verifications": 1, "fix_rounds": 0, "scoped_rejudgments": 0, "judge_executions": 0},
+  "terminal_state": "approved"
+}

@@ -1,0 +1,24 @@
+{
+  "refuter_outcomes": [
+    {
+      "finding_id": "RISK-001",
+      "outcome": "corroborated",
+      "proof": "backend/internal/organizations/service.go:240-292 and 591-599 allow admin callers to assign owner, while lines 249-265 reject demotion only when owner count equals one."
+    },
+    {
+      "finding_id": "RESILIENCE-005",
+      "outcome": "corroborated",
+      "proof": "admin-web/src/lib/api/client.ts:60-82 sends no operation key; backend/internal/organizations/service.go:311-340 and backend/internal/workspaces/service.go:253-279 commit unconditional creations before the response."
+    },
+    {
+      "finding_id": "RELIABILITY-008",
+      "outcome": "corroborated",
+      "proof": "backend/internal/workspaces/service.go:430-463 combines metadata and grants loaded by separate pool queries at lines 605-697 without one transaction snapshot."
+    },
+    {
+      "finding_id": "RELIABILITY-009",
+      "outcome": "corroborated",
+      "proof": "backend/internal/organizations/service.go:234-295 and 509-520 count owners without row or organization locking before concurrent updates, and the schema has no invariant requiring one owner."
+    }
+  ]
+}

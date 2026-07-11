@@ -1,0 +1,783 @@
+{
+  "findings": [
+    {
+      "id": "RISK-001",
+      "lens": "risk",
+      "location": "backend/internal/organizations/service.go:240-286",
+      "severity": "CRITICAL",
+      "claim": "An organization admin can promote itself to owner and then demote a previous owner because owner assignment is available to admin callers and last-owner protection only checks the owner count.",
+      "evidence_class": "inferential",
+      "proof_refs": [
+        "backend/internal/organizations/service.go:240-286",
+        "backend/internal/organizations/service.go:450-459"
+      ],
+      "status": "open"
+    },
+    {
+      "id": "RISK-002",
+      "lens": "risk",
+      "location": "admin-web/src/app/providers/AuthProvider.tsx:25-54",
+      "severity": "WARNING",
+      "claim": "The bearer access token is persisted in localStorage and is readable by scripts executing on the admin-web origin.",
+      "evidence_class": "deterministic",
+      "proof_refs": [
+        "admin-web/src/app/providers/AuthProvider.tsx:25-54"
+      ],
+      "status": "info"
+    },
+    {
+      "id": "RISK-003",
+      "lens": "risk",
+      "location": "admin-web/src/lib/api/auth.ts:20-22",
+      "severity": "WARNING",
+      "claim": "Logout clears browser state without a backend token-revocation request.",
+      "evidence_class": "deterministic",
+      "proof_refs": [
+        "admin-web/src/lib/api/auth.ts:20-22",
+        "admin-web/src/app/providers/AuthProvider.tsx:113-120"
+      ],
+      "status": "info"
+    },
+    {
+      "id": "RISK-004",
+      "lens": "risk",
+      "location": "README.md:75-79",
+      "severity": "WARNING",
+      "claim": "Bootstrap documentation contains a complete PostgreSQL URL with postgres:postgres local credentials.",
+      "evidence_class": "deterministic",
+      "proof_refs": [
+        "README.md:75-79"
+      ],
+      "status": "info"
+    },
+    {
+      "id": "RISK-005",
+      "lens": "risk",
+      "location": "backend/internal/organizations/service.go:64-76",
+      "severity": "WARNING",
+      "claim": "Invitation bearer tokens are stored directly and included in the invitation-creation response.",
+      "evidence_class": "deterministic",
+      "proof_refs": [
+        "backend/internal/organizations/service.go:64-76",
+        "backend/internal/organizations/handler.go:93-112"
+      ],
+      "status": "info"
+    },
+    {
+      "id": "RISK-006",
+      "lens": "risk",
+      "location": "backend/internal/organizations/handler.go:132-142",
+      "severity": "WARNING",
+      "claim": "Default admin handler error branches return wrapped service errors to authenticated clients and can expose database details.",
+      "evidence_class": "deterministic",
+      "proof_refs": [
+        "backend/internal/organizations/handler.go:132-142",
+        "backend/internal/groups/handler.go:141-149",
+        "backend/internal/workspaces/handler.go:173-180"
+      ],
+      "status": "info"
+    },
+    {
+      "id": "RISK-007",
+      "lens": "risk",
+      "location": "backend/cmd/api/main.go:70-79",
+      "severity": "WARNING",
+      "claim": "The unauthenticated readiness endpoint returns raw database ping errors.",
+      "evidence_class": "deterministic",
+      "proof_refs": [
+        "backend/cmd/api/main.go:70-79"
+      ],
+      "status": "info"
+    },
+    {
+      "id": "RISK-008",
+      "lens": "risk",
+      "location": "backend/cmd/api/main.go:96-99",
+      "severity": "WARNING",
+      "claim": "Development CORS middleware is installed for every server start without an environment gate.",
+      "evidence_class": "deterministic",
+      "proof_refs": [
+        "backend/cmd/api/main.go:96-99",
+        "backend/internal/httpapi/cors.go:36-69"
+      ],
+      "status": "info"
+    },
+    {
+      "id": "RISK-009",
+      "lens": "risk",
+      "location": "scripts/activate-local-invitation.sh:18-35",
+      "severity": "SUGGESTION",
+      "claim": "The local helper passes the entered password through the jq child process environment.",
+      "evidence_class": "deterministic",
+      "proof_refs": [
+        "scripts/activate-local-invitation.sh:18-35"
+      ],
+      "status": "info"
+    },
+    {
+      "id": "RESILIENCE-001",
+      "lens": "resilience",
+      "location": "admin-web/src/main.tsx:1-31",
+      "severity": "BLOCKER",
+      "claim": "The operator SPA has no exception-reporting boundary, error telemetry, performance measurement, release marker, or alert hook for production failures.",
+      "evidence_class": "deterministic",
+      "proof_refs": [
+        "admin-web/src/main.tsx:1-31",
+        "admin-web/package.json:12-29"
+      ],
+      "status": "corroborated"
+    },
+    {
+      "id": "RESILIENCE-002",
+      "lens": "resilience",
+      "location": "backend/internal/workspaces/handler.go:173-181",
+      "severity": "BLOCKER",
+      "claim": "Unexpected service and database failures are returned as HTTP 400 by the admin handlers and the server adds no request error-reporting wrapper.",
+      "evidence_class": "deterministic",
+      "proof_refs": [
+        "backend/internal/organizations/handler.go:132-142",
+        "backend/internal/groups/handler.go:141-149",
+        "backend/internal/workspaces/handler.go:173-181"
+      ],
+      "status": "corroborated"
+    },
+    {
+      "id": "RESILIENCE-003",
+      "lens": "resilience",
+      "location": "openspec/changes/admin-web-ui/proposal.md:50-51",
+      "severity": "CRITICAL",
+      "claim": "Recovery evidence provides no exact rollback commands or independent rollback boundaries for work units 1 through 4.",
+      "evidence_class": "deterministic",
+      "proof_refs": [
+        "openspec/changes/admin-web-ui/proposal.md:50-51",
+        "openspec/changes/admin-web-ui/tasks.md:19-26"
+      ],
+      "status": "corroborated"
+    },
+    {
+      "id": "RESILIENCE-004",
+      "lens": "resilience",
+      "location": "admin-web/src/app/providers/AuthProvider.tsx:25-90",
+      "severity": "CRITICAL",
+      "claim": "A localStorage get, set, or remove exception can reject session restoration before auth status leaves loading, leaving the application without retry or recovery.",
+      "evidence_class": "deterministic",
+      "proof_refs": [
+        "admin-web/src/app/providers/AuthProvider.tsx:25-90",
+        "admin-web/src/app/router.tsx:16-20"
+      ],
+      "status": "corroborated"
+    },
+    {
+      "id": "RESILIENCE-005",
+      "lens": "resilience",
+      "location": "admin-web/src/lib/api/client.ts:60-82",
+      "severity": "CRITICAL",
+      "claim": "Creation requests have no idempotency key or ambiguous-outcome reconciliation, so a lost response after commit can lead to an unidentified duplicate retry.",
+      "evidence_class": "inferential",
+      "proof_refs": [
+        "admin-web/src/lib/api/client.ts:60-82",
+        "backend/internal/organizations/service.go:298-340",
+        "backend/internal/workspaces/service.go:233-279"
+      ],
+      "status": "open"
+    },
+    {
+      "id": "RESILIENCE-006",
+      "lens": "resilience",
+      "location": "admin-web/src/lib/api/client.ts:60-82",
+      "severity": "WARNING",
+      "claim": "API requests have no deadline or AbortSignal and can remain loading indefinitely on a half-open connection.",
+      "evidence_class": "deterministic",
+      "proof_refs": [
+        "admin-web/src/lib/api/client.ts:60-82"
+      ],
+      "status": "info"
+    },
+    {
+      "id": "RESILIENCE-007",
+      "lens": "resilience",
+      "location": "backend/cmd/api/main.go:96-100",
+      "severity": "WARNING",
+      "claim": "The API server defines no read, write, idle, or handler completion deadline beyond ReadHeaderTimeout.",
+      "evidence_class": "deterministic",
+      "proof_refs": [
+        "backend/cmd/api/main.go:96-100"
+      ],
+      "status": "info"
+    },
+    {
+      "id": "RESILIENCE-008",
+      "lens": "resilience",
+      "location": "admin-web/src/features/access/AccessPage.tsx:45-84",
+      "severity": "WARNING",
+      "claim": "Member or group dependency-query failures are converted to empty option lists on the Access page without a retry action.",
+      "evidence_class": "deterministic",
+      "proof_refs": [
+        "admin-web/src/features/access/AccessPage.tsx:45-84",
+        "admin-web/src/features/access/AccessPage.tsx:184-240"
+      ],
+      "status": "info"
+    },
+    {
+      "id": "RESILIENCE-009",
+      "lens": "resilience",
+      "location": "admin-web/src/features/groups/GroupsPage.tsx:27-38",
+      "severity": "WARNING",
+      "claim": "A failed organization-members query is shown as no available members without surfacing the failure or retry.",
+      "evidence_class": "deterministic",
+      "proof_refs": [
+        "admin-web/src/features/groups/GroupsPage.tsx:27-38",
+        "admin-web/src/features/groups/GroupMembersPanel.tsx:140-153"
+      ],
+      "status": "info"
+    },
+    {
+      "id": "RESILIENCE-010",
+      "lens": "resilience",
+      "location": "admin-web/src/app/providers/AuthProvider.tsx:65-87",
+      "severity": "WARNING",
+      "claim": "A transient bootstrap failure clears the session and changes the user to anonymous without a degraded authenticated state or retry.",
+      "evidence_class": "deterministic",
+      "proof_refs": [
+        "admin-web/src/app/providers/AuthProvider.tsx:65-87"
+      ],
+      "status": "info"
+    },
+    {
+      "id": "RESILIENCE-011",
+      "lens": "resilience",
+      "location": "admin-web/src/app/providers/AuthProvider.tsx:113-120",
+      "severity": "WARNING",
+      "claim": "Sign-out does not clear the TanStack Query cache, allowing prior-session organization data to remain fresh for a later same-key session.",
+      "evidence_class": "deterministic",
+      "proof_refs": [
+        "admin-web/src/app/providers/AuthProvider.tsx:113-120",
+        "admin-web/src/lib/api/queryKeys.ts:1-18"
+      ],
+      "status": "info"
+    },
+    {
+      "id": "RESILIENCE-012",
+      "lens": "resilience",
+      "location": "scripts/activate-local-invitation.sh:281-321",
+      "severity": "WARNING",
+      "claim": "On an acceptance transport failure the helper exits before database verification, so it cannot reliably recover an already-committed acceptance.",
+      "evidence_class": "deterministic",
+      "proof_refs": [
+        "scripts/activate-local-invitation.sh:281-321"
+      ],
+      "status": "info"
+    },
+    {
+      "id": "RESILIENCE-013",
+      "lens": "resilience",
+      "location": "admin-web/src/lib/api/client.ts:14-16",
+      "severity": "WARNING",
+      "claim": "A build without VITE_API_BASE_URL embeds localhost:8081 while admin-web documentation states localhost:8080.",
+      "evidence_class": "deterministic",
+      "proof_refs": [
+        "admin-web/src/lib/api/client.ts:14-16",
+        "admin-web/README.md:5-10"
+      ],
+      "status": "info"
+    },
+    {
+      "id": "RESILIENCE-014",
+      "lens": "resilience",
+      "location": "backend/internal/workspaces/service.go:430-463",
+      "severity": "WARNING",
+      "claim": "Workspace access metadata, grants, and effective access are read by separate queries without a common transaction snapshot.",
+      "evidence_class": "inferential",
+      "proof_refs": [
+        "backend/internal/workspaces/service.go:430-463"
+      ],
+      "status": "info"
+    },
+    {
+      "id": "READABILITY-001",
+      "lens": "readability",
+      "location": "admin-web/README.md:9",
+      "severity": "WARNING",
+      "claim": "The quick path names port 8080 while the API client defaults to port 8081.",
+      "evidence_class": "deterministic",
+      "proof_refs": [
+        "admin-web/README.md:7-10",
+        "admin-web/src/lib/api/client.ts:14-16"
+      ],
+      "status": "info"
+    },
+    {
+      "id": "READABILITY-002",
+      "lens": "readability",
+      "location": "README.md:85-119",
+      "severity": "WARNING",
+      "claim": "The endpoint inventory omits invitation-list, group-member-list, and workspace-access snapshot endpoints.",
+      "evidence_class": "deterministic",
+      "proof_refs": [
+        "README.md:85-119",
+        "backend/internal/workspaces/handler.go:82-96"
+      ],
+      "status": "info"
+    },
+    {
+      "id": "READABILITY-003",
+      "lens": "readability",
+      "location": "openspec/changes/admin-web-ui/apply-progress.md:91-107",
+      "severity": "WARNING",
+      "claim": "Delivery artifacts mark manual scenarios complete while also describing them as pending.",
+      "evidence_class": "deterministic",
+      "proof_refs": [
+        "openspec/changes/admin-web-ui/apply-progress.md:91-107",
+        "docs/roadmap.md:124-135"
+      ],
+      "status": "info"
+    },
+    {
+      "id": "READABILITY-004",
+      "lens": "readability",
+      "location": "backend/internal/workspaces/service.go:661-697",
+      "severity": "WARNING",
+      "claim": "Group provenance is encoded as group:<UUID> and the operator UI exposes the opaque identifier instead of a group name.",
+      "evidence_class": "deterministic",
+      "proof_refs": [
+        "backend/internal/workspaces/service.go:661-697",
+        "admin-web/src/features/access/AccessPage.tsx:423-427"
+      ],
+      "status": "info"
+    },
+    {
+      "id": "READABILITY-005",
+      "lens": "readability",
+      "location": "admin-web/src/features/members/MembersPage.tsx:183-188",
+      "severity": "WARNING",
+      "claim": "The invitation view expects invitedByEmail although the backend pending-invitation response supplies only an inviter user ID.",
+      "evidence_class": "deterministic",
+      "proof_refs": [
+        "backend/internal/organizations/service.go:79-89",
+        "admin-web/src/features/members/MembersPage.tsx:183-188"
+      ],
+      "status": "info"
+    },
+    {
+      "id": "READABILITY-006",
+      "lens": "readability",
+      "location": "admin-web/src/features/access/AccessPage.tsx:34-445",
+      "severity": "WARNING",
+      "claim": "AccessPage combines workspace selection, queries, mutations, forms, grant tables, notices, and effective-access rendering in one 445-line component.",
+      "evidence_class": "deterministic",
+      "proof_refs": [
+        "admin-web/src/features/access/AccessPage.tsx:34-445"
+      ],
+      "status": "info"
+    },
+    {
+      "id": "READABILITY-007",
+      "lens": "readability",
+      "location": "admin-web/src/features/groups/GroupMembersPanel.tsx:8-34",
+      "severity": "WARNING",
+      "claim": "GroupMembersPanel exposes a twelve-property contract including five mutation callbacks and a parent state setter.",
+      "evidence_class": "deterministic",
+      "proof_refs": [
+        "admin-web/src/features/groups/GroupMembersPanel.tsx:8-34"
+      ],
+      "status": "info"
+    },
+    {
+      "id": "READABILITY-008",
+      "lens": "readability",
+      "location": "backend/internal/groups/service.go:273-312",
+      "severity": "WARNING",
+      "claim": "Organization authorization predicates are duplicated across service modules instead of using one shared access boundary.",
+      "evidence_class": "deterministic",
+      "proof_refs": [
+        "backend/internal/groups/service.go:273-312",
+        "backend/internal/organizations/service.go:450-481"
+      ],
+      "status": "info"
+    },
+    {
+      "id": "READABILITY-009",
+      "lens": "readability",
+      "location": "backend/internal/workspaces/service.go:161-203",
+      "severity": "WARNING",
+      "claim": "Highest-role ranking is encoded independently in SQL and in rankWorkspaceRole.",
+      "evidence_class": "deterministic",
+      "proof_refs": [
+        "backend/internal/workspaces/service.go:161-203",
+        "backend/internal/workspaces/service.go:815-825"
+      ],
+      "status": "info"
+    },
+    {
+      "id": "READABILITY-010",
+      "lens": "readability",
+      "location": "backend/internal/workspaces/service.go:282-397",
+      "severity": "SUGGESTION",
+      "claim": "Workspace grant methods pass requester, workspace, and subject UUIDs as adjacent positional strings.",
+      "evidence_class": "deterministic",
+      "proof_refs": [
+        "backend/internal/workspaces/service.go:282-397"
+      ],
+      "status": "info"
+    },
+    {
+      "id": "READABILITY-011",
+      "lens": "readability",
+      "location": "admin-web/src/lib/api/types.ts:71-105",
+      "severity": "WARNING",
+      "claim": "WorkspaceSummary conflates organization-list effective access with access-snapshot metadata.",
+      "evidence_class": "deterministic",
+      "proof_refs": [
+        "admin-web/src/lib/api/types.ts:71-105",
+        "backend/internal/workspaces/service.go:67-80"
+      ],
+      "status": "info"
+    },
+    {
+      "id": "READABILITY-012",
+      "lens": "readability",
+      "location": "admin-web/src/app/views/PlaceholderPage.tsx:1-13",
+      "severity": "SUGGESTION",
+      "claim": "PlaceholderPage remains in delivered source without a route or component caller.",
+      "evidence_class": "deterministic",
+      "proof_refs": [
+        "admin-web/src/app/views/PlaceholderPage.tsx:1-13",
+        "admin-web/src/app/router.tsx:1-101"
+      ],
+      "status": "info"
+    },
+    {
+      "id": "READABILITY-013",
+      "lens": "readability",
+      "location": "admin-web/src/lib/api/auth.ts:20-22",
+      "severity": "SUGGESTION",
+      "claim": "logout accepts an unused token and behaves as an asynchronous API operation despite making no request.",
+      "evidence_class": "deterministic",
+      "proof_refs": [
+        "admin-web/src/lib/api/auth.ts:20-22"
+      ],
+      "status": "info"
+    },
+    {
+      "id": "READABILITY-014",
+      "lens": "readability",
+      "location": "admin-web/src/features/access/mutations.ts:6-63",
+      "severity": "SUGGESTION",
+      "claim": "Query-client acquisition, optional-ID guards, and invalidation patterns are repeated across mutation modules.",
+      "evidence_class": "deterministic",
+      "proof_refs": [
+        "admin-web/src/features/access/mutations.ts:6-63",
+        "admin-web/src/features/groups/mutations.ts:5-77"
+      ],
+      "status": "info"
+    },
+    {
+      "id": "READABILITY-015",
+      "lens": "readability",
+      "location": "backend/internal/httpapi/cors.go:61",
+      "severity": "SUGGESTION",
+      "claim": "The development CORS cache policy uses the unexplained raw string 600.",
+      "evidence_class": "deterministic",
+      "proof_refs": [
+        "backend/internal/httpapi/cors.go:61"
+      ],
+      "status": "info"
+    },
+    {
+      "id": "READABILITY-016",
+      "lens": "readability",
+      "location": "backend/internal/organizations/service.go:604-610",
+      "severity": "SUGGESTION",
+      "claim": "Invitation token entropy uses an unnamed literal byte length.",
+      "evidence_class": "deterministic",
+      "proof_refs": [
+        "backend/internal/organizations/service.go:604-610"
+      ],
+      "status": "info"
+    },
+    {
+      "id": "READABILITY-017",
+      "lens": "readability",
+      "location": "openspec/changes/admin-web-ui/apply-progress.md:87",
+      "severity": "WARNING",
+      "claim": "Static SQL and secret-storage checks are recorded as PASS without commands or outputs needed to reproduce them.",
+      "evidence_class": "deterministic",
+      "proof_refs": [
+        "openspec/changes/admin-web-ui/apply-progress.md:83-89"
+      ],
+      "status": "info"
+    },
+    {
+      "id": "READABILITY-018",
+      "lens": "readability",
+      "location": "scripts/activate-local-invitation.sh:117-139",
+      "severity": "SUGGESTION",
+      "claim": "Authentication and acceptance helpers depend on shared mutable global state instead of explicit inputs and outputs.",
+      "evidence_class": "deterministic",
+      "proof_refs": [
+        "scripts/activate-local-invitation.sh:117-139",
+        "scripts/activate-local-invitation.sh:230-246"
+      ],
+      "status": "info"
+    },
+    {
+      "id": "RELIABILITY-001",
+      "lens": "reliability",
+      "location": "backend/internal/workspaces/service.go:161-203",
+      "severity": "CRITICAL",
+      "claim": "An organization owner or admin without a workspace grant receives no row from ListByOrganization, so an existing workspace is absent from admin Workspaces and Access pages.",
+      "evidence_class": "deterministic",
+      "proof_refs": [
+        "backend/internal/workspaces/service.go:161-203",
+        "admin-web/src/features/access/AccessPage.tsx:45-66"
+      ],
+      "status": "corroborated"
+    },
+    {
+      "id": "RELIABILITY-002",
+      "lens": "reliability",
+      "location": "admin-web/src/features/members/mutations.ts:21-33",
+      "severity": "CRITICAL",
+      "claim": "After an operator changes its own role to member, the auth membership snapshot remains admin and the route guard continues rendering the admin shell until reload.",
+      "evidence_class": "deterministic",
+      "proof_refs": [
+        "admin-web/src/features/members/mutations.ts:21-33",
+        "admin-web/src/app/providers/OrganizationProvider.tsx:27-37"
+      ],
+      "status": "corroborated"
+    },
+    {
+      "id": "RELIABILITY-003",
+      "lens": "reliability",
+      "location": "admin-web/src/features/groups/mutations.ts:20-77",
+      "severity": "CRITICAL",
+      "claim": "Group rename, deletion, and membership changes do not invalidate workspace access snapshots, leaving highest-role and source views stale.",
+      "evidence_class": "deterministic",
+      "proof_refs": [
+        "admin-web/src/features/groups/mutations.ts:20-77",
+        "admin-web/src/features/access/queries.ts:5-10"
+      ],
+      "status": "corroborated"
+    },
+    {
+      "id": "RELIABILITY-004",
+      "lens": "reliability",
+      "location": "admin-web/src/features/access/mutations.ts:6-64",
+      "severity": "CRITICAL",
+      "claim": "Grant mutations invalidate only the selected access snapshot and can leave workspace inventory role, source, or membership stale.",
+      "evidence_class": "deterministic",
+      "proof_refs": [
+        "admin-web/src/features/access/mutations.ts:6-64",
+        "admin-web/src/features/workspaces/queries.ts:5-10"
+      ],
+      "status": "corroborated"
+    },
+    {
+      "id": "RELIABILITY-005",
+      "lens": "reliability",
+      "location": "backend/internal/organizations/service.go:343-382",
+      "severity": "CRITICAL",
+      "claim": "Expired invitations remain listed as pending although acceptance rejects the same record as not pending.",
+      "evidence_class": "deterministic",
+      "proof_refs": [
+        "backend/internal/organizations/service.go:343-382",
+        "backend/internal/organizations/service.go:402-413"
+      ],
+      "status": "corroborated"
+    },
+    {
+      "id": "RELIABILITY-006",
+      "lens": "reliability",
+      "location": "backend/internal/organizations/service.go:298-340",
+      "severity": "CRITICAL",
+      "claim": "Invitation creation accepts malformed addresses, duplicate pending invitations, and existing members, producing redundant or unacceptible records.",
+      "evidence_class": "deterministic",
+      "proof_refs": [
+        "backend/internal/organizations/service.go:298-340",
+        "backend/migrations/000002_admin_backend_foundation.sql:16-33"
+      ],
+      "status": "corroborated"
+    },
+    {
+      "id": "RELIABILITY-007",
+      "lens": "reliability",
+      "location": "admin-web/src/features/access/AccessPage.tsx:45-84",
+      "severity": "CRITICAL",
+      "claim": "Member and group query failures are treated as empty data, so assignment workflows report no available subjects instead of an error and retry state.",
+      "evidence_class": "deterministic",
+      "proof_refs": [
+        "admin-web/src/features/access/AccessPage.tsx:45-84",
+        "admin-web/src/features/groups/GroupsPage.tsx:27-38"
+      ],
+      "status": "corroborated"
+    },
+    {
+      "id": "RELIABILITY-008",
+      "lens": "reliability",
+      "location": "backend/internal/workspaces/service.go:430-463",
+      "severity": "CRITICAL",
+      "claim": "GetAccessSnapshot can combine raw grants and effective access from different database states because its queries do not share a transaction snapshot.",
+      "evidence_class": "inferential",
+      "proof_refs": [
+        "backend/internal/workspaces/service.go:430-463",
+        "backend/internal/workspaces/service.go:605-697"
+      ],
+      "status": "open"
+    },
+    {
+      "id": "RELIABILITY-009",
+      "lens": "reliability",
+      "location": "backend/internal/organizations/service.go:234-295",
+      "severity": "CRITICAL",
+      "claim": "Concurrent demotions of different owners can both observe multiple owners and commit, leaving the organization without an owner.",
+      "evidence_class": "inferential",
+      "proof_refs": [
+        "backend/internal/organizations/service.go:234-295",
+        "backend/internal/organizations/service.go:509-520"
+      ],
+      "status": "open"
+    },
+    {
+      "id": "RELIABILITY-010",
+      "lens": "reliability",
+      "location": "admin-web/src/features/access/AccessPage.test.tsx:27-163",
+      "severity": "CRITICAL",
+      "claim": "Access tests omit group grant creation and direct/group update and revoke behavior.",
+      "evidence_class": "deterministic",
+      "proof_refs": [
+        "admin-web/src/features/access/AccessPage.test.tsx:27-163",
+        "admin-web/src/features/access/AccessPage.tsx:263-399"
+      ],
+      "status": "corroborated"
+    },
+    {
+      "id": "RELIABILITY-011",
+      "lens": "reliability",
+      "location": "admin-web/src/features/groups/GroupsPage.test.tsx:27-98",
+      "severity": "CRITICAL",
+      "claim": "Group tests omit creation, rename, deletion, and their failure recovery.",
+      "evidence_class": "deterministic",
+      "proof_refs": [
+        "admin-web/src/features/groups/GroupsPage.test.tsx:27-98",
+        "admin-web/src/features/groups/GroupsPage.tsx:65-101"
+      ],
+      "status": "corroborated"
+    },
+    {
+      "id": "RELIABILITY-012",
+      "lens": "reliability",
+      "location": "admin-web/src/app/providers/AuthProvider.test.tsx:18-141",
+      "severity": "CRITICAL",
+      "claim": "Session restoration tests do not cover rejected, expired, malformed, or partially failed restoration and subsequent routing.",
+      "evidence_class": "deterministic",
+      "proof_refs": [
+        "admin-web/src/app/providers/AuthProvider.test.tsx:18-141",
+        "admin-web/src/app/providers/AuthProvider.tsx:60-91"
+      ],
+      "status": "corroborated"
+    },
+    {
+      "id": "RELIABILITY-013",
+      "lens": "reliability",
+      "location": "backend/internal/workspaces/handler.go:82-96",
+      "severity": "CRITICAL",
+      "claim": "The new admin read APIs have no HTTP-level tests for route registration, middleware behavior, status codes, or JSON envelopes.",
+      "evidence_class": "deterministic",
+      "proof_refs": [
+        "backend/internal/organizations/handler.go:115-129",
+        "backend/internal/groups/handler.go:109-123",
+        "backend/internal/workspaces/handler.go:82-96"
+      ],
+      "status": "corroborated"
+    },
+    {
+      "id": "RELIABILITY-014",
+      "lens": "reliability",
+      "location": "backend/internal/workspaces/service_integration_test.go:222-244",
+      "severity": "CRITICAL",
+      "claim": "Database-backed tests skip when the database variable is absent or unreachable, so the default Go test command can pass without executing read-model contracts.",
+      "evidence_class": "deterministic",
+      "proof_refs": [
+        "backend/internal/workspaces/service_integration_test.go:222-244",
+        "backend/internal/groups/service_integration_test.go:95-107"
+      ],
+      "status": "corroborated"
+    },
+    {
+      "id": "RELIABILITY-015",
+      "lens": "reliability",
+      "location": "admin-web/src/features/members/MembersPage.test.tsx:27-126",
+      "severity": "CRITICAL",
+      "claim": "Frontend suites do not exercise a failed page query followed by the required user-visible retry action.",
+      "evidence_class": "deterministic",
+      "proof_refs": [
+        "admin-web/src/features/members/MembersPage.test.tsx:27-126",
+        "openspec/changes/admin-web-ui/specs/admin-web-ui-experience/spec.md:35-39"
+      ],
+      "status": "corroborated"
+    },
+    {
+      "id": "RELIABILITY-016",
+      "lens": "reliability",
+      "location": "admin-web/src/features/access/AccessPage.test.tsx:89-100",
+      "severity": "WARNING",
+      "claim": "Frontend fixtures drift from backend contracts for creator grants and invitation inviter fields.",
+      "evidence_class": "deterministic",
+      "proof_refs": [
+        "admin-web/src/features/access/AccessPage.test.tsx:89-100",
+        "admin-web/src/features/members/MembersPage.test.tsx:64-92"
+      ],
+      "status": "info"
+    },
+    {
+      "id": "RELIABILITY-017",
+      "lens": "reliability",
+      "location": "admin-web/src/features/groups/GroupsPage.test.tsx:95-97",
+      "severity": "WARNING",
+      "claim": "The group removal test selects a generic Remove button by array position instead of the intended member row.",
+      "evidence_class": "deterministic",
+      "proof_refs": [
+        "admin-web/src/features/groups/GroupsPage.test.tsx:95-97"
+      ],
+      "status": "info"
+    },
+    {
+      "id": "RELIABILITY-018",
+      "lens": "reliability",
+      "location": "admin-web/src/features/access/AccessPage.test.tsx:156-160",
+      "severity": "WARNING",
+      "claim": "The direct-grant test selects an enabled Save grant button without scoping to the direct-user form.",
+      "evidence_class": "deterministic",
+      "proof_refs": [
+        "admin-web/src/features/access/AccessPage.test.tsx:156-160"
+      ],
+      "status": "info"
+    },
+    {
+      "id": "RELIABILITY-019",
+      "lens": "reliability",
+      "location": "scripts/activate-local-invitation.sh:294-321",
+      "severity": "WARNING",
+      "claim": "A lost acceptance response exits before database verification and a rerun cannot recover an already-accepted invitation.",
+      "evidence_class": "deterministic",
+      "proof_refs": [
+        "scripts/activate-local-invitation.sh:294-321"
+      ],
+      "status": "info"
+    },
+    {
+      "id": "RELIABILITY-020",
+      "lens": "reliability",
+      "location": "admin-web/README.md:5-10",
+      "severity": "WARNING",
+      "claim": "Quick-start documentation points to localhost:8080 while the API client defaults to localhost:8081.",
+      "evidence_class": "deterministic",
+      "proof_refs": [
+        "admin-web/README.md:5-10",
+        "admin-web/src/lib/api/client.ts:14-16"
+      ],
+      "status": "info"
+    }
+  ],
+  "ledger_hash": "sha256:97ff35324c5f44d3789421930dfd9041892d8e7531db2d6749e95bfd93500ad4"
+}
