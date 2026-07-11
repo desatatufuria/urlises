@@ -1,0 +1,32 @@
+API=http://shared-bookmark-sync-backend:8080
+CLIENT_ID="poc-$(cat /proc/sys/kernel/random/uuid)"
+EMAIL="admin+$(date +%s)@example.com"
+PASSWORD="poc-password"
+
+SESSION=$(curl -fsS -X POST "$API/auth/register" \
+  -H "Content-Type: application/json" \
+  -H "X-Client-Id: $CLIENT_ID" \
+  -d "{
+    \"email\":\"$EMAIL\",
+    \"name\":\"POC Admin\",
+    \"password\":\"$PASSWORD\",
+    \"deviceName\":\"Manual test\"
+  }")
+
+TOKEN=$(jq -r '.accessToken' <<<"$SESSION")
+
+curl -fsS -X POST "$API/organizations" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "X-Client-Id: $CLIENT_ID" \
+  -H "Idempotency-Key: $(cat /proc/sys/kernel/random/uuid)" \
+  -H "Content-Type: application/json" \
+  -d '{"name":"POC Organization"}' | jq
+
+printf 'Email: %s\nPassword: %s\n' "$EMAIL" "$PASSWORD"
+{
+  "organizationId": "d67657ff-f33b-4400-af3b-49a327077538",
+  "organizationName": "POC Organization",
+  "role": "owner"
+}
+Email: admin+1783772368@example.com
+Password: poc-password

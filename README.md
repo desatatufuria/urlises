@@ -2,14 +2,16 @@
 
 Shared Bookmark Sync is a greenfield MVP that keeps organization and workspace bookmark trees consistent across Chrome clients while treating the Go backend as the canonical source of truth.
 
-## Admin Backend Foundation Delivery
+## Admin Control Plane Delivery
 
-This branch carries the `admin-backend-foundation` chained backend delivery through **PR 3 / Work Unit 3**:
+This repository now carries both admin control-plane tracks:
 
 - explicit organization, invitation, group, workspace, and workspace-grant control-plane routes
 - shared `internal/access` resolution for effective workspace roles across direct and group grants
 - runtime-compatible workspace reads backed by the new access model
 - bookmark write guards enforced through effective shared access instead of legacy `workspace_members` reads
+- `admin-web/` React operator UI with Members, Invitations, Groups, Workspaces, and Access routes only
+- focused frontend coverage for route guards, invite flows, workspace creation, and highest-role-wins access review
 
 ## Current Product Baseline
 
@@ -53,12 +55,20 @@ extension/
   src/popup/             sign-in UI for JWT session bootstrap
   src/options/           workspace selection, resync-all, diagnostics
   src/shared/            REST/WS clients, session storage, mappings, exclusions, runtime types
+admin-web/
+  src/app/               guarded operator shell and route wiring
+  src/features/          members, invitations, groups, workspaces, and access pages
+  src/lib/               typed API client and local UI primitives
 ```
 
 ## Prerequisites
 
 - Go 1.26+
 - PostgreSQL 15+
+
+## One-command POC test
+
+Run `./scripts/test-poc.sh` to start the local stack, create a test user and organization, and run the Mailpit smoke test. The script creates the required shared Docker network (`dtf-netwok`) when absent. Run the admin UI in the devcontainer with `cd admin-web && VITE_API_BASE_URL=/api npm run dev -- --host 0.0.0.0`. Reusable local session details are written to `/tmp/shared-bookmark-sync-poc-session.env` with mode `600`.
 
 ## Local Bootstrap
 
@@ -117,6 +127,8 @@ Authenticated routes require:
 - `Authorization: Bearer <token>`
 - `X-Client-Id: <durable-browser-client-id>`
 
+Local admin-web development from `http://localhost:5173` or `http://127.0.0.1:5173` is CORS-enabled on the backend, including preflight handling for `Content-Type`, `Authorization`, `X-Client-Id`, `X-Sync-Event-Id`, and `X-Sync-Base-Cursor`.
+
 Shared mutation routes also accept:
 
 - `X-Sync-Event-Id: <client-generated-id>` for idempotent mutation retries
@@ -142,6 +154,33 @@ Successful shared mutations return:
 | `DATABASE_AUTO_MIGRATE` | No | `true` | Run SQL migrations on startup. |
 | `DATABASE_MIGRATIONS_DIR` | No | `migrations` | Relative migrations directory from `APP_ROOT`. |
 | `APP_ROOT` | No | `.` | Base path used to resolve migrations. |
+| `MAIL_ENABLED` | No | `false` | Enables SMTP delivery for a future workflow; startup never connects to SMTP. |
+| `MAIL_SMTP_HOST` / `MAIL_SMTP_PORT` | When enabled | `587` | SMTP server host and port. |
+| `MAIL_TIMEOUT` | No | `10s` | Upper bound for one SMTP operation. |
+| `MAIL_TLS_MODE` | No | `starttls` | `none`, `starttls`, or `tls`. |
+| `MAIL_AUTH_MODE` | No | `none` | `none` or `plain`; `plain` requires TLS and both credentials. |
+| `MAIL_USERNAME` / `MAIL_PASSWORD` | With `plain` | – | SMTP credentials. `none` ignores them. |
+| `MAIL_FROM_ADDRESS` / `MAIL_FROM_DISPLAY_NAME` | When enabled | – | Verified platform sender identity. |
+| `MAIL_REPLY_TO` | When enabled | – | Global Reply-To fallback. |
+
+Mail delivery is deliberately not wired to invitations or any other workflow in this POC. Keep production credentials in deployment secrets. `plain` authentication is rejected without TLS; use `starttls` or `tls` in production.
+
+Compose starts Mailpit for local inspection. Its SMTP and UI ports are host-loopback only: `127.0.0.1:11025` and `http://127.0.0.1:18025` by default. Set `MAILPIT_SMTP_HOST_PORT` or `MAILPIT_UI_HOST_PORT` before Compose starts to use alternate host-loopback ports. The backend still waits only for PostgreSQL.
+
+## Local Container Networking
+
+| Caller | PostgreSQL | Backend | Mailpit SMTP / UI |
+| --- | --- | --- | --- |
+| Host | `127.0.0.1:5433` | `127.0.0.1:8081` | `127.0.0.1:11025` / `http://127.0.0.1:18025` |
+| Devcontainer | `shared-bookmark-sync-postgres:5432` | `shared-bookmark-sync-backend:8080` | `shared-bookmark-sync-mailpit:1025` / `http://shared-bookmark-sync-mailpit:8025` |
+
+The project services join their private Compose network and the external `dtf-netwok` network used by the devcontainer. Use the unique container DNS names from the devcontainer; internal backend service names (`postgres`, `mailpit`) remain unchanged. Mailpit is intentionally not exposed to the external LAN.
+
+The devcontainer receives the Docker socket group through `DOCKER_SOCKET_GID` (default `986`). If the host socket uses another group, run this before rebuilding the devcontainer:
+
+```bash
+export DOCKER_SOCKET_GID="$(stat -c %g /var/run/docker.sock)"
+```
 
 ## Verification Commands
 
@@ -150,6 +189,8 @@ From `backend/`:
 ```bash
 go test ./...
 go build ./cmd/api
+MAILPIT_SMOKE_TEST=1 MAILPIT_SMOKE_ADDR=shared-bookmark-sync-mailpit:1025 go test ./internal/mailer -run TestMailpitSmoke
+# From the host instead: MAILPIT_SMOKE_ADDR=127.0.0.1:11025
 ```
 
 These commands validate compilation and the current unit-style test coverage. PostgreSQL-backed integration tests also exist for selected admin/backend flows, but they require explicit database environment variables.
@@ -161,6 +202,14 @@ npm install
 npm run build
 npm run typecheck
 npm run test:projection
+```
+
+From `admin-web/`:
+
+```bash
+npm run typecheck
+npm run test
+npm run build
 ```
 
 The extension build emits the service worker, popup script, and options script into `extension/dist/`.
@@ -183,6 +232,14 @@ Current automated backend coverage for this slice focuses on:
 - workspace creator-only default admin grants
 - highest-role-wins recalculation across direct and group workspace access
 - bookmark mutation guards resolved through shared access grants
+
+Current automated admin-web coverage for this slice focuses on:
+
+- auth route guard and non-admin blocking
+- calm empty/error states for people, groups, and workspaces
+- invite success plus backend role-rejection recovery
+- workspace creation refresh
+- workspace access direct/group grant review and highest-role-wins display
 
 PostgreSQL-backed integration tests remain environment-gated and require one of:
 
@@ -362,6 +419,15 @@ The admin backend foundation follow-up uses the same Gitflow chain discipline:
 - PR 2: organizations + invitations + groups
 - PR 3: workspace grants + runtime integration + verification + docs
 
+The admin web UI follows the same Gitflow chain discipline:
+
+- Tracker branch: `feature/admin-web-ui`
+- Delivery model: `feature-branch-chain`
+- PR 1: backend read models
+- PR 2: shell + shared UI/API foundations
+- PR 3: members + invitations + groups
+- PR 4: workspaces + access + final docs/verification
+
 ## Review Slice Policy
 
 - Keep each PR focused on one work unit.
@@ -382,3 +448,21 @@ Use an authenticated admin session with the durable client header already requir
 5. `PUT /workspaces/{workspaceId}/users/{userId}/access` and `PUT /workspaces/{workspaceId}/groups/{groupId}/access`, then confirm `GET /organizations/{organizationId}/workspaces` and `GET /workspaces/{workspaceId}` expose the effective highest role.
 6. Remove one grant path at a time with the matching `DELETE` endpoints and confirm remaining access is recalculated instead of dropped prematurely.
 7. Validate bookmark writes: `POST /workspaces/{workspaceId}/folders` must succeed for effective `admin`/`editor` access and fail with `403` for viewer-only or no-grant users.
+
+## Manual UI Validation: Admin Web UI
+
+Use an authenticated organization `owner` or `admin` session against the backend target configured in `admin-web`.
+
+### Current browser evidence
+
+- Authenticated admin login succeeded.
+- The Workspaces inventory shows `OdA` (`team`) and `monitorizacion` (`shared`); each shows current role `admin` with grant source `direct`.
+- The Invitations view shows `jcarlos@desatatufuria.com` as `member`, `pending`, with `No expiry`.
+- This confirms invitation creation and listing only. SMTP email delivery and a browser invitation-acceptance UI are not implemented; API acceptance was not validated in this run.
+- For local acceptance testing, run `scripts/activate-local-invitation.sh <email>`; it prompts for the test password and activates the newest pending local invitation.
+
+### Remaining manual scenarios
+
+1. Sign in as a non-admin user, open any admin route, and confirm the authorization failure state blocks the workflow.
+2. In Groups, add a member to a flat group, reload the group details, and confirm the membership remains visible.
+3. For one workspace, grant the same user a direct role and a group role through a group they belong to, then confirm Access shows both sources and the effective highest role.

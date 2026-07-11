@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log"
 	"net/http"
+	"os"
 	"os/signal"
 	"syscall"
 	"time"
@@ -57,6 +58,21 @@ func main() {
 	organizationsService := organizations.NewService(pool)
 	groupsService := groups.NewService(pool)
 	workspacesService := workspaces.NewService(pool, accessService)
+	idempotencyExecutor := httpapi.NewIdempotencyExecutor(pool)
+	go func() {
+		ticker := time.NewTicker(time.Hour)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				if _, err := idempotencyExecutor.Cleanup(ctx, 100); err != nil {
+					httpapi.LogIdempotencyCleanupFailure(os.Stderr)
+				}
+			}
+		}
+	}()
 	bookmarksService := bookmarks.NewService(pool, accessService)
 	websocketHub := wsapi.NewHub()
 	syncService := syncapi.NewService(syncapi.NewPostgresStore(pool, bookmarksService, workspacesService, websocketHub))
@@ -86,16 +102,16 @@ func main() {
 	})
 
 	auth.RegisterRoutes(mux, authService, invitationAccepterAdapter{service: organizationsService})
-	organizations.RegisterRoutes(mux, authService.Middleware, organizationsService)
-	groups.RegisterRoutes(mux, authService.Middleware, groupsService)
-	workspaces.RegisterRoutes(mux, authService.Middleware, workspacesService)
+	organizations.RegisterRoutes(mux, authService.Middleware, organizationsService, idempotencyExecutor)
+	groups.RegisterRoutes(mux, authService.Middleware, groupsService, idempotencyExecutor)
+	workspaces.RegisterRoutes(mux, authService.Middleware, workspacesService, idempotencyExecutor)
 	syncapi.RegisterBookmarkRoutes(mux, authService.Middleware, syncService)
 	syncapi.RegisterRoutes(mux, authService.Middleware, syncService)
 	wsapi.RegisterRoutes(mux, authService, workspacesService, syncService, websocketHub)
 
 	server := &http.Server{
 		Addr:              cfg.Server.Addr,
-		Handler:           mux,
+		Handler:           httpapi.NewDevelopmentCORS(httpapi.NewErrorMiddleware(mux, os.Stderr)),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 

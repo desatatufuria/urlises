@@ -1,6 +1,11 @@
 package workspaces
 
-import "testing"
+import (
+	"reflect"
+	"testing"
+
+	"github.com/furia/shared-bookmark-sync/backend/internal/access"
+)
 
 func TestBuildFolderTreeBuildsNestedCanonicalTree(t *testing.T) {
 	rootA := "root-a"
@@ -64,6 +69,23 @@ func TestBuildFolderTreeIgnoresBookmarksForUnknownFolders(t *testing.T) {
 	}
 	if tree[0].Bookmarks[0].ID != "kept" {
 		t.Fatalf("expected kept bookmark to remain attached, got %q", tree[0].Bookmarks[0].ID)
+	}
+}
+
+func TestResolveWorkspaceEffectiveAccessPrefersHighestRoleAndMergesSources(t *testing.T) {
+	resolved := resolveWorkspaceEffectiveAccess([]workspaceAccessContribution{
+		{UserID: "user-1", Email: "editor@example.com", Role: access.WorkspaceRoleViewer, Source: "direct"},
+		{UserID: "user-1", Email: "editor@example.com", Role: access.WorkspaceRoleEditor, Source: "group:ops"},
+		{UserID: "user-1", Email: "editor@example.com", Role: access.WorkspaceRoleEditor, Source: "group:ops"},
+		{UserID: "user-2", Email: "viewer@example.com", Role: access.WorkspaceRoleViewer, Source: "group:viewers"},
+	})
+
+	want := []WorkspaceEffectiveAccess{
+		{UserID: "user-1", Email: "editor@example.com", Role: "editor", Sources: []string{"direct", "group:ops"}},
+		{UserID: "user-2", Email: "viewer@example.com", Role: "viewer", Sources: []string{"group:viewers"}},
+	}
+	if !reflect.DeepEqual(resolved, want) {
+		t.Fatalf("resolved effective access = %+v, want %+v", resolved, want)
 	}
 }
 

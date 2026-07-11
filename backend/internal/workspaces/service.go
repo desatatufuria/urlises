@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/furia/shared-bookmark-sync/backend/internal/access"
@@ -63,6 +64,40 @@ type GroupAccessGrant struct {
 	Role        string `json:"role"`
 }
 
+type WorkspaceAccessSnapshot struct {
+	Workspace       WorkspaceSummary           `json:"workspace"`
+	UserGrants      []WorkspaceUserGrantView   `json:"userGrants"`
+	GroupGrants     []WorkspaceGroupGrantView  `json:"groupGrants"`
+	EffectiveAccess []WorkspaceEffectiveAccess `json:"effectiveAccess"`
+}
+
+type WorkspaceSummary struct {
+	WorkspaceID      string `json:"workspaceId"`
+	WorkspaceName    string `json:"workspaceName"`
+	WorkspaceType    string `json:"workspaceType"`
+	OrganizationID   string `json:"organizationId"`
+	OrganizationName string `json:"organizationName"`
+}
+
+type WorkspaceUserGrantView struct {
+	UserID string `json:"userId"`
+	Email  string `json:"email"`
+	Role   string `json:"role"`
+}
+
+type WorkspaceGroupGrantView struct {
+	GroupID   string `json:"groupId"`
+	GroupName string `json:"groupName"`
+	Role      string `json:"role"`
+}
+
+type WorkspaceEffectiveAccess struct {
+	UserID  string   `json:"userId"`
+	Email   string   `json:"email"`
+	Role    string   `json:"role"`
+	Sources []string `json:"sources"`
+}
+
 type FolderNode struct {
 	ID        string         `json:"id"`
 	ParentID  *string        `json:"parentId,omitempty"`
@@ -98,6 +133,21 @@ type bookmarkRow struct {
 	Title    string
 	URL      string
 	Position int
+}
+
+type workspaceMetadataRecord struct {
+	WorkspaceID      string
+	WorkspaceName    string
+	WorkspaceType    string
+	OrganizationID   string
+	OrganizationName string
+}
+
+type workspaceAccessContribution struct {
+	UserID string
+	Email  string
+	Role   access.WorkspaceRole
+	Source string
 }
 
 func NewService(pool *pgxpool.Pool, accessService *access.Service) *Service {
@@ -146,6 +196,13 @@ func (s *Service) ListByOrganization(ctx context.Context, userID, organizationID
 			FROM workspace_group_access wga
 			JOIN group_members gm ON gm.group_id = wga.group_id
 			WHERE gm.user_id = $1
+
+			UNION ALL
+
+			SELECT w.id AS workspace_id, 3 AS rank, 'admin' AS role, 'organization-admin' AS source
+			FROM workspaces w
+			JOIN organization_members om ON om.organization_id = w.organization_id
+			WHERE om.user_id = $1 AND om.role IN ('owner', 'admin')
 		) grants ON grants.workspace_id = w.id
 		WHERE w.organization_id = $2
 		GROUP BY w.id, w.name, w.type, o.id, o.name
@@ -181,6 +238,22 @@ func (s *Service) ListByOrganization(ctx context.Context, userID, organizationID
 }
 
 func (s *Service) Create(ctx context.Context, requesterUserID, organizationID string, input CreateWorkspaceInput) (WorkspaceAccess, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return WorkspaceAccess{}, fmt.Errorf("begin create workspace tx: %w", err)
+	}
+	defer tx.Rollback(ctx)
+	workspace, err := s.CreateTx(ctx, tx, requesterUserID, organizationID, input)
+	if err != nil {
+		return WorkspaceAccess{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return WorkspaceAccess{}, fmt.Errorf("commit create workspace tx: %w", err)
+	}
+	return workspace, nil
+}
+
+func (s *Service) CreateTx(ctx context.Context, tx pgx.Tx, requesterUserID, organizationID string, input CreateWorkspaceInput) (WorkspaceAccess, error) {
 	name := strings.TrimSpace(input.Name)
 	workspaceType := strings.TrimSpace(input.Type)
 	if name == "" {
@@ -190,18 +263,12 @@ func (s *Service) Create(ctx context.Context, requesterUserID, organizationID st
 		return WorkspaceAccess{}, fmt.Errorf("workspace type is required")
 	}
 
-	tx, err := s.pool.Begin(ctx)
-	if err != nil {
-		return WorkspaceAccess{}, fmt.Errorf("begin create workspace tx: %w", err)
-	}
-	defer tx.Rollback(ctx)
-
 	if err := access.RequireOrganizationAdmin(ctx, tx, requesterUserID, organizationID); err != nil {
 		return WorkspaceAccess{}, mapAccessError(err)
 	}
 
 	var workspaceID string
-	err = tx.QueryRow(ctx, `
+	err := tx.QueryRow(ctx, `
 		INSERT INTO workspaces (organization_id, name, type)
 		VALUES ($1, $2, $3)
 		RETURNING id
@@ -222,11 +289,11 @@ func (s *Service) Create(ctx context.Context, requesterUserID, organizationID st
 		return WorkspaceAccess{}, err
 	}
 
-	if err := tx.Commit(ctx); err != nil {
-		return WorkspaceAccess{}, fmt.Errorf("commit create workspace tx: %w", err)
-	}
-
 	return workspace, nil
+}
+
+func (s *Service) AuthorizeCreateTx(ctx context.Context, tx pgx.Tx, requesterUserID, organizationID string) error {
+	return mapAccessError(access.RequireOrganizationAdmin(ctx, tx, requesterUserID, organizationID))
 }
 
 func (s *Service) GrantUserAccess(ctx context.Context, requesterUserID, workspaceID, userID string, input UpdateUserAccessInput) (UserAccessGrant, error) {
@@ -377,6 +444,51 @@ func (s *Service) RevokeGroupAccess(ctx context.Context, requesterUserID, worksp
 	return nil
 }
 
+func (s *Service) GetAccessSnapshot(ctx context.Context, requesterUserID, workspaceID string) (WorkspaceAccessSnapshot, error) {
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead})
+	if err != nil {
+		return WorkspaceAccessSnapshot{}, fmt.Errorf("begin access snapshot tx: %w", err)
+	}
+	defer tx.Rollback(ctx)
+	metadata, err := loadWorkspaceMetadataRecord(ctx, tx, workspaceID)
+	if err != nil {
+		return WorkspaceAccessSnapshot{}, err
+	}
+	if err := access.RequireOrganizationAdmin(ctx, tx, requesterUserID, metadata.OrganizationID); err != nil {
+		return WorkspaceAccessSnapshot{}, mapAccessError(err)
+	}
+
+	userGrants, err := loadWorkspaceUserGrants(ctx, tx, workspaceID)
+	if err != nil {
+		return WorkspaceAccessSnapshot{}, err
+	}
+	groupGrants, err := loadWorkspaceGroupGrants(ctx, tx, workspaceID)
+	if err != nil {
+		return WorkspaceAccessSnapshot{}, err
+	}
+	contributions, err := loadWorkspaceAccessContributions(ctx, tx, workspaceID)
+	if err != nil {
+		return WorkspaceAccessSnapshot{}, err
+	}
+
+	snapshot := WorkspaceAccessSnapshot{
+		Workspace: WorkspaceSummary{
+			WorkspaceID:      metadata.WorkspaceID,
+			WorkspaceName:    metadata.WorkspaceName,
+			WorkspaceType:    metadata.WorkspaceType,
+			OrganizationID:   metadata.OrganizationID,
+			OrganizationName: metadata.OrganizationName,
+		},
+		UserGrants:      userGrants,
+		GroupGrants:     groupGrants,
+		EffectiveAccess: resolveWorkspaceEffectiveAccess(contributions),
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return WorkspaceAccessSnapshot{}, fmt.Errorf("commit access snapshot tx: %w", err)
+	}
+	return snapshot, nil
+}
+
 func (s *Service) GetAccessibleWorkspace(ctx context.Context, userID, workspaceID string) (WorkspaceAccess, error) {
 	return s.getAccessibleWorkspace(ctx, s.pool, userID, workspaceID)
 }
@@ -475,6 +587,30 @@ func loadWorkspaceOrganizationID(ctx context.Context, querier dbQuerier, workspa
 	return organizationID, nil
 }
 
+func loadWorkspaceMetadataRecord(ctx context.Context, querier dbQuerier, workspaceID string) (workspaceMetadataRecord, error) {
+	var metadata workspaceMetadataRecord
+	err := querier.QueryRow(ctx, `
+		SELECT w.id, w.name, w.type, o.id, o.name
+		FROM workspaces w
+		JOIN organizations o ON o.id = w.organization_id
+		WHERE w.id = $1
+	`, workspaceID).Scan(
+		&metadata.WorkspaceID,
+		&metadata.WorkspaceName,
+		&metadata.WorkspaceType,
+		&metadata.OrganizationID,
+		&metadata.OrganizationName,
+	)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return workspaceMetadataRecord{}, ErrNotFound
+		}
+		return workspaceMetadataRecord{}, fmt.Errorf("query workspace metadata: %w", err)
+	}
+
+	return metadata, nil
+}
+
 func loadGroupOrganizationID(ctx context.Context, querier dbQuerier, groupID string) (string, error) {
 	var organizationID string
 	err := querier.QueryRow(ctx, `
@@ -490,6 +626,101 @@ func loadGroupOrganizationID(ctx context.Context, querier dbQuerier, groupID str
 	}
 
 	return organizationID, nil
+}
+
+func loadWorkspaceUserGrants(ctx context.Context, querier dbQuerier, workspaceID string) ([]WorkspaceUserGrantView, error) {
+	rows, err := querier.Query(ctx, `
+		SELECT wua.user_id, u.email, wua.role
+		FROM workspace_user_access wua
+		JOIN users u ON u.id = wua.user_id
+		WHERE wua.workspace_id = $1
+		ORDER BY u.email, u.id
+	`, workspaceID)
+	if err != nil {
+		return nil, fmt.Errorf("query workspace user grants: %w", err)
+	}
+	defer rows.Close()
+
+	grants := make([]WorkspaceUserGrantView, 0)
+	for rows.Next() {
+		var grant WorkspaceUserGrantView
+		if err := rows.Scan(&grant.UserID, &grant.Email, &grant.Role); err != nil {
+			return nil, fmt.Errorf("scan workspace user grant: %w", err)
+		}
+		grants = append(grants, grant)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate workspace user grants: %w", err)
+	}
+
+	return grants, nil
+}
+
+func loadWorkspaceGroupGrants(ctx context.Context, querier dbQuerier, workspaceID string) ([]WorkspaceGroupGrantView, error) {
+	rows, err := querier.Query(ctx, `
+		SELECT wga.group_id, g.name, wga.role
+		FROM workspace_group_access wga
+		JOIN groups g ON g.id = wga.group_id
+		WHERE wga.workspace_id = $1
+		ORDER BY g.name, g.id
+	`, workspaceID)
+	if err != nil {
+		return nil, fmt.Errorf("query workspace group grants: %w", err)
+	}
+	defer rows.Close()
+
+	grants := make([]WorkspaceGroupGrantView, 0)
+	for rows.Next() {
+		var grant WorkspaceGroupGrantView
+		if err := rows.Scan(&grant.GroupID, &grant.GroupName, &grant.Role); err != nil {
+			return nil, fmt.Errorf("scan workspace group grant: %w", err)
+		}
+		grants = append(grants, grant)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate workspace group grants: %w", err)
+	}
+
+	return grants, nil
+}
+
+func loadWorkspaceAccessContributions(ctx context.Context, querier dbQuerier, workspaceID string) ([]workspaceAccessContribution, error) {
+	rows, err := querier.Query(ctx, `
+		SELECT contribution.user_id, contribution.email, contribution.role, contribution.source
+		FROM (
+			SELECT wua.user_id, u.email, wua.role, 'direct' AS source
+			FROM workspace_user_access wua
+			JOIN users u ON u.id = wua.user_id
+			WHERE wua.workspace_id = $1
+
+			UNION ALL
+
+			SELECT u.id, u.email, wga.role, 'group:' || wga.group_id::text AS source
+			FROM workspace_group_access wga
+			JOIN group_members gm ON gm.group_id = wga.group_id
+			JOIN users u ON u.id = gm.user_id
+			WHERE wga.workspace_id = $1
+		) contribution
+		ORDER BY contribution.email, contribution.user_id, contribution.source
+	`, workspaceID)
+	if err != nil {
+		return nil, fmt.Errorf("query workspace access contributions: %w", err)
+	}
+	defer rows.Close()
+
+	contributions := make([]workspaceAccessContribution, 0)
+	for rows.Next() {
+		var contribution workspaceAccessContribution
+		if err := rows.Scan(&contribution.UserID, &contribution.Email, &contribution.Role, &contribution.Source); err != nil {
+			return nil, fmt.Errorf("scan workspace access contribution: %w", err)
+		}
+		contributions = append(contributions, contribution)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate workspace access contributions: %w", err)
+	}
+
+	return contributions, nil
 }
 
 func requireOrganizationMembership(ctx context.Context, querier dbQuerier, organizationID, userID string) error {
@@ -530,6 +761,94 @@ func mapAccessError(err error) error {
 	}
 
 	return err
+}
+
+func resolveWorkspaceEffectiveAccess(contributions []workspaceAccessContribution) []WorkspaceEffectiveAccess {
+	if len(contributions) == 0 {
+		return []WorkspaceEffectiveAccess{}
+	}
+
+	type aggregate struct {
+		userID  string
+		email   string
+		role    access.WorkspaceRole
+		sources []string
+	}
+
+	aggregates := make(map[string]*aggregate, len(contributions))
+	for _, contribution := range contributions {
+		current := aggregates[contribution.UserID]
+		if current == nil {
+			current = &aggregate{userID: contribution.UserID, email: contribution.Email}
+			aggregates[contribution.UserID] = current
+		}
+
+		if rankWorkspaceRole(contribution.Role) > rankWorkspaceRole(current.role) {
+			current.role = contribution.Role
+		}
+		current.sources = append(current.sources, contribution.Source)
+	}
+
+	resolved := make([]WorkspaceEffectiveAccess, 0, len(aggregates))
+	for _, current := range aggregates {
+		resolved = append(resolved, WorkspaceEffectiveAccess{
+			UserID:  current.userID,
+			Email:   current.email,
+			Role:    string(current.role),
+			Sources: dedupeAndSortWorkspaceSources(current.sources),
+		})
+	}
+
+	sort.Slice(resolved, func(i, j int) bool {
+		if resolved[i].Email == resolved[j].Email {
+			return resolved[i].UserID < resolved[j].UserID
+		}
+		return resolved[i].Email < resolved[j].Email
+	})
+
+	return resolved
+}
+
+func dedupeAndSortWorkspaceSources(sources []string) []string {
+	if len(sources) == 0 {
+		return []string{}
+	}
+
+	seen := make(map[string]struct{}, len(sources))
+	groupSources := make([]string, 0, len(sources))
+	hasDirect := false
+	for _, source := range sources {
+		if _, exists := seen[source]; exists {
+			continue
+		}
+		seen[source] = struct{}{}
+		if source == "direct" {
+			hasDirect = true
+			continue
+		}
+		groupSources = append(groupSources, source)
+	}
+
+	sort.Strings(groupSources)
+	resolved := make([]string, 0, len(groupSources)+1)
+	if hasDirect {
+		resolved = append(resolved, "direct")
+	}
+	resolved = append(resolved, groupSources...)
+	return resolved
+}
+
+func rankWorkspaceRole(role access.WorkspaceRole) int {
+	switch role {
+	case access.WorkspaceRoleAdmin:
+		return 3
+	case access.WorkspaceRoleEditor:
+		return 2
+	case access.WorkspaceRoleViewer:
+		return 1
+	default:
+		return 0
+	}
 }
 
 func buildFolderTree(folders []folderRow, bookmarks []bookmarkRow) []FolderNode {

@@ -126,6 +126,99 @@ func TestWorkspaceAccessResolvesHighestRoleAndRecalculatesAfterRevokes(t *testin
 	}
 }
 
+func TestGetAccessSnapshotReturnsRawAndEffectiveWorkspaceAccess(t *testing.T) {
+	t.Parallel()
+
+	ctx, pool := openWorkspacesTestPool(t)
+	service := NewService(pool, nil)
+	adminID := insertWorkspacesTestUser(t, ctx, pool, "admin@example.com")
+	viewerID := insertWorkspacesTestUser(t, ctx, pool, "viewer@example.com")
+	editorID := insertWorkspacesTestUser(t, ctx, pool, "editor@example.com")
+	organizationID := insertWorkspacesTestOrganization(t, ctx, pool, "OdA")
+	insertWorkspacesTestMember(t, ctx, pool, organizationID, adminID, "owner")
+	insertWorkspacesTestMember(t, ctx, pool, organizationID, viewerID, "member")
+	insertWorkspacesTestMember(t, ctx, pool, organizationID, editorID, "member")
+	groupID := insertWorkspacesTestGroup(t, ctx, pool, organizationID, "operators")
+	insertWorkspacesTestGroupMember(t, ctx, pool, groupID, editorID)
+
+	workspace, err := service.Create(ctx, adminID, organizationID, CreateWorkspaceInput{Name: "Ops", Type: "shared"})
+	if err != nil {
+		t.Fatalf("create workspace: %v", err)
+	}
+	if _, err := service.GrantUserAccess(ctx, adminID, workspace.WorkspaceID, viewerID, UpdateUserAccessInput{Role: "viewer"}); err != nil {
+		t.Fatalf("grant viewer access: %v", err)
+	}
+	if _, err := service.GrantUserAccess(ctx, adminID, workspace.WorkspaceID, editorID, UpdateUserAccessInput{Role: "viewer"}); err != nil {
+		t.Fatalf("grant editor direct access: %v", err)
+	}
+	if _, err := service.GrantGroupAccess(ctx, adminID, workspace.WorkspaceID, groupID, UpdateGroupAccessInput{Role: "editor"}); err != nil {
+		t.Fatalf("grant group access: %v", err)
+	}
+
+	snapshot, err := service.GetAccessSnapshot(ctx, adminID, workspace.WorkspaceID)
+	if err != nil {
+		t.Fatalf("get access snapshot: %v", err)
+	}
+	if snapshot.Workspace.WorkspaceID != workspace.WorkspaceID {
+		t.Fatalf("workspace id = %q, want %q", snapshot.Workspace.WorkspaceID, workspace.WorkspaceID)
+	}
+	if len(snapshot.UserGrants) != 3 {
+		t.Fatalf("user grant count = %d, want 3", len(snapshot.UserGrants))
+	}
+	if len(snapshot.GroupGrants) != 1 {
+		t.Fatalf("group grant count = %d, want 1", len(snapshot.GroupGrants))
+	}
+	if snapshot.GroupGrants[0].GroupID != groupID || snapshot.GroupGrants[0].Role != "editor" {
+		t.Fatalf("group grant = %+v, want group %s with editor role", snapshot.GroupGrants[0], groupID)
+	}
+
+	effectiveByEmail := make(map[string]WorkspaceEffectiveAccess, len(snapshot.EffectiveAccess))
+	for _, subject := range snapshot.EffectiveAccess {
+		effectiveByEmail[subject.Email] = subject
+	}
+	if effectiveByEmail["viewer@example.com"].Role != "viewer" {
+		t.Fatalf("viewer effective role = %q, want viewer", effectiveByEmail["viewer@example.com"].Role)
+	}
+	editorAccess, ok := effectiveByEmail["editor@example.com"]
+	if !ok {
+		t.Fatalf("expected effective access entry for editor@example.com, got %+v", snapshot.EffectiveAccess)
+	}
+	if editorAccess.Role != "editor" {
+		t.Fatalf("editor effective role = %q, want editor", editorAccess.Role)
+	}
+	if strings.Join(editorAccess.Sources, ",") != fmt.Sprintf("direct,group:%s", groupID) {
+		t.Fatalf("editor sources = %v, want [direct group:%s]", editorAccess.Sources, groupID)
+	}
+}
+
+func TestGetAccessSnapshotRejectsNonAdmins(t *testing.T) {
+	t.Parallel()
+
+	ctx, pool := openWorkspacesTestPool(t)
+	service := NewService(pool, nil)
+	adminID := insertWorkspacesTestUser(t, ctx, pool, "admin@example.com")
+	memberID := insertWorkspacesTestUser(t, ctx, pool, "member@example.com")
+	organizationID := insertWorkspacesTestOrganization(t, ctx, pool, "OdA")
+	insertWorkspacesTestMember(t, ctx, pool, organizationID, adminID, "owner")
+	insertWorkspacesTestMember(t, ctx, pool, organizationID, memberID, "member")
+
+	workspace, err := service.Create(ctx, adminID, organizationID, CreateWorkspaceInput{Name: "Ops", Type: "shared"})
+	if err != nil {
+		t.Fatalf("create workspace: %v", err)
+	}
+	if _, err := service.GrantUserAccess(ctx, adminID, workspace.WorkspaceID, memberID, UpdateUserAccessInput{Role: "viewer"}); err != nil {
+		t.Fatalf("grant viewer access: %v", err)
+	}
+
+	snapshot, err := service.GetAccessSnapshot(ctx, memberID, workspace.WorkspaceID)
+	if err == nil {
+		t.Fatalf("expected non-admin access snapshot to fail, got %#v", snapshot)
+	}
+	if err != ErrForbidden {
+		t.Fatalf("err = %v, want %v", err, ErrForbidden)
+	}
+}
+
 func openWorkspacesTestPool(t *testing.T) (context.Context, *pgxpool.Pool) {
 	t.Helper()
 	if testing.Short() {

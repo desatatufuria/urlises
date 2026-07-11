@@ -17,6 +17,9 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
+    networks:
+      - default
+      - dtf-netwok
 
   backend:
     build:
@@ -35,11 +38,37 @@ services:
       DATABASE_MIGRATIONS_DIR: migrations
       DATABASE_MAX_CONNS: "10"
       DATABASE_MIN_CONNS: "1"
+      MAIL_ENABLED: "true"
+      MAIL_SMTP_HOST: mailpit
+      MAIL_SMTP_PORT: "1025"
+      MAIL_TLS_MODE: none
+      MAIL_AUTH_MODE: none
+      MAIL_FROM_ADDRESS: mailer@local.test
+      MAIL_FROM_DISPLAY_NAME: Shared Bookmark Sync
+      MAIL_REPLY_TO: support@local.test
     ports:
       - "8081:8080"
     depends_on:
       postgres:
         condition: service_healthy
+    networks:
+      - default
+      - dtf-netwok
+
+  mailpit:
+    image: axllent/mailpit:latest
+    container_name: shared-bookmark-sync-mailpit
+    ports:
+      - "127.0.0.1:${MAILPIT_SMTP_HOST_PORT:-11025}:1025"
+      - "127.0.0.1:${MAILPIT_UI_HOST_PORT:-18025}:8025"
+    networks:
+      - default
+      - dtf-netwok
 
 volumes:
   shared-bookmark-sync-postgres-data:
+
+networks:
+  dtf-netwok:
+    external: true
+    name: dtf-netwok

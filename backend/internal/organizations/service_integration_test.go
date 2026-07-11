@@ -5,6 +5,80 @@ import (
 	"time"
 )
 
+func TestListInvitationsReturnsPendingInvitationsForAdminsOnly(t *testing.T) {
+	t.Parallel()
+
+	ctx, pool := openOrganizationsTestPool(t, "organizations_invites_test")
+	service := NewService(pool)
+	adminID := insertOrganizationsTestUser(t, ctx, pool, "admin@example.com")
+	inviteeID := insertOrganizationsTestUser(t, ctx, pool, "invitee@example.com")
+	organizationID := insertOrganizationsTestOrganization(t, ctx, pool, "Invite Org")
+	insertOrganizationsTestMember(t, ctx, pool, organizationID, adminID, "admin")
+
+	pendingInvitation, err := service.CreateInvitation(ctx, adminID, organizationID, CreateInvitationInput{
+		Email: "pending@example.com",
+		Role:  "member",
+	})
+	if err != nil {
+		t.Fatalf("create pending invitation: %v", err)
+	}
+
+	acceptedInvitation, err := service.CreateInvitation(ctx, adminID, organizationID, CreateInvitationInput{
+		Email: "invitee@example.com",
+		Role:  "admin",
+	})
+	if err != nil {
+		t.Fatalf("create accepted invitation: %v", err)
+	}
+	if _, err := service.AcceptInvitation(ctx, inviteeID, acceptedInvitation.Token); err != nil {
+		t.Fatalf("accept invitation: %v", err)
+	}
+
+	invitations, err := service.ListInvitations(ctx, adminID, organizationID)
+	if err != nil {
+		t.Fatalf("list invitations: %v", err)
+	}
+	if len(invitations) != 1 {
+		t.Fatalf("invitation count = %d, want 1", len(invitations))
+	}
+	if invitations[0].ID != pendingInvitation.ID {
+		t.Fatalf("listed invitation id = %q, want %q", invitations[0].ID, pendingInvitation.ID)
+	}
+	if invitations[0].Status != "pending" {
+		t.Fatalf("listed invitation status = %q, want pending", invitations[0].Status)
+	}
+	if invitations[0].Email != "pending@example.com" {
+		t.Fatalf("listed invitation email = %q, want pending@example.com", invitations[0].Email)
+	}
+}
+
+func TestListInvitationsRejectsNonAdmins(t *testing.T) {
+	t.Parallel()
+
+	ctx, pool := openOrganizationsTestPool(t, "organizations_invites_test")
+	service := NewService(pool)
+	adminID := insertOrganizationsTestUser(t, ctx, pool, "admin@example.com")
+	memberID := insertOrganizationsTestUser(t, ctx, pool, "member@example.com")
+	organizationID := insertOrganizationsTestOrganization(t, ctx, pool, "Invite Org")
+	insertOrganizationsTestMember(t, ctx, pool, organizationID, adminID, "admin")
+	insertOrganizationsTestMember(t, ctx, pool, organizationID, memberID, "member")
+
+	if _, err := service.CreateInvitation(ctx, adminID, organizationID, CreateInvitationInput{
+		Email: "pending@example.com",
+		Role:  "member",
+	}); err != nil {
+		t.Fatalf("create invitation: %v", err)
+	}
+
+	invitations, err := service.ListInvitations(ctx, memberID, organizationID)
+	if err == nil {
+		t.Fatalf("expected non-admin list invitations to fail, got %#v", invitations)
+	}
+	if err != ErrForbidden {
+		t.Fatalf("err = %v, want %v", err, ErrForbidden)
+	}
+}
+
 func TestAcceptInvitationActivatesMembershipAndRejectsReuse(t *testing.T) {
 	t.Parallel()
 

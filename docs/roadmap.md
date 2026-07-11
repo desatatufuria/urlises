@@ -104,6 +104,36 @@ Delivered PR 3 scope:
 - bookmark write guards consume the shared access resolver instead of legacy `workspace_members` checks
 - manual validation notes live in `README.md` alongside the runtime/admin endpoint summary
 
+## Admin Web UI Delivery
+
+- Workflow: Gitflow
+- Tracker branch: `feature/admin-web-ui`
+- Chain strategy: `feature-branch-chain`
+- PR 1: backend read models
+- PR 2: shell + shared UI/API foundations
+- PR 3: members + invitations + groups
+- PR 4: workspaces + access + final docs/verification
+
+Delivered PR 4 scope:
+
+- `/workspaces` now supports workspace creation plus effective-role inventory review
+- `/access` now supports direct user grants, group grants, revoke/update flows, and highest-role-wins review
+- focused admin-web tests now cover workspace creation and mixed-grant access review in addition to the earlier route/member/group coverage
+- repository and app docs now describe the full operator scope plus the manual browser validation checklist
+
+Current manual browser evidence:
+
+- Authenticated admin login succeeded.
+- `OdA` (`team`) and `monitorizacion` (`shared`) are visible in Workspaces, each with current role `admin` from a `direct` grant.
+- The invitation for `jcarlos@desatatufuria.com` is visible as `member`, `pending`, with `No expiry`.
+- Invitation email delivery and acceptance are not implemented; this evidence covers persisted invitation visibility only.
+
+Remaining release gate:
+
+- Non-admin rejection: sign in as a non-admin, open an admin route, and confirm the authorization failure state blocks the workflow.
+- Group membership: add a user to a flat group, reload its details, and confirm the member remains listed.
+- Mixed-grant access review: give one user a direct role and a group role for one workspace, then confirm Access shows both sources and the resolved highest role.
+
 ## Viewer Local Override Policy
 
 - Viewer users must never change canonical shared bookmark semantics in the backend.

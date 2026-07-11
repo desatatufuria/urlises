@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"net/mail"
 	"strings"
 	"time"
 
@@ -19,6 +20,9 @@ var (
 	ErrForbidden               = errors.New("forbidden")
 	ErrNotFound                = errors.New("not found")
 	ErrLastOwner               = errors.New("last owner cannot be removed or demoted")
+	ErrInvalidInvitationEmail  = errors.New("invalid_invitation_email")
+	ErrInvitationMemberExists  = errors.New("invitation_member_exists")
+	ErrInvitationPendingExists = errors.New("invitation_pending_exists")
 	ErrInvitationNotPending    = errors.New("invitation is not pending")
 	ErrInvitationEmailMismatch = errors.New("invitation email does not match authenticated user")
 )
@@ -76,6 +80,18 @@ type Invitation struct {
 	UpdatedAt        string  `json:"updatedAt"`
 }
 
+type PendingInvitation struct {
+	ID              string  `json:"id"`
+	OrganizationID  string  `json:"organizationId"`
+	Email           string  `json:"email"`
+	Role            string  `json:"role"`
+	Status          string  `json:"status"`
+	InvitedByUserID string  `json:"invitedByUserId"`
+	ExpiresAt       *string `json:"expiresAt,omitempty"`
+	CreatedAt       string  `json:"createdAt"`
+	UpdatedAt       string  `json:"updatedAt"`
+}
+
 type AcceptedInvitation struct {
 	OrganizationID   string `json:"organizationId"`
 	OrganizationName string `json:"organizationName"`
@@ -130,19 +146,29 @@ func (s *Service) ListMemberships(ctx context.Context, userID string) ([]Members
 }
 
 func (s *Service) CreateOrganization(ctx context.Context, userID string, input CreateOrganizationInput) (Membership, error) {
-	name := strings.TrimSpace(input.Name)
-	if name == "" {
-		return Membership{}, fmt.Errorf("organization name is required")
-	}
-
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return Membership{}, fmt.Errorf("begin create organization tx: %w", err)
 	}
 	defer tx.Rollback(ctx)
+	membership, err := s.CreateOrganizationTx(ctx, tx, userID, input)
+	if err != nil {
+		return Membership{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return Membership{}, fmt.Errorf("commit create organization tx: %w", err)
+	}
+	return membership, nil
+}
+
+func (s *Service) CreateOrganizationTx(ctx context.Context, tx pgx.Tx, userID string, input CreateOrganizationInput) (Membership, error) {
+	name := strings.TrimSpace(input.Name)
+	if name == "" {
+		return Membership{}, fmt.Errorf("organization name is required")
+	}
 
 	var membership Membership
-	err = tx.QueryRow(ctx, `
+	err := tx.QueryRow(ctx, `
 		WITH new_org AS (
 			INSERT INTO organizations (name)
 			VALUES ($1)
@@ -163,12 +189,18 @@ func (s *Service) CreateOrganization(ctx context.Context, userID string, input C
 	if err != nil {
 		return Membership{}, fmt.Errorf("create organization: %w", err)
 	}
-
-	if err := tx.Commit(ctx); err != nil {
-		return Membership{}, fmt.Errorf("commit create organization tx: %w", err)
-	}
-
 	return membership, nil
+}
+
+func (s *Service) AuthorizeOrganizationCreationTx(ctx context.Context, tx pgx.Tx, userID string) error {
+	var exists bool
+	if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM users WHERE id = $1)`, userID).Scan(&exists); err != nil {
+		return fmt.Errorf("authorize organization creation: %w", err)
+	}
+	if !exists {
+		return ErrForbidden
+	}
+	return nil
 }
 
 func (s *Service) ListMembers(ctx context.Context, requesterUserID, organizationID string) ([]OrganizationMember, error) {
@@ -225,13 +257,35 @@ func (s *Service) PatchMember(ctx context.Context, requesterUserID, organization
 	}
 	defer tx.Rollback(ctx)
 
+	if err := lockOrganization(ctx, tx, organizationID); err != nil {
+		return OrganizationMember{}, err
+	}
 	if err := requireOrganizationAdmin(ctx, tx, requesterUserID, organizationID); err != nil {
+		return OrganizationMember{}, err
+	}
+	if err := lockOrganizationMemberships(ctx, tx, organizationID); err != nil {
 		return OrganizationMember{}, err
 	}
 
 	currentMember, currentRole, err := loadOrganizationMember(ctx, tx, organizationID, userID)
 	if err != nil {
 		return OrganizationMember{}, err
+	}
+
+	if !input.Remove {
+		nextRole, err := normalizeOrganizationRole(*input.Role)
+		if err != nil {
+			return OrganizationMember{}, err
+		}
+		if nextRole == access.OrganizationRoleOwner {
+			requesterRole, err := loadOrganizationRole(ctx, tx, organizationID, requesterUserID)
+			if err != nil {
+				return OrganizationMember{}, err
+			}
+			if requesterRole != access.OrganizationRoleOwner {
+				return OrganizationMember{}, ErrForbidden
+			}
+		}
 	}
 
 	if currentRole == access.OrganizationRoleOwner {
@@ -284,13 +338,26 @@ func (s *Service) PatchMember(ctx context.Context, requesterUserID, organization
 }
 
 func (s *Service) CreateInvitation(ctx context.Context, requesterUserID, organizationID string, input CreateInvitationInput) (Invitation, error) {
-	if err := requireOrganizationAdmin(ctx, s.pool, requesterUserID, organizationID); err != nil {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return Invitation{}, fmt.Errorf("begin create invitation tx: %w", err)
+	}
+	defer tx.Rollback(ctx)
+	invitation, err := s.CreateInvitationTx(ctx, tx, requesterUserID, organizationID, input)
+	if err != nil {
 		return Invitation{}, err
 	}
+	if err := tx.Commit(ctx); err != nil {
+		return Invitation{}, fmt.Errorf("commit create invitation tx: %w", err)
+	}
+	return invitation, nil
+}
 
+func (s *Service) CreateInvitationTx(ctx context.Context, tx pgx.Tx, requesterUserID, organizationID string, input CreateInvitationInput) (Invitation, error) {
 	email := strings.TrimSpace(strings.ToLower(input.Email))
-	if email == "" {
-		return Invitation{}, fmt.Errorf("email is required")
+	parsedEmail, err := mail.ParseAddress(email)
+	if err != nil || parsedEmail.Address != email {
+		return Invitation{}, ErrInvalidInvitationEmail
 	}
 	role, err := normalizeOrganizationRole(input.Role)
 	if err != nil {
@@ -301,8 +368,49 @@ func (s *Service) CreateInvitation(ctx context.Context, requesterUserID, organiz
 		return Invitation{}, err
 	}
 
+	if err := requireOrganizationAdmin(ctx, tx, requesterUserID, organizationID); err != nil {
+		return Invitation{}, err
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE invitations
+		SET status = 'expired', updated_at = NOW()
+		WHERE organization_id = $1
+			AND status = 'pending'
+			AND expires_at IS NOT NULL
+			AND expires_at <= NOW()
+	`, organizationID); err != nil {
+		return Invitation{}, fmt.Errorf("expire pending invitations: %w", err)
+	}
+
+	var memberExists bool
+	if err := tx.QueryRow(ctx, `
+		SELECT EXISTS(
+			SELECT 1 FROM organization_members om
+			JOIN users u ON u.id = om.user_id
+			WHERE om.organization_id = $1 AND lower(u.email) = $2
+		)
+	`, organizationID, email).Scan(&memberExists); err != nil {
+		return Invitation{}, fmt.Errorf("check invitation member: %w", err)
+	}
+	if memberExists {
+		return Invitation{}, ErrInvitationMemberExists
+	}
+
+	var pendingExists bool
+	if err := tx.QueryRow(ctx, `
+		SELECT EXISTS(
+			SELECT 1 FROM invitations
+			WHERE organization_id = $1 AND lower(email) = $2 AND status = 'pending'
+		)
+	`, organizationID, email).Scan(&pendingExists); err != nil {
+		return Invitation{}, fmt.Errorf("check pending invitation: %w", err)
+	}
+	if pendingExists {
+		return Invitation{}, ErrInvitationPendingExists
+	}
+
 	var invitation Invitation
-	err = s.pool.QueryRow(ctx, `
+	err = tx.QueryRow(ctx, `
 		INSERT INTO invitations (organization_id, email, role, token, invited_by_user_id)
 		VALUES ($1, $2, $3, $4, $5)
 		RETURNING id, organization_id, email, role, status, token, invited_by_user_id,
@@ -322,10 +430,61 @@ func (s *Service) CreateInvitation(ctx context.Context, requesterUserID, organiz
 		&invitation.UpdatedAt,
 	)
 	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+			return Invitation{}, ErrInvitationPendingExists
+		}
 		return Invitation{}, fmt.Errorf("create invitation: %w", err)
 	}
-
 	return invitation, nil
+}
+
+func (s *Service) AuthorizeInvitationTx(ctx context.Context, tx pgx.Tx, requesterUserID, organizationID string) error {
+	return requireOrganizationAdmin(ctx, tx, requesterUserID, organizationID)
+}
+
+func (s *Service) ListInvitations(ctx context.Context, requesterUserID, organizationID string) ([]PendingInvitation, error) {
+	if err := requireOrganizationAdmin(ctx, s.pool, requesterUserID, organizationID); err != nil {
+		return nil, err
+	}
+
+	rows, err := s.pool.Query(ctx, `
+		SELECT id, organization_id, email, role, status, invited_by_user_id,
+			expires_at::text, created_at::text, updated_at::text
+		FROM invitations
+		WHERE organization_id = $1
+			AND status = 'pending'
+			AND (expires_at IS NULL OR expires_at > NOW())
+		ORDER BY created_at DESC, id DESC
+	`, organizationID)
+	if err != nil {
+		return nil, fmt.Errorf("query invitations: %w", err)
+	}
+	defer rows.Close()
+
+	invitations := make([]PendingInvitation, 0)
+	for rows.Next() {
+		var invitation PendingInvitation
+		if err := rows.Scan(
+			&invitation.ID,
+			&invitation.OrganizationID,
+			&invitation.Email,
+			&invitation.Role,
+			&invitation.Status,
+			&invitation.InvitedByUserID,
+			&invitation.ExpiresAt,
+			&invitation.CreatedAt,
+			&invitation.UpdatedAt,
+		); err != nil {
+			return nil, fmt.Errorf("scan invitation: %w", err)
+		}
+		invitations = append(invitations, invitation)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate invitations: %w", err)
+	}
+
+	return invitations, nil
 }
 
 func (s *Service) AcceptInvitation(ctx context.Context, userID, token string) (AcceptedInvitation, error) {
@@ -464,6 +623,36 @@ func countOwners(ctx context.Context, querier dbQuerier, organizationID string) 
 	}
 
 	return count, nil
+}
+
+func lockOrganization(ctx context.Context, querier dbQuerier, organizationID string) error {
+	var id string
+	err := querier.QueryRow(ctx, `SELECT id FROM organizations WHERE id = $1 FOR UPDATE`, organizationID).Scan(&id)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrNotFound
+		}
+		return fmt.Errorf("lock organization: %w", err)
+	}
+	return nil
+}
+
+func lockOrganizationMemberships(ctx context.Context, querier dbQuerier, organizationID string) error {
+	rows, err := querier.Query(ctx, `SELECT user_id FROM organization_members WHERE organization_id = $1 FOR UPDATE`, organizationID)
+	if err != nil {
+		return fmt.Errorf("lock organization memberships: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var userID string
+		if err := rows.Scan(&userID); err != nil {
+			return fmt.Errorf("scan locked organization member: %w", err)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterate locked organization members: %w", err)
+	}
+	return nil
 }
 
 func updateOrganizationMemberRole(ctx context.Context, querier dbQuerier, organizationID, userID string, role access.OrganizationRole) (OrganizationMember, error) {

@@ -90,17 +90,31 @@ func (s *Service) List(ctx context.Context, requesterUserID, organizationID stri
 }
 
 func (s *Service) Create(ctx context.Context, requesterUserID, organizationID string, input CreateGroupInput) (Group, error) {
-	if err := requireOrganizationAdmin(ctx, s.pool, requesterUserID, organizationID); err != nil {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return Group{}, fmt.Errorf("begin create group tx: %w", err)
+	}
+	defer tx.Rollback(ctx)
+	group, err := s.CreateTx(ctx, tx, requesterUserID, organizationID, input)
+	if err != nil {
 		return Group{}, err
 	}
+	if err := tx.Commit(ctx); err != nil {
+		return Group{}, fmt.Errorf("commit create group tx: %w", err)
+	}
+	return group, nil
+}
 
+func (s *Service) CreateTx(ctx context.Context, tx pgx.Tx, requesterUserID, organizationID string, input CreateGroupInput) (Group, error) {
+	if err := requireOrganizationAdmin(ctx, tx, requesterUserID, organizationID); err != nil {
+		return Group{}, err
+	}
 	name := strings.TrimSpace(input.Name)
 	if name == "" {
 		return Group{}, fmt.Errorf("group name is required")
 	}
-
 	var group Group
-	err := s.pool.QueryRow(ctx, `
+	err := tx.QueryRow(ctx, `
 		INSERT INTO groups (organization_id, name)
 		VALUES ($1, $2)
 		RETURNING id, organization_id, name, created_at::text, updated_at::text
@@ -110,6 +124,10 @@ func (s *Service) Create(ctx context.Context, requesterUserID, organizationID st
 	}
 
 	return group, nil
+}
+
+func (s *Service) AuthorizeCreateTx(ctx context.Context, tx pgx.Tx, requesterUserID, organizationID string) error {
+	return requireOrganizationAdmin(ctx, tx, requesterUserID, organizationID)
 }
 
 func (s *Service) Update(ctx context.Context, requesterUserID, organizationID, groupID string, input UpdateGroupInput) (Group, error) {
@@ -159,16 +177,26 @@ func (s *Service) Delete(ctx context.Context, requesterUserID, organizationID, g
 }
 
 func (s *Service) AddMember(ctx context.Context, requesterUserID, groupID string, input AddGroupMemberInput) (GroupMember, error) {
-	userID := strings.TrimSpace(input.UserID)
-	if userID == "" {
-		return GroupMember{}, fmt.Errorf("userId is required")
-	}
-
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return GroupMember{}, fmt.Errorf("begin add group member tx: %w", err)
 	}
 	defer tx.Rollback(ctx)
+	member, err := s.AddMemberTx(ctx, tx, requesterUserID, groupID, input)
+	if err != nil {
+		return GroupMember{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return GroupMember{}, fmt.Errorf("commit add group member tx: %w", err)
+	}
+	return member, nil
+}
+
+func (s *Service) AddMemberTx(ctx context.Context, tx pgx.Tx, requesterUserID, groupID string, input AddGroupMemberInput) (GroupMember, error) {
+	userID := strings.TrimSpace(input.UserID)
+	if userID == "" {
+		return GroupMember{}, fmt.Errorf("userId is required")
+	}
 
 	organizationID, err := loadGroupOrganizationID(ctx, tx, groupID)
 	if err != nil {
@@ -194,11 +222,51 @@ func (s *Service) AddMember(ctx context.Context, requesterUserID, groupID string
 		return GroupMember{}, err
 	}
 
-	if err := tx.Commit(ctx); err != nil {
-		return GroupMember{}, fmt.Errorf("commit add group member tx: %w", err)
+	return member, nil
+}
+
+func (s *Service) AuthorizeAddMemberTx(ctx context.Context, tx pgx.Tx, requesterUserID, groupID string) error {
+	organizationID, err := loadGroupOrganizationID(ctx, tx, groupID)
+	if err != nil {
+		return err
+	}
+	return requireOrganizationAdmin(ctx, tx, requesterUserID, organizationID)
+}
+
+func (s *Service) ListMembers(ctx context.Context, requesterUserID, groupID string) ([]GroupMember, error) {
+	organizationID, err := loadGroupOrganizationID(ctx, s.pool, groupID)
+	if err != nil {
+		return nil, err
+	}
+	if err := requireOrganizationAdmin(ctx, s.pool, requesterUserID, organizationID); err != nil {
+		return nil, err
 	}
 
-	return member, nil
+	rows, err := s.pool.Query(ctx, `
+		SELECT gm.group_id, u.id, u.email, COALESCE(u.name, '')
+		FROM group_members gm
+		JOIN users u ON u.id = gm.user_id
+		WHERE gm.group_id = $1
+		ORDER BY u.email, u.id
+	`, groupID)
+	if err != nil {
+		return nil, fmt.Errorf("query group members: %w", err)
+	}
+	defer rows.Close()
+
+	members := make([]GroupMember, 0)
+	for rows.Next() {
+		var member GroupMember
+		if err := rows.Scan(&member.GroupID, &member.UserID, &member.Email, &member.Name); err != nil {
+			return nil, fmt.Errorf("scan group member: %w", err)
+		}
+		members = append(members, member)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate group members: %w", err)
+	}
+
+	return members, nil
 }
 
 func (s *Service) RemoveMember(ctx context.Context, requesterUserID, groupID, userID string) error {

@@ -42,6 +42,56 @@ func TestAddMemberRejectsUserOutsideOrganization(t *testing.T) {
 	}
 }
 
+func TestListMembersReturnsGroupMembershipForAdminsOnly(t *testing.T) {
+	t.Parallel()
+
+	ctx, pool := openGroupsTestPool(t)
+	service := NewService(pool)
+	adminID := insertGroupsTestUser(t, ctx, pool, "admin@example.com")
+	firstMemberID := insertGroupsTestUser(t, ctx, pool, "a-member@example.com")
+	secondMemberID := insertGroupsTestUser(t, ctx, pool, "z-member@example.com")
+	organizationID := insertGroupsTestOrganization(t, ctx, pool, "Groups Org")
+	insertGroupsTestMember(t, ctx, pool, organizationID, adminID, "admin")
+	insertGroupsTestMember(t, ctx, pool, organizationID, firstMemberID, "member")
+	insertGroupsTestMember(t, ctx, pool, organizationID, secondMemberID, "member")
+	groupID := insertGroupsTestGroup(t, ctx, pool, organizationID, "devops")
+	insertGroupsTestGroupMember(t, ctx, pool, groupID, secondMemberID)
+	insertGroupsTestGroupMember(t, ctx, pool, groupID, firstMemberID)
+
+	members, err := service.ListMembers(ctx, adminID, groupID)
+	if err != nil {
+		t.Fatalf("list group members: %v", err)
+	}
+	if len(members) != 2 {
+		t.Fatalf("member count = %d, want 2", len(members))
+	}
+	if members[0].UserID != firstMemberID || members[1].UserID != secondMemberID {
+		t.Fatalf("member order = [%s %s], want [%s %s]", members[0].UserID, members[1].UserID, firstMemberID, secondMemberID)
+	}
+}
+
+func TestListMembersRejectsNonAdmins(t *testing.T) {
+	t.Parallel()
+
+	ctx, pool := openGroupsTestPool(t)
+	service := NewService(pool)
+	adminID := insertGroupsTestUser(t, ctx, pool, "admin@example.com")
+	memberID := insertGroupsTestUser(t, ctx, pool, "member@example.com")
+	organizationID := insertGroupsTestOrganization(t, ctx, pool, "Groups Org")
+	insertGroupsTestMember(t, ctx, pool, organizationID, adminID, "admin")
+	insertGroupsTestMember(t, ctx, pool, organizationID, memberID, "member")
+	groupID := insertGroupsTestGroup(t, ctx, pool, organizationID, "devops")
+	insertGroupsTestGroupMember(t, ctx, pool, groupID, memberID)
+
+	members, err := service.ListMembers(ctx, memberID, groupID)
+	if err == nil {
+		t.Fatalf("expected non-admin list members to fail, got %#v", members)
+	}
+	if err != ErrForbidden {
+		t.Fatalf("err = %v, want %v", err, ErrForbidden)
+	}
+}
+
 func openGroupsTestPool(t *testing.T) (context.Context, *pgxpool.Pool) {
 	t.Helper()
 	if testing.Short() {
@@ -154,4 +204,15 @@ func insertGroupsTestGroup(t *testing.T, ctx context.Context, pool *pgxpool.Pool
 	}
 
 	return groupID
+}
+
+func insertGroupsTestGroupMember(t *testing.T, ctx context.Context, pool *pgxpool.Pool, groupID, userID string) {
+	t.Helper()
+
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO group_members (group_id, user_id)
+		VALUES ($1, $2)
+	`, groupID, userID); err != nil {
+		t.Fatalf("insert group member: %v", err)
+	}
 }
