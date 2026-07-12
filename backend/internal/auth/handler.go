@@ -9,6 +9,9 @@ import (
 	"github.com/furia/shared-bookmark-sync/backend/internal/httpapi"
 )
 
+const renewableCapabilityHeader = "X-Session-Capability"
+const renewableCapability = "renewable-v1"
+
 type invitationAccepter interface {
 	AcceptInvitation(ctx context.Context, userID, token string) (any, error)
 }
@@ -21,7 +24,17 @@ func RegisterRoutes(mux *http.ServeMux, service *Service, invitations invitation
 			return
 		}
 
-		session, err := service.Register(r.Context(), input, clientIDFromRequest(r, service.ClientIDHeader()))
+		clientID := clientIDFromRequest(r, service.ClientIDHeader())
+		if renewableRequested(r) {
+			session, err := service.RegisterRenewable(r.Context(), input, clientID)
+			if err != nil {
+				writeAuthError(w, err)
+				return
+			}
+			httpapi.WriteJSON(w, http.StatusCreated, session)
+			return
+		}
+		session, err := service.Register(r.Context(), input, clientID)
 		if err != nil {
 			writeAuthError(w, err)
 			return
@@ -37,13 +50,55 @@ func RegisterRoutes(mux *http.ServeMux, service *Service, invitations invitation
 			return
 		}
 
-		session, err := service.Login(r.Context(), input, clientIDFromRequest(r, service.ClientIDHeader()))
+		clientID := clientIDFromRequest(r, service.ClientIDHeader())
+		if renewableRequested(r) {
+			session, err := service.LoginRenewable(r.Context(), input, clientID)
+			if err != nil {
+				writeAuthError(w, err)
+				return
+			}
+			httpapi.WriteJSON(w, http.StatusOK, session)
+			return
+		}
+		session, err := service.Login(r.Context(), input, clientID)
 		if err != nil {
 			writeAuthError(w, err)
 			return
 		}
 
 		httpapi.WriteJSON(w, http.StatusOK, session)
+	})
+
+	mux.HandleFunc("POST /auth/refresh", func(w http.ResponseWriter, r *http.Request) {
+		var input struct {
+			RefreshToken string `json:"refreshToken"`
+			AttemptID    string `json:"attemptId"`
+		}
+		if err := httpapi.DecodeJSON(r, &input); err != nil || strings.TrimSpace(input.RefreshToken) == "" || strings.TrimSpace(input.AttemptID) == "" {
+			httpapi.WriteError(w, http.StatusBadRequest, "refreshToken and attemptId are required")
+			return
+		}
+		session, err := service.Refresh(r.Context(), input.RefreshToken, input.AttemptID, clientIDFromRequest(r, service.ClientIDHeader()))
+		if err != nil {
+			writeAuthError(w, err)
+			return
+		}
+		httpapi.WriteJSON(w, http.StatusOK, session)
+	})
+
+	mux.HandleFunc("POST /auth/logout", func(w http.ResponseWriter, r *http.Request) {
+		var input struct {
+			RefreshToken string `json:"refreshToken"`
+		}
+		if err := httpapi.DecodeJSON(r, &input); err != nil || strings.TrimSpace(input.RefreshToken) == "" {
+			httpapi.WriteError(w, http.StatusBadRequest, "refreshToken is required")
+			return
+		}
+		if err := service.Logout(r.Context(), input.RefreshToken, clientIDFromRequest(r, service.ClientIDHeader())); err != nil {
+			writeAuthError(w, err)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
 	})
 
 	mux.Handle("GET /me", service.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -79,12 +134,18 @@ func clientIDFromRequest(r *http.Request, headerName string) string {
 	return strings.TrimSpace(r.Header.Get(headerName))
 }
 
+func renewableRequested(r *http.Request) bool {
+	return r.Header.Get(renewableCapabilityHeader) == renewableCapability
+}
+
 func writeAuthError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, ErrInvalidCredentials), errors.Is(err, ErrUnauthorized):
 		httpapi.WriteError(w, http.StatusUnauthorized, err.Error())
 	case errors.Is(err, ErrClientBinding):
 		httpapi.WriteError(w, http.StatusConflict, err.Error())
+	case errors.Is(err, ErrRefreshUnavailable):
+		httpapi.WriteError(w, http.StatusServiceUnavailable, "unavailable")
 	default:
 		httpapi.WriteError(w, http.StatusBadRequest, err.Error())
 	}

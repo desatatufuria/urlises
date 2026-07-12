@@ -23,10 +23,17 @@ var (
 
 type Service struct {
 	pool           *pgxpool.Pool
-	refresh        *refreshRepository
+	refresh        refreshStore
 	jwtSecret      []byte
 	tokenTTL       time.Duration
 	clientIDHeader string
+}
+
+type refreshStore interface {
+	createTx(context.Context, pgx.Tx, string, string) (RefreshToken, error)
+	rotateForClient(context.Context, string, string, string) (RefreshToken, error)
+	logoutForClient(context.Context, string, string) error
+	revokeAllTx(context.Context, pgx.Tx, string) error
 }
 
 type Principal struct {
@@ -47,6 +54,11 @@ type Session struct {
 	ExpiresAt   time.Time `json:"expiresAt"`
 	ClientID    string    `json:"clientId"`
 	User        User      `json:"user"`
+}
+
+type RenewableSession struct {
+	Session
+	RefreshToken string `json:"refreshToken"`
 }
 
 type RegisterInput struct {
@@ -99,25 +111,35 @@ func (s *Service) ClientIDHeader() string {
 }
 
 func (s *Service) Register(ctx context.Context, input RegisterInput, clientID string) (Session, error) {
+	session, _, err := s.register(ctx, input, clientID, false)
+	return session, err
+}
+
+func (s *Service) RegisterRenewable(ctx context.Context, input RegisterInput, clientID string) (RenewableSession, error) {
+	session, refresh, err := s.register(ctx, input, clientID, true)
+	return RenewableSession{Session: session, RefreshToken: refresh.Token}, err
+}
+
+func (s *Service) register(ctx context.Context, input RegisterInput, clientID string, renewable bool) (Session, RefreshToken, error) {
 	input.Email = strings.TrimSpace(strings.ToLower(input.Email))
 	input.Name = strings.TrimSpace(input.Name)
 	input.Password = strings.TrimSpace(input.Password)
 
 	if input.Email == "" || input.Password == "" {
-		return Session{}, fmt.Errorf("email and password are required")
+		return Session{}, RefreshToken{}, fmt.Errorf("email and password are required")
 	}
 	if clientID == "" {
-		return Session{}, fmt.Errorf("client ID is required")
+		return Session{}, RefreshToken{}, fmt.Errorf("client ID is required")
 	}
 
 	hash, err := bcrypt.GenerateFromPassword([]byte(input.Password), bcrypt.DefaultCost)
 	if err != nil {
-		return Session{}, fmt.Errorf("hash password: %w", err)
+		return Session{}, RefreshToken{}, fmt.Errorf("hash password: %w", err)
 	}
 
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
-		return Session{}, fmt.Errorf("begin register tx: %w", err)
+		return Session{}, RefreshToken{}, ErrRefreshUnavailable
 	}
 	defer tx.Rollback(ctx)
 
@@ -128,29 +150,47 @@ func (s *Service) Register(ctx context.Context, input RegisterInput, clientID st
 		RETURNING id, email, COALESCE(name, '')
 	`, input.Email, nullableString(input.Name), string(hash)).Scan(&user.ID, &user.Email, &user.Name)
 	if err != nil {
-		return Session{}, fmt.Errorf("create user: %w", err)
+		return Session{}, RefreshToken{}, fmt.Errorf("create user: %w", err)
 	}
 
 	if err := s.bindClient(ctx, tx, user.ID, clientID, input.DeviceName); err != nil {
-		return Session{}, err
+		return Session{}, RefreshToken{}, err
+	}
+	var refresh RefreshToken
+	if renewable {
+		refresh, err = s.refresh.createTx(ctx, tx, user.ID, clientID)
+		if err != nil {
+			return Session{}, RefreshToken{}, err
+		}
 	}
 
 	if err := tx.Commit(ctx); err != nil {
-		return Session{}, fmt.Errorf("commit register tx: %w", err)
+		return Session{}, RefreshToken{}, ErrRefreshUnavailable
 	}
 
-	return s.issueSession(user, clientID)
+	session, err := s.issueSession(user, clientID)
+	return session, refresh, err
 }
 
 func (s *Service) Login(ctx context.Context, input LoginInput, clientID string) (Session, error) {
+	session, _, err := s.login(ctx, input, clientID, false)
+	return session, err
+}
+
+func (s *Service) LoginRenewable(ctx context.Context, input LoginInput, clientID string) (RenewableSession, error) {
+	session, refresh, err := s.login(ctx, input, clientID, true)
+	return RenewableSession{Session: session, RefreshToken: refresh.Token}, err
+}
+
+func (s *Service) login(ctx context.Context, input LoginInput, clientID string, renewable bool) (Session, RefreshToken, error) {
 	input.Email = strings.TrimSpace(strings.ToLower(input.Email))
 	input.Password = strings.TrimSpace(input.Password)
 
 	if input.Email == "" || input.Password == "" {
-		return Session{}, fmt.Errorf("email and password are required")
+		return Session{}, RefreshToken{}, fmt.Errorf("email and password are required")
 	}
 	if clientID == "" {
-		return Session{}, fmt.Errorf("client ID is required")
+		return Session{}, RefreshToken{}, fmt.Errorf("client ID is required")
 	}
 
 	var (
@@ -164,30 +204,68 @@ func (s *Service) Login(ctx context.Context, input LoginInput, clientID string) 
 	`, input.Email).Scan(&user.ID, &user.Email, &user.Name, &hash)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return Session{}, ErrInvalidCredentials
+			return Session{}, RefreshToken{}, ErrInvalidCredentials
 		}
-		return Session{}, fmt.Errorf("load user: %w", err)
+		return Session{}, RefreshToken{}, fmt.Errorf("load user: %w", err)
 	}
 
 	if err := bcrypt.CompareHashAndPassword([]byte(hash), []byte(input.Password)); err != nil {
-		return Session{}, ErrInvalidCredentials
+		return Session{}, RefreshToken{}, ErrInvalidCredentials
 	}
 
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
-		return Session{}, fmt.Errorf("begin login tx: %w", err)
+		return Session{}, RefreshToken{}, ErrRefreshUnavailable
 	}
 	defer tx.Rollback(ctx)
 
 	if err := s.bindClient(ctx, tx, user.ID, clientID, input.DeviceName); err != nil {
-		return Session{}, err
+		return Session{}, RefreshToken{}, err
+	}
+	var refresh RefreshToken
+	if renewable {
+		refresh, err = s.refresh.createTx(ctx, tx, user.ID, clientID)
+		if err != nil {
+			return Session{}, RefreshToken{}, err
+		}
 	}
 
 	if err := tx.Commit(ctx); err != nil {
-		return Session{}, fmt.Errorf("commit login tx: %w", err)
+		return Session{}, RefreshToken{}, ErrRefreshUnavailable
 	}
 
-	return s.issueSession(user, clientID)
+	session, err := s.issueSession(user, clientID)
+	return session, refresh, err
+}
+
+func (s *Service) Refresh(ctx context.Context, token, attemptID, clientID string) (RenewableSession, error) {
+	if strings.TrimSpace(clientID) == "" {
+		return RenewableSession{}, ErrUnauthorized
+	}
+	refresh, err := s.refresh.rotateForClient(ctx, token, attemptID, clientID)
+	if err != nil {
+		return RenewableSession{}, err
+	}
+	var user User
+	if err := s.pool.QueryRow(ctx, `SELECT id,email,COALESCE(name,'') FROM users WHERE id=$1`, refresh.UserID).Scan(&user.ID, &user.Email, &user.Name); err != nil {
+		return RenewableSession{}, ErrRefreshUnavailable
+	}
+	session, err := s.issueSession(user, clientID)
+	if err != nil {
+		return RenewableSession{}, ErrRefreshUnavailable
+	}
+	return RenewableSession{Session: session, RefreshToken: refresh.Token}, nil
+}
+
+func (s *Service) Logout(ctx context.Context, token, clientID string) error {
+	if strings.TrimSpace(clientID) == "" {
+		return fmt.Errorf("client ID is required")
+	}
+	err := s.refresh.logoutForClient(ctx, token, clientID)
+	if errors.Is(err, ErrUnauthorized) {
+		return nil
+	}
+	return err
 }
 
 func (s *Service) AuthenticateToken(ctx context.Context, rawToken, clientID string) (Principal, error) {
