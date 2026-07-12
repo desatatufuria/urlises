@@ -84,9 +84,9 @@ describe("groups page", () => {
       return jsonResponse({ error: "not found" }, 404);
     });
 
-    renderAppRoute("/groups");
+    renderAppRoute("/groups?panel=group&group=group-1");
 
-    expect(await screen.findByText(/operators/i)).toBeInTheDocument();
+    expect((await screen.findAllByText(/operators/i)).length).toBeGreaterThan(0);
 
     await userEvent.click(screen.getByRole("button", { name: /add member/i }));
     expect(await screen.findByText(/member added/i)).toBeInTheDocument();
@@ -110,9 +110,9 @@ describe("groups page", () => {
       if (url.endsWith("/groups/group-1/members") && method === "GET") return jsonResponse({ members: [] });
       return jsonResponse({ error: "not found" }, 404);
     });
-    renderAppRoute("/groups");
+    renderAppRoute("/groups?panel=group-create");
     await userEvent.type(await screen.findByLabelText(/new group name/i), "Created");
-    await userEvent.click(screen.getByRole("button", { name: /create group/i }));
+    await userEvent.click(screen.getAllByRole("button", { name: /create group/i }).at(-1)!);
     expect(await screen.findByText(/group created/i)).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: /operators/i }));
     await userEvent.clear(screen.getByLabelText(/^group name$/i));
@@ -133,11 +133,11 @@ describe("groups page", () => {
       if ((operation === "create" && method === "POST") || (operation === "rename" && method === "PATCH") || (operation === "delete" && method === "DELETE")) return jsonResponse({ error: "write failed" }, 500);
       return jsonResponse({ error: "not found" }, 404);
     });
-    renderAppRoute("/groups");
-    expect(await screen.findByText("Operators")).toBeInTheDocument();
+    renderAppRoute(operation === "create" ? "/groups?panel=group-create" : "/groups?panel=group&group=group-1");
+    expect((await screen.findAllByText("Operators")).length).toBeGreaterThan(0);
     if (operation === "create") {
       await userEvent.type(screen.getByLabelText(/new group name/i), "Unavailable");
-      await userEvent.click(screen.getByRole("button", { name: /create group/i }));
+      await userEvent.click(screen.getAllByRole("button", { name: /create group/i }).at(-1)!);
       expect(await screen.findByText(/group creation failed/i)).toBeInTheDocument();
     } else if (operation === "rename") {
       await userEvent.clear(await screen.findByLabelText(/^group name$/i));
@@ -148,6 +148,6 @@ describe("groups page", () => {
       await userEvent.click(await screen.findByRole("button", { name: /delete group/i }));
       expect(await screen.findByText(/group deletion failed/i)).toBeInTheDocument();
     }
-    expect(screen.getByText("Operators")).toBeInTheDocument();
+    expect(screen.getAllByText("Operators").length).toBeGreaterThan(0);
   });
 });

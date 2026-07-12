@@ -1,4 +1,4 @@
-import { screen, waitFor } from "@testing-library/react";
+import { act, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderAppRoute } from "../../test/renderRoute";
@@ -40,6 +40,31 @@ describe("members page", () => {
 
     expect(await screen.findByText(/no members yet/i)).toBeInTheDocument();
     expect(await screen.findByText(/no pending invitations/i)).toBeInTheDocument();
+  });
+
+  it("opens the invitation panel from People and closes it through URL history", async () => {
+    fetchMock.mockImplementation((input) => {
+      const url = String(input);
+      if (url.endsWith("/organizations/org-1/members")) return jsonResponse({ members: [] });
+      if (url.endsWith("/organizations/org-1/invitations")) return jsonResponse({ invitations: [] });
+      return jsonResponse({ error: "not found" }, 404);
+    });
+    const user = userEvent.setup();
+    const { router } = renderAppRoute("/members");
+    const inviteButton = await screen.findByRole("button", { name: /invite person/i });
+    await user.click(inviteButton);
+    expect(screen.getByRole("dialog", { name: /invite person/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /close panel/i })).toHaveFocus();
+    await user.tab({ shift: true });
+    expect(screen.getByRole("button", { name: /invite member/i })).toHaveFocus();
+    await user.tab();
+    expect(screen.getByRole("button", { name: /close panel/i })).toHaveFocus();
+    await user.keyboard("{Escape}");
+    expect(inviteButton).toHaveFocus();
+    expect(screen.queryByRole("dialog", { name: /invite person/i })).not.toBeInTheDocument();
+    await user.click(inviteButton);
+    await act(() => router.navigate(-1));
+    expect(screen.queryByRole("dialog", { name: /invite person/i })).not.toBeInTheDocument();
   });
 
   it("shows a failed page query and retries it successfully", async () => {
@@ -99,6 +124,7 @@ describe("members page", () => {
     renderAppRoute("/members");
 
     await screen.findByText(/active members/i);
+    await userEvent.click(screen.getByRole("button", { name: /invite person/i }));
 
     await userEvent.type(screen.getByLabelText(/invite email/i), "new-admin@example.com");
     await userEvent.selectOptions(screen.getByLabelText(/invite role/i), "admin");

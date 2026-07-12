@@ -34,11 +34,8 @@ export function LoginPage() {
     <div className="ui-login-screen">
       <AppShell
         compact
-        eyebrow="OdA operator access"
-        title="Sign in to Admin Web"
-        subtitle="Premium, restrained controls for organization admins only."
       >
-        <form className="ui-form" onSubmit={handleSubmit}>
+        <section className="ui-login-card"><p className="ui-eyebrow">OdA operator access</p><h1 className="ui-page-title">Sign in to Admin Web</h1><p className="ui-copy">Restrained controls for organization admins only.</p><form className="ui-form" onSubmit={handleSubmit}>
           <FormRow label="Email">
             <input
               autoComplete="email"
@@ -69,7 +66,7 @@ export function LoginPage() {
             {submitting ? "Signing in…" : "Sign in"}
           </button>
           {error ? <DataState tone="danger" title="Sign-in failed" description={error} compact /> : null}
-        </form>
+        </form></section>
       </AppShell>
     </div>
   );

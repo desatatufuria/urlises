@@ -5,8 +5,8 @@ import { useAuth } from "../providers/AuthProvider";
 import { useOrganization } from "../providers/OrganizationProvider";
 
 const navItems = [
-  { to: "/members", label: "Members" },
-  { to: "/invitations", label: "Invitations" },
+  { to: "/", label: "Overview", end: true },
+  { to: "/members", label: "People" },
   { to: "/groups", label: "Groups" },
   { to: "/workspaces", label: "Workspaces" },
   { to: "/access", label: "Access" },
@@ -17,54 +17,22 @@ export function AdminLayout() {
   const { activeOrganization, adminOrganizations, setActiveOrganizationId } = useOrganization();
 
   return (
-    <AppShell
-      eyebrow="Operator shell"
-      title={activeOrganization?.organizationName ?? "Admin Web"}
-      subtitle="Minimal control plane for organization members, invitations, groups, workspaces, and access only."
-      headerActions={
-        <>
-          <Badge tone="neutral">{activeOrganization?.role ?? "admin"}</Badge>
-          <button className="ui-button ui-button-secondary" onClick={() => void signOut()} type="button">
-            Sign out
-          </button>
-        </>
-      }
-      sidebar={
-        <>
-          <label className="ui-field-label">
-            Active organization
-            <select
-              aria-label="Active organization"
-              className="ui-select"
-              value={activeOrganization?.organizationId ?? ""}
-              onChange={(event) => setActiveOrganizationId(event.target.value)}
-            >
-              {adminOrganizations.map((organization) => (
-                <option key={organization.organizationId} value={organization.organizationId}>
-                  {organization.organizationName}
-                </option>
-              ))}
-            </select>
-          </label>
-          <nav aria-label="Admin sections" className="ui-nav">
+    <AppShell context={<>
+      <div className="ui-context-identity"><strong>OdA</strong><span>{activeOrganization?.organizationName ?? "Admin Web"}</span></div>
+      <nav aria-label="Admin sections" className="ui-nav">
             {navItems.map((item) => (
               <NavLink
                 key={item.to}
                 className={({ isActive }) => `ui-nav__link${isActive ? " ui-nav__link--active" : ""}`}
+                end={item.to === "/"}
                 to={item.to}
               >
                 {item.label}
               </NavLink>
             ))}
-          </nav>
-          <div className="ui-meta-card">
-            <p className="ui-meta-label">Signed in as</p>
-            <strong>{principal?.name ?? principal?.email}</strong>
-            <p className="ui-muted">Out-of-scope areas stay hidden by design.</p>
-          </div>
-        </>
-      }
-    >
+      </nav>
+      <div className="ui-context-actions"><select aria-label="Active organization" className="ui-select" value={activeOrganization?.organizationId ?? ""} onChange={(event) => setActiveOrganizationId(event.target.value)}>{adminOrganizations.map((organization) => <option key={organization.organizationId} value={organization.organizationId}>{organization.organizationName}</option>)}</select><Badge tone="neutral">{activeOrganization?.role ?? "admin"}</Badge><button aria-label={`Sign out ${principal?.name ?? principal?.email ?? ""}`} className="ui-button ui-button-secondary" onClick={() => void signOut()} type="button">Sign out</button></div>
+    </>}>
       <Outlet />
     </AppShell>
   );

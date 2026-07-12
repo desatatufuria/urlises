@@ -69,6 +69,7 @@ describe("workspaces page", () => {
 
     renderAppRoute("/workspaces");
 
+    await userEvent.click(await screen.findByRole("button", { name: /new workspace/i }));
     await screen.findByLabelText(/workspace name/i);
 
     await userEvent.type(screen.getByLabelText(/workspace name/i), "Launch Room");

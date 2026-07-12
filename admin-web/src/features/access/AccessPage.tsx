@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { useAuth } from "../../app/providers/AuthProvider";
 import { useOrganization } from "../../app/providers/OrganizationProvider";
 import { useGroups } from "../groups/queries";
@@ -16,6 +17,7 @@ import {
   useRevokeUserWorkspaceAccessMutation,
 } from "./mutations";
 import { useWorkspaceAccess } from "./queries";
+import { ContextPanel } from "../../lib/ui/components/ContextPanel";
 
 const roleOptions: WorkspaceRole[] = ["admin", "editor", "viewer"];
 
@@ -34,7 +36,10 @@ function formatSourceLabel(source: string) {
 export function AccessPage() {
   const { session } = useAuth();
   const { activeOrganization } = useOrganization();
-  const [selectedWorkspaceId, setSelectedWorkspaceId] = useState<string | null>(null);
+  const [searchParams, setSearchParams] = useSearchParams();
+  const selectedWorkspaceId = searchParams.get("workspace");
+  const accessOpen = searchParams.get("panel") === "access";
+  const closePanel = () => setSearchParams((current) => { const next = new URLSearchParams(current); next.delete("panel"); next.delete("workspace"); return next; });
   const [notice, setNotice] = useState<{ tone: "neutral" | "danger"; title: string; description: string } | null>(null);
   const [savingUserId, setSavingUserId] = useState<string | null>(null);
   const [savingGroupId, setSavingGroupId] = useState<string | null>(null);
@@ -45,18 +50,6 @@ export function AccessPage() {
   const workspacesQuery = useWorkspaces(token, organizationId);
   const membersQuery = useOrganizationMembers(token, organizationId);
   const groupsQuery = useGroups(token, organizationId);
-
-  useEffect(() => {
-    const workspaces = workspacesQuery.data ?? [];
-    if (workspaces.length === 0) {
-      setSelectedWorkspaceId(null);
-      return;
-    }
-
-    if (!selectedWorkspaceId || !workspaces.some((workspace) => workspace.workspaceId === selectedWorkspaceId)) {
-      setSelectedWorkspaceId(workspaces[0].workspaceId);
-    }
-  }, [selectedWorkspaceId, workspacesQuery.data]);
 
   const selectedWorkspace = useMemo(
     () => workspacesQuery.data?.find((workspace) => workspace.workspaceId === selectedWorkspaceId) ?? null,
@@ -144,7 +137,7 @@ export function AccessPage() {
                   key={workspace.workspaceId}
                   className={`ui-list-button${workspace.workspaceId === selectedWorkspaceId ? " ui-list-button--active" : ""}`}
                   type="button"
-                  onClick={() => setSelectedWorkspaceId(workspace.workspaceId)}
+                    onClick={() => setSearchParams({ panel: "access", workspace: workspace.workspaceId })}
                 >
                   <div className="ui-cell-stack">
                     <strong>{workspace.workspaceName}</strong>
@@ -156,7 +149,8 @@ export function AccessPage() {
             </div>
           </section>
 
-          {selectedWorkspace ? (
+          {selectedWorkspace && accessOpen ? (
+            <ContextPanel title={`${selectedWorkspace.workspaceName} access`} onClose={closePanel}>
             <section className="ui-section-stack">
               <section className="ui-card ui-section-stack">
                 <header className="ui-section-header">
@@ -447,6 +441,7 @@ export function AccessPage() {
                 ) : null}
               </section>
             </section>
+            </ContextPanel>
           ) : null}
         </div>
       ) : null}

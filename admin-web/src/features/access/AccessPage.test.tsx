@@ -76,7 +76,7 @@ describe("access page", () => {
       return jsonResponse({ error: "not found" }, 404);
     });
 
-    renderAppRoute("/access");
+    renderAppRoute("/access?panel=access&workspace=workspace-1");
 
     expect(await screen.findByText(/effective access review/i)).toBeInTheDocument();
     expect(screen.getAllByText(/launch room/i).length).toBeGreaterThan(0);
@@ -149,7 +149,7 @@ describe("access page", () => {
       return jsonResponse({ error: "not found" }, 404);
     });
 
-    renderAppRoute("/access");
+    renderAppRoute("/access?panel=access&workspace=workspace-1");
 
     expect(await screen.findByText(/creator-only access/i)).toBeInTheDocument();
 
@@ -181,7 +181,7 @@ describe("access page", () => {
       if (url.includes("/workspaces/workspace-1/groups/group-1/access") && method === "DELETE") { snapshot.groupGrants.splice(0, 1); return Promise.resolve(new Response(null, { status: 204 })); }
       return jsonResponse({ error: "not found" }, 404);
     });
-    renderAppRoute("/access");
+    renderAppRoute("/access?panel=access&workspace=workspace-1");
     await userEvent.selectOptions(await screen.findByLabelText(/direct role for editor@example.com/i), "editor");
     expect(await screen.findByText(/direct grant updated/i)).toBeInTheDocument();
     await userEvent.selectOptions(screen.getByLabelText(/group role for operators/i), "admin");

@@ -1,4 +1,5 @@
-import { useMemo, useState } from "react";
+import { useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { useAuth } from "../../app/providers/AuthProvider";
 import { useOrganization } from "../../app/providers/OrganizationProvider";
 import { Badge } from "../../lib/ui/components/Badge";
@@ -6,6 +7,7 @@ import { DataState } from "../../lib/ui/components/DataState";
 import { Table } from "../../lib/ui/components/Table";
 import type { OrganizationRole } from "../../lib/api/types";
 import { InviteMemberForm } from "./InviteMemberForm";
+import { ContextPanel } from "../../lib/ui/components/ContextPanel";
 import { useInviteMemberMutation, useUpdateMemberRoleMutation } from "./mutations";
 import { useOrganizationInvitations, useOrganizationMembers } from "./queries";
 
@@ -20,7 +22,7 @@ function formatTimestamp(value?: string | null) {
   return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
 }
 
-export function MembersPage({ focus = "members" }: { focus?: "members" | "invitations" }) {
+export function MembersPage() {
   const { session } = useAuth();
   const { activeOrganization } = useOrganization();
   const [notice, setNotice] = useState<{ tone: "neutral" | "danger"; title: string; description: string } | null>(null);
@@ -33,16 +35,9 @@ export function MembersPage({ focus = "members" }: { focus?: "members" | "invita
   const inviteMutation = useInviteMemberMutation(token, organizationId);
   const updateRoleMutation = useUpdateMemberRoleMutation(token, organizationId);
 
-  const pageTitle = focus === "invitations" ? "Invitations" : "Members";
-  const pageDescription =
-    focus === "invitations"
-      ? "Invite admins or members, then review the pending queue without leaving the calm operator shell."
-      : "Review live members, adjust roles, and keep pending invites visible in the same organization surface.";
-
-  const sections = useMemo(
-    () => (focus === "invitations" ? ["invitations", "members"] : ["members", "invitations"]),
-    [focus],
-  );
+  const [searchParams, setSearchParams] = useSearchParams();
+  const inviteOpen = searchParams.get("panel") === "invite";
+  const closeInvite = () => setSearchParams((current) => { const next = new URLSearchParams(current); next.delete("panel"); return next; });
 
   if (!token || !organizationId) {
     return <DataState tone="danger" title="Organization context missing" description="Choose an admin organization before managing people." />;
@@ -134,28 +129,6 @@ export function MembersPage({ focus = "members" }: { focus?: "members" | "invita
 
     return (
       <div className="ui-section-stack">
-        <InviteMemberForm
-          submitting={inviteMutation.isPending}
-          onSubmit={async (input) => {
-            setNotice(null);
-            try {
-              await inviteMutation.mutateAsync(input);
-              setNotice({
-                tone: "neutral",
-                title: "Invitation queued",
-                description: `${input.email} now appears in the pending invitation list.`,
-              });
-            } catch (error) {
-              setNotice({
-                tone: "danger",
-                title: "Invitation failed",
-                description: error instanceof Error ? error.message : "The invite could not be created.",
-              });
-              throw error;
-            }
-          }}
-        />
-
         {invitationsQuery.isPending ? <DataState title="Loading invitations" description="Reviewing the pending invite queue for this organization." /> : null}
 
         {invitationsQuery.isError ? (
@@ -205,25 +178,25 @@ export function MembersPage({ focus = "members" }: { focus?: "members" | "invita
   return (
     <section className="ui-section-stack">
       <header className="ui-section-header">
-        <h2 className="ui-section-title">{pageTitle}</h2>
-        <p className="ui-copy">{pageDescription}</p>
+        <div className="ui-actions-spread"><div><h1 className="ui-page-title">People</h1><p className="ui-copy">Review current members and the pending invitation queue in one place.</p></div><button className="ui-button ui-button-primary" type="button" onClick={() => setSearchParams({ panel: "invite" })}>Invite person</button></div>
       </header>
 
       {notice ? <DataState compact tone={notice.tone} title={notice.title} description={notice.description} /> : null}
 
-      {sections.map((section) => (
-        <section key={section} className="ui-card ui-section-stack">
+      {(["members", "invitations"] as const).map((section) => (
+        <section key={section} className="ui-grouped-section ui-section-stack">
           <header className="ui-section-header">
             <h3 className="ui-section-title">{section === "members" ? "Active members" : "Invite and review pending access"}</h3>
             <p className="ui-copy">
               {section === "members"
                 ? "Role changes stay server-authoritative. Rejected updates keep the previous state visible."
-                : "Invitations use the backend pending-invite read model added in the earlier chain slice."}
+                : "Pending invitations remain part of the people workflow."}
             </p>
           </header>
           {section === "members" ? renderMembersSection() : renderInvitationsSection()}
         </section>
       ))}
+      {inviteOpen ? <ContextPanel title="Invite person" onClose={closeInvite}><p className="ui-copy">Invite an admin or member. The pending list updates from the backend after it is queued.</p><InviteMemberForm submitting={inviteMutation.isPending} onSubmit={async (input) => { setNotice(null); try { await inviteMutation.mutateAsync(input); setNotice({ tone: "neutral", title: "Invitation queued", description: `${input.email} now appears in the pending invitation list.` }); closeInvite(); } catch (error) { setNotice({ tone: "danger", title: "Invitation failed", description: error instanceof Error ? error.message : "The invite could not be created." }); throw error; } }} /></ContextPanel> : null}
     </section>
   );
 }

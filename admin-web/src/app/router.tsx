@@ -7,6 +7,7 @@ import { AccessPage } from "../features/access/AccessPage";
 import { GroupsPage } from "../features/groups/GroupsPage";
 import { MembersPage } from "../features/members/MembersPage";
 import { WorkspacesPage } from "../features/workspaces/WorkspacesPage";
+import { StateHome } from "../features/home/StateHome";
 import { LoginPage } from "./views/LoginPage";
 
 function LoadingScreen() {
@@ -63,14 +64,10 @@ export const appRoutes: RouteObject[] = [
             path: "/",
             element: <AdminLayout />,
             children: [
-              { index: true, element: <Navigate to="/members" replace /> },
+              { index: true, element: <StateHome /> },
               {
                 path: "members",
                 element: <MembersPage />,
-              },
-              {
-                path: "invitations",
-                element: <MembersPage focus="invitations" />,
               },
               {
                 path: "groups",

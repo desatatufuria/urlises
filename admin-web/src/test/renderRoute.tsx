@@ -21,7 +21,7 @@ export function renderAppRoute(path: string, snapshot: AuthSnapshot | null = def
   const router = createMemoryRouter(appRoutes, { initialEntries: [path] });
   const initialSnapshot = snapshot ?? undefined;
 
-  return render(
+  const view = render(
     <QueryClientProvider client={queryClient}>
       <AuthProvider initialSnapshot={initialSnapshot}>
         <OrganizationProvider initialOrganizationId={initialSnapshot?.organizations[0]?.organizationId}>
@@ -30,4 +30,5 @@ export function renderAppRoute(path: string, snapshot: AuthSnapshot | null = def
       </AuthProvider>
     </QueryClientProvider>,
   );
+  return { ...view, router };
 }

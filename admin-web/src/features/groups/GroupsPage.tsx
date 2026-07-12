@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { useAuth } from "../../app/providers/AuthProvider";
 import { useOrganization } from "../../app/providers/OrganizationProvider";
 import { Badge } from "../../lib/ui/components/Badge";
@@ -6,6 +7,7 @@ import { DataState } from "../../lib/ui/components/DataState";
 import { FormRow } from "../../lib/ui/components/FormRow";
 import { useOrganizationMembers } from "../members/queries";
 import { GroupMembersPanel } from "./GroupMembersPanel";
+import { ContextPanel } from "../../lib/ui/components/ContextPanel";
 import {
   useAddGroupMemberMutation,
   useCreateGroupMutation,
@@ -18,9 +20,13 @@ import { useGroupMembers, useGroups } from "./queries";
 export function GroupsPage() {
   const { session } = useAuth();
   const { activeOrganization } = useOrganization();
-  const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null);
   const [newGroupName, setNewGroupName] = useState("");
   const [notice, setNotice] = useState<{ tone: "neutral" | "danger"; title: string; description: string } | null>(null);
+  const [searchParams, setSearchParams] = useSearchParams();
+  const selectedGroupId = searchParams.get("group");
+  const groupOpen = searchParams.get("panel") === "group";
+  const createOpen = searchParams.get("panel") === "group-create";
+  const closePanel = () => setSearchParams((current) => { const next = new URLSearchParams(current); next.delete("panel"); next.delete("group"); return next; });
 
   const token = session?.accessToken;
   const organizationId = activeOrganization?.organizationId;
@@ -39,15 +45,8 @@ export function GroupsPage() {
 
   useEffect(() => {
     const groups = groupsQuery.data ?? [];
-    if (groups.length === 0) {
-      setSelectedGroupId(null);
-      return;
-    }
-
-    if (!selectedGroupId || !groups.some((group) => group.groupId === selectedGroupId)) {
-      setSelectedGroupId(groups[0].groupId);
-    }
-  }, [groupsQuery.data, selectedGroupId]);
+    if (!groupsQuery.isPending && selectedGroupId && !groups.some((group) => group.groupId === selectedGroupId)) closePanel();
+  }, [groupsQuery.data, groupsQuery.isPending, selectedGroupId]);
 
   if (!token || !organizationId) {
     return <DataState tone="danger" title="Organization context missing" description="Choose an admin organization before managing groups." />;
@@ -65,52 +64,12 @@ export function GroupsPage() {
   return (
     <section className="ui-section-stack">
       <header className="ui-section-header">
-        <h2 className="ui-section-title">Groups</h2>
-        <p className="ui-copy">Create flat groups, then assign current organization members without drifting into workspace access work yet.</p>
+        <div className="ui-actions-spread"><div><h1 className="ui-page-title">Groups</h1><p className="ui-copy">Create flat groups and assign current organization members.</p></div><button className="ui-button ui-button-primary" type="button" onClick={() => setSearchParams({ panel: "group-create" })}>New group</button></div>
       </header>
 
       {notice ? <DataState compact tone={notice.tone} title={notice.title} description={notice.description} /> : null}
 
-      <section className="ui-card ui-section-stack">
-        <header className="ui-section-header">
-          <h3 className="ui-section-title">Create group</h3>
-          <p className="ui-copy">Use small, explicit groups now so the later access slice can reuse them as grant sources.</p>
-        </header>
-
-        <form
-          className="ui-inline-grid ui-inline-grid--actions"
-          onSubmit={(event) => {
-            event.preventDefault();
-            setNotice(null);
-            void createGroupMutation
-              .mutateAsync({ name: newGroupName.trim() })
-              .then((group) => {
-                setNewGroupName("");
-                setSelectedGroupId(group.groupId);
-                setNotice({ tone: "neutral", title: "Group created", description: `${group.name} is ready for member assignment.` });
-              })
-              .catch((caught) => {
-                setNotice({
-                  tone: "danger",
-                  title: "Group creation failed",
-                  description: caught instanceof Error ? caught.message : "The group could not be created.",
-                });
-              });
-          }}
-        >
-          <FormRow label="Group name" hint="Nested groups stay out of scope in this MVP.">
-            <input aria-label="New group name" required value={newGroupName} onChange={(event) => setNewGroupName(event.target.value)} />
-          </FormRow>
-          <div className="ui-actions-row ui-actions-row--end">
-            <button className="ui-button ui-button-primary" disabled={createGroupMutation.isPending} type="submit">
-              {createGroupMutation.isPending ? "Creating…" : "Create group"}
-            </button>
-          </div>
-        </form>
-      </section>
-
-      <div className="ui-split-layout">
-        <section className="ui-card ui-section-stack">
+      <section className="ui-grouped-section ui-section-stack">
           <header className="ui-section-header">
             <div className="ui-actions-spread">
               <div>
@@ -143,22 +102,21 @@ export function GroupsPage() {
               {groupsQuery.data?.map((group) => (
                 <button
                   key={group.groupId}
-                  className={`ui-list-button${group.groupId === selectedGroupId ? " ui-list-button--active" : ""}`}
+                  className="ui-list-button"
                   type="button"
-                  onClick={() => setSelectedGroupId(group.groupId)}
+                  onClick={() => setSearchParams({ panel: "group", group: group.groupId })}
                 >
                   <div className="ui-cell-stack">
                     <strong>{group.name}</strong>
                     <span className="ui-muted">{group.createdAt ? `Created ${new Date(group.createdAt).toLocaleDateString()}` : "Ready for membership assignment"}</span>
                   </div>
-                  <Badge tone={group.groupId === selectedGroupId ? "accent" : "neutral"}>{group.groupId === selectedGroupId ? "Selected" : "Open"}</Badge>
+                  <Badge tone="neutral">Open</Badge>
                 </button>
               ))}
             </div>
           ) : null}
-        </section>
-
-        {selectedGroup ? (
+      </section>
+      {groupOpen && selectedGroup ? <ContextPanel title={selectedGroup.name} onClose={closePanel}>
           <GroupMembersPanel
             error={groupMembersQuery.isError ? (groupMembersQuery.error instanceof Error ? groupMembersQuery.error.message : "Request failed.") : null}
             group={selectedGroup}
@@ -177,18 +135,14 @@ export function GroupsPage() {
             onDelete={async () => {
               await deleteGroupMutation.mutateAsync(selectedGroup.groupId);
               setNotice({ tone: "neutral", title: "Group deleted", description: `${selectedGroup.name} was removed from the organization.` });
-              setSelectedGroupId(null);
+              closePanel();
             }}
             onRemoveMember={(userId) => removeMemberMutation.mutateAsync(userId)}
             onRename={(name) => updateGroupMutation.mutateAsync({ groupId: selectedGroup.groupId, name: name.trim() })}
             onRetry={() => void groupMembersQuery.refetch()}
           />
-        ) : (
-          <section className="ui-card ui-section-stack">
-            <DataState title="Select a group" description="Pick a group from the list to inspect membership details and assignment actions." />
-          </section>
-        )}
-      </div>
+      </ContextPanel> : null}
+      {createOpen ? <ContextPanel title="Create group" onClose={closePanel}><form className="ui-section-stack" onSubmit={(event) => { event.preventDefault(); setNotice(null); void createGroupMutation.mutateAsync({ name: newGroupName.trim() }).then((group) => { setNewGroupName(""); setNotice({ tone: "neutral", title: "Group created", description: `${group.name} is ready for member assignment.` }); setSearchParams({ panel: "group", group: group.groupId }); }).catch((caught) => setNotice({ tone: "danger", title: "Group creation failed", description: caught instanceof Error ? caught.message : "The group could not be created." })); }}><FormRow label="Group name" hint="Nested groups stay out of scope."><input aria-label="New group name" required value={newGroupName} onChange={(event) => setNewGroupName(event.target.value)} /></FormRow><button className="ui-button ui-button-primary" disabled={createGroupMutation.isPending} type="submit">{createGroupMutation.isPending ? "Creating…" : "Create group"}</button></form></ContextPanel> : null}
     </section>
   );
 }

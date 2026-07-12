@@ -7,11 +7,16 @@ import { useCreateWorkspaceMutation } from "./mutations";
 import { useWorkspaces } from "./queries";
 import { WorkspaceForm } from "./WorkspaceForm";
 import { useState } from "react";
+import { useSearchParams } from "react-router-dom";
+import { ContextPanel } from "../../lib/ui/components/ContextPanel";
 
 export function WorkspacesPage() {
   const { session } = useAuth();
   const { activeOrganization } = useOrganization();
   const [notice, setNotice] = useState<{ tone: "neutral" | "danger"; title: string; description: string } | null>(null);
+  const [searchParams, setSearchParams] = useSearchParams();
+  const createOpen = searchParams.get("panel") === "workspace-create";
+  const closePanel = () => setSearchParams((current) => { const next = new URLSearchParams(current); next.delete("panel"); return next; });
 
   const token = session?.accessToken;
   const organizationId = activeOrganization?.organizationId;
@@ -25,42 +30,12 @@ export function WorkspacesPage() {
   return (
     <section className="ui-section-stack">
       <header className="ui-section-header">
-        <h2 className="ui-section-title">Workspaces</h2>
-        <p className="ui-copy">Create new workspaces, review the current portfolio, and keep bookmark-content management out of this operator shell.</p>
+        <div className="ui-actions-spread"><div><h1 className="ui-page-title">Workspaces</h1><p className="ui-copy">Review the current portfolio and its backend-provided access summary.</p></div><button className="ui-button ui-button-primary" type="button" onClick={() => setSearchParams({ panel: "workspace-create" })}>New workspace</button></div>
       </header>
 
       {notice ? <DataState compact tone={notice.tone} title={notice.title} description={notice.description} /> : null}
 
-      <section className="ui-card ui-section-stack">
-        <header className="ui-section-header">
-          <h3 className="ui-section-title">Create workspace</h3>
-          <p className="ui-copy">New workspaces start with only the creator as the initial admin until explicit user or group grants are added.</p>
-        </header>
-
-        <WorkspaceForm
-          submitting={createWorkspaceMutation.isPending}
-          onSubmit={async (input) => {
-            setNotice(null);
-            try {
-              const workspace = await createWorkspaceMutation.mutateAsync(input);
-              setNotice({
-                tone: "neutral",
-                title: "Workspace created",
-                description: `${workspace.workspaceName} is ready for access review and grant assignment.`,
-              });
-            } catch (error) {
-              setNotice({
-                tone: "danger",
-                title: "Workspace creation failed",
-                description: error instanceof Error ? error.message : "The workspace could not be created.",
-              });
-              throw error;
-            }
-          }}
-        />
-      </section>
-
-      <section className="ui-card ui-section-stack">
+      <section className="ui-grouped-section ui-section-stack">
         <header className="ui-section-header">
           <div className="ui-actions-spread">
             <div>
@@ -110,6 +85,7 @@ export function WorkspacesPage() {
           </Table>
         ) : null}
       </section>
+      {createOpen ? <ContextPanel title="Create workspace" onClose={closePanel}><p className="ui-copy">New workspaces begin with only the creator as the initial admin.</p><WorkspaceForm submitting={createWorkspaceMutation.isPending} onSubmit={async (input) => { setNotice(null); try { const workspace = await createWorkspaceMutation.mutateAsync(input); setNotice({ tone: "neutral", title: "Workspace created", description: `${workspace.workspaceName} is ready for access review and grant assignment.` }); closePanel(); } catch (error) { setNotice({ tone: "danger", title: "Workspace creation failed", description: error instanceof Error ? error.message : "The workspace could not be created." }); throw error; } }} /></ContextPanel> : null}
     </section>
   );
 }
