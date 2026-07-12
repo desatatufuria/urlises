@@ -21,6 +21,8 @@ var upgrader = websocket.Upgrader{
 	CheckOrigin: func(_ *http.Request) bool { return true },
 }
 
+const ticketProtocolPrefix = "sbs-ticket."
+
 func RegisterRoutes(mux *http.ServeMux, authService *auth.Service, workspaceService *workspaces.Service, cursors cursorReader, hub *Hub) {
 	mux.HandleFunc("GET /sync/ws", func(w http.ResponseWriter, r *http.Request) {
 		workspaceID := strings.TrimSpace(r.URL.Query().Get("workspaceId"))
@@ -29,7 +31,7 @@ func RegisterRoutes(mux *http.ServeMux, authService *auth.Service, workspaceServ
 			return
 		}
 
-		principal, err := authenticateWebsocket(r, authService)
+		principal, selectedProtocol, err := authenticateWebsocket(r, authService)
 		if err != nil {
 			httpapi.WriteError(w, http.StatusUnauthorized, "unauthorized")
 			return
@@ -40,7 +42,11 @@ func RegisterRoutes(mux *http.ServeMux, authService *auth.Service, workspaceServ
 			return
 		}
 
-		connection, err := upgrader.Upgrade(w, r, nil)
+		responseHeader := http.Header{}
+		if selectedProtocol != "" {
+			responseHeader.Set("Sec-WebSocket-Protocol", selectedProtocol)
+		}
+		connection, err := upgrader.Upgrade(w, r, responseHeader)
 		if err != nil {
 			return
 		}
@@ -81,7 +87,16 @@ func RegisterRoutes(mux *http.ServeMux, authService *auth.Service, workspaceServ
 	})
 }
 
-func authenticateWebsocket(r *http.Request, authService *auth.Service) (auth.Principal, error) {
+func authenticateWebsocket(r *http.Request, authService *auth.Service) (auth.Principal, string, error) {
+	ticket, selectedProtocol, err := ticketFromProtocols(websocket.Subprotocols(r))
+	if err != nil {
+		return auth.Principal{}, "", err
+	}
+	if selectedProtocol != "" {
+		principal, err := authService.ConsumeWSTicket(r.Context(), ticket)
+		return principal, selectedProtocol, err
+	}
+
 	token := strings.TrimSpace(r.URL.Query().Get("accessToken"))
 	if token == "" {
 		authorization := strings.TrimSpace(r.Header.Get("Authorization"))
@@ -94,10 +109,35 @@ func authenticateWebsocket(r *http.Request, authService *auth.Service) (auth.Pri
 	}
 
 	if token == "" || clientID == "" {
-		return auth.Principal{}, errors.New("missing websocket auth")
+		return auth.Principal{}, "", errors.New("missing websocket auth")
 	}
 
-	return authService.AuthenticateToken(r.Context(), token, clientID)
+	principal, err := authService.AuthenticateToken(r.Context(), token, clientID)
+	return principal, "", err
+}
+
+func ticketFromProtocols(protocols []string) (string, string, error) {
+	var ticket, selected string
+	for _, protocol := range protocols {
+		if !strings.HasPrefix(protocol, ticketProtocolPrefix) {
+			continue
+		}
+		candidate := strings.TrimPrefix(protocol, ticketProtocolPrefix)
+		if ticket != "" || candidate == "" || !isSubprotocolToken(candidate) {
+			return "", "", errors.New("invalid ticket protocol")
+		}
+		ticket, selected = candidate, protocol
+	}
+	return ticket, selected, nil
+}
+
+func isSubprotocolToken(value string) bool {
+	for _, r := range value {
+		if !((r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || strings.ContainsRune("!#$%&'*+-.^_`|~", r)) {
+			return false
+		}
+	}
+	return true
 }
 
 func drainConnection(connection *websocket.Conn, done chan<- struct{}) {

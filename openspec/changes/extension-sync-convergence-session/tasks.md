@@ -18,7 +18,7 @@ Chain strategy: stacked-to-main
 develop ← PR1a domain ← PR1b-auth endpoints ← PR1b-ticket issue ← PR1b-ws-upgrade consume ← PR2 transport ← PR3 journal ← PR4a ownership ← PR4b repair/enable
 ```
 
-Preflight proved PR1b-ws is 455–545 lines; no exception. PR1a and PR1b-auth remain complete: 7/23 checkboxes. `000006` is immutable; fix-forward `000007_ws_tickets.sql` belongs only to PR1b-ticket.
+Preflight proved PR1b-ws is 455–545 lines; no exception. PR1a and PR1b-auth remain complete: 7/22 checkboxes. `000006` is immutable; fix-forward `000007_ws_tickets.sql` belongs only to PR1b-ticket.
 
 | Unit | Start → end; dependency / out of scope / rollback | Focused test; runtime harness | Evidence |
 |---|---|---|---|
@@ -60,8 +60,8 @@ Candidate paths: `backend/migrations/000007_ws_tickets.sql`, `backend/internal/a
 
 Candidate paths: `backend/internal/websocket/handler.go`, `backend/internal/websocket/*_test.go`, `backend/internal/auth/service.go`.
 
-- [ ] 4.1 RED: Gorilla upgrade/proxy tests for exact `Sec-WebSocket-Protocol` selection, one-use consume, stripped/invalid prefixed protocol fail-closed/no downgrade, workspace authorization, legacy query path only without ticket protocol, and no URL/log secret.
-- [ ] 4.2 Wire ticket consumption into the WebSocket handler; preserve legacy access-token WS, make no migration/extension/TTL change, and record proxy/rollback evidence.
+- [x] 4.1 RED: Gorilla upgrade/proxy tests for exact `Sec-WebSocket-Protocol` selection, one-use consume, stripped/invalid prefixed protocol fail-closed/no downgrade, workspace authorization, legacy query path only without ticket protocol, and no URL/log secret.
+- [x] 4.2 Wire ticket consumption into the WebSocket handler; preserve legacy access-token WS, make no migration/extension/TTL change, and record proxy/rollback evidence.
 
 ## Phase 5: PR2 — Extension session transport and tickets
 

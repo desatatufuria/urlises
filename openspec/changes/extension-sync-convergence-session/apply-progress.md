@@ -2,11 +2,11 @@
 
 ## Cumulative Status
 
-10/23 tasks complete: PR1a tasks 1.1–1.4, PR1b-auth tasks 2.1–2.3, and PR1b-ticket tasks 3.1–3.3. The approved delivery remains stacked-to-`develop`, with no `size:exception`. Earlier 7/25 progress text was stale; the dispatcher-counted task checklist is authoritative.
+12/22 tasks complete: PR1a tasks 1.1–1.4, PR1b-auth tasks 2.1–2.3, PR1b-ticket tasks 3.1–3.3, and PR1b-ws-upgrade tasks 4.1–4.2. The approved delivery remains stacked-to-`develop`, with no `size:exception`. The dispatcher-counted task checklist is authoritative.
 
 ## Preserved Prior Apply Attempt
 
-The original unsplit PR1 was blocked at 0/4 because its combined migration, domain, handlers, tickets, PostgreSQL coverage, and documentation forecast 685–900 authored lines (the design estimated Slice A at ~510). The replanned 23-task chain split it into PR1a/PR1b; earlier progress described it as 21 tasks, which was a stale count. This record preserves the split decision.
+The original unsplit PR1 was blocked at 0/4 because its combined migration, domain, handlers, tickets, PostgreSQL coverage, and documentation forecast 685–900 authored lines (the design estimated Slice A at ~510). The replanned 22-task chain split it into PR1a/PR1b; earlier progress described it as 21 tasks, which was a stale count. This record preserves the split decision.
 
 ## PR1a Completion
 
@@ -40,7 +40,7 @@ Backend authored implementation/test/migration delta: 292 lines (7 service + 118
 
 ## PR1b Workload Guard
 
-The former combined PR1b was pending at 4/23. Earlier progress reported 4/21 before dispatcher reconciliation. Before production edits, the required minimum was forecast above the 400 authored-line limit: capability-gated auth endpoints and PostgreSQL handler coverage require roughly 250–320 lines; hash-only ticket persistence, real upgrade/subprotocol handling, and proxy-path coverage require roughly 300–380 more. The combined 550–700-line minimum could not be safely compressed without dropping required RED, security, or runtime evidence.
+The former combined PR1b was pending at 4/22. Earlier progress reported 4/21 before dispatcher reconciliation. Before production edits, the required minimum was forecast above the 400 authored-line limit: capability-gated auth endpoints and PostgreSQL handler coverage require roughly 250–320 lines; hash-only ticket persistence, real upgrade/subprotocol handling, and proxy-path coverage require roughly 300–380 more. The combined 550–700-line minimum could not be safely compressed without dropping required RED, security, or runtime evidence.
 
 Recommended split: PR1b-auth implements tasks 2.1 plus the auth portion of 2.3 (capability header, access-only compatibility, refresh/logout, and revoke-all contract); PR1b-ws follows with task 2.2 plus ticket persistence/upgrade and the corresponding portions of 2.3–2.4. No task checkbox changed, no production file changed, and `000006_refresh_sessions.sql` remains untouched; the WS ticket table belongs in fix-forward `000007_ws_tickets.sql` when the WS slice is authorized.
 
@@ -61,10 +61,24 @@ Recommended split: PR1b-auth implements tasks 2.1 plus the auth portion of 2.3 (
 
 ## PR1b-ws Scope Gate
 
-Dispatcher reconciliation confirms 7/23 completed tasks; 3.1–3.3 remain pending. Before production edits, the required immutable migration plus ticket repository/service/route/upgrade path forecasts 175–205 authored lines. The mandatory PostgreSQL/auth/real-Gorilla/proxy/authorization/secret-safety RED coverage forecasts 250–300 more, and the required evidence adds 30–40: 455–545 authored lines total. This exceeds the hard 400-line unit limit, so no RED or production source was added and no required test was weakened. The stale denominator corrections above are the only changes in this attempt.
+Dispatcher reconciliation confirmed 7/22 completed tasks before PR1b-ticket; its three tasks are now complete. The stale denominator corrections above preserve the authoritative 22-checkbox ledger.
 
 ## PR1b-ticket Completion
 
 - [x] 3.1–3.3 completed with PostgreSQL creation/hash/DB-clock expiry, atomic one-winner consume, unauthorized cases, bound-principal, endpoint cache/auth/opaque-503 tests.
 - Process deviation: production preceded tests. A temporary consume mutation made the focused suite RED (valid consume unauthorized; binding and concurrency cases failed), then was restored byte-for-byte and GREEN rerun.
 - Focused `TestWSTicketsPostgres`: PASS, 1 parent + 4 subtests, 0 skips; `go build ./...`: PASS. Rollback disables ticket route/consumers and retains inert applied `000007` table.
+
+## PR1b-ws-upgrade Completion
+
+- [x] 4.1 RED real PostgreSQL/Gorilla tests initially failed before the ticket-aware handler existed; they cover exact protocol selection, one-use concurrent/repeated upgrades, invalid/malformed ticket protocol fail-closed with valid legacy credentials, stripped protocol rejection, legacy-only compatibility, proxy preservation, forbidden-workspace consumption, and response secret safety.
+- [x] 4.2 Added `sbs-ticket.` protocol parsing and one-time consumption before workspace authorization. A valid ticket selects the exact offered protocol; no ticket protocol retains the legacy query/header access flow.
+
+### Work Unit Evidence
+
+| Evidence | Exact result |
+|---|---|
+| RED | The real PostgreSQL/Gorilla command `go test ./internal/websocket -run TestTicketWebSocketUpgradePostgres -count=1 -v` failed with ticket consumption temporarily removed: exact/proxy handshakes were rejected, concurrent winners were 0, and invalid ticket protocol downgraded to legacy. |
+| Focused GREEN / runtime harness | `docker exec … bookmarks sh -lc 'cd /workspace/backend && go test ./internal/websocket -run TestTicketWebSocketUpgradePostgres -count=1 -v'`: PASS; 1 parent + 5 scenario subtests, 0 skips. The in-process `httputil.ReverseProxy` is the separate protocol-preservation/stripping runtime harness. |
+| Full affected suites | `go test ./internal/auth ./internal/websocket -count=1 -v`: PASS; auth 3 parents + 12 subtests, websocket 2 parents + 5 scenario subtests, 0 skips. `go build ./...`: PASS; `gofmt -d` and `git diff --check`: clean. |
+| Security / rollback | The ticket is only parsed from `Sec-WebSocket-Protocol`, is never appended to the URL, and malformed/present ticket protocols cannot use legacy credentials. Roll back by reverting `backend/internal/websocket/handler.go` and its integration test, preserving legacy access auth and the already-applied inert ticket schema/issuer. |
