@@ -11,12 +11,12 @@ Ship renewable transport first, then durable desired-state convergence. Slice B 
 | Lifetime | Access JWT is **15 minutes**. Refresh families have **no routine idle or absolute expiry**: remembered sessions end only on current-device sign-out, device/server revocation, reuse compromise, or password change/recovery. |
 | Family security | Device family, hash-only metadata, rotation/reuse detection, explicit and optional admin revocation secure non-expiring sessions without periodic login. |
 | Lost refresh response | Persist UUID `attemptId` before refresh. Transactional rotation derives child secret as `HMAC(parentSecret, attemptId)`, stores only its SHA-256 hash, and accepts retired parent only for that attempt for 60s. Retry returns the same child without server plaintext; other/late reuse revokes family. |
-| Socket credential | `POST /auth/ws-ticket` requires access auth and returns a 30-second single-use opaque ticket in `Sec-WebSocket-Protocol`; upgrade consumes its hash. Header stripping fails closed: no socket, journal pauses/retries, never refresh-token or URL fallback. |
+| Socket credential | `POST /auth/ws-ticket` requires current access authentication plus `X-Client-Id` and returns a 30-second single-use opaque ticket for later `Sec-WebSocket-Protocol` use; upgrade consumes its hash. Header stripping fails closed: no socket, journal pauses/retries, never refresh-token or URL fallback. |
 | Projection | A durable desired-state journal replaces normal destructive rebuild; mapping, not title/URL, is identity. |
 
 ## Slice A — Session Continuity
 
-Migration `000006_refresh_sessions.sql` adds `refresh_families(id,user_id,device_id,revoked_at,reuse_detected_at)` and `refresh_tokens(id,family_id,secret_hash,retired_at,retry_attempt_id,retry_until,rotated_to_id,created_at)`, plus hash-only one-use WS tickets, indexes and cascade FKs. Login/register bind the existing device, create family/token, and return `{accessToken,expiresAt,refreshToken,clientId,user}`. `POST /auth/refresh {refreshToken,attemptId}` rotates atomically; `POST /auth/logout` revokes its family. Invalid/reused refresh is generic `401 unauthenticated`; malformed input is `400`; expired/consumed ticket is `401`. Legacy access-only state becomes `loginRequired`, retaining selection, mapping, cursor, and journal.
+Migration `000006_refresh_sessions.sql` adds `refresh_families(id,user_id,device_id,revoked_at,reuse_detected_at)` and `refresh_tokens(id,family_id,secret_hash,retired_at,retry_attempt_id,retry_until,rotated_to_id,created_at)`. Fix-forward `000007_ws_tickets.sql` adds hash-only one-use WS tickets, indexes and cascade FKs. Login/register require exact `X-Session-Capability: renewable-v1` to return `{accessToken,expiresAt,refreshToken,clientId,user}`; otherwise they retain the access-only response. `POST /auth/refresh {refreshToken,attemptId}` rotates atomically; `POST /auth/logout` revokes its family. Invalid/reused refresh is generic `401 unauthenticated`; malformed input is `400`; expired/consumed ticket is `401`. Legacy access-only state becomes `loginRequired`, retaining selection, mapping, cursor, and journal.
 
 `auth.Service.RevokeAllRefreshFamilies(ctx,userID)` revokes every family in the same transaction as current/future password-change or recovery credential updates. No account UI/endpoints are added. Service tests prove a credential change rejects every family; future handlers use this transaction.
 
@@ -56,7 +56,7 @@ Listeners inspect durable `started` operations by workspace, Chrome/backend ID a
 
 | File | Action | Impact |
 |---|---|---|
-| `backend/migrations/000006_refresh_sessions.sql` | Create | non-expiring families, tokens, tickets |
+| `backend/migrations/000006_refresh_sessions.sql`, `000007_ws_tickets.sql` | Create | non-expiring families/tokens; fix-forward hash-only tickets |
 | `backend/internal/auth/{service,handler,middleware}.go`, `config/config.go` | Modify | rotation, revocation, `RevokeAllRefreshFamilies`, 15m config, ticket routes |
 | `backend/internal/websocket/handler.go` | Modify | fail-closed ticket upgrade |
 | `extension/src/shared/{types,storage,api,session,websocket}.ts` | Modify | secret boundary, transport, journal |

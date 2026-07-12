@@ -24,9 +24,17 @@ var (
 type Service struct {
 	pool           *pgxpool.Pool
 	refresh        refreshStore
+	tickets        *ticketRepository
 	jwtSecret      []byte
 	tokenTTL       time.Duration
 	clientIDHeader string
+}
+
+func (s *Service) CreateWSTicket(ctx context.Context, p Principal) (WSTicket, error) {
+	return s.tickets.create(ctx, p)
+}
+func (s *Service) ConsumeWSTicket(ctx context.Context, ticket string) (Principal, error) {
+	return s.tickets.consume(ctx, ticket)
 }
 
 type refreshStore interface {
@@ -83,6 +91,7 @@ func NewService(pool *pgxpool.Pool, cfg config.AuthConfig) *Service {
 	return &Service{
 		pool:           pool,
 		refresh:        newRefreshRepository(pool, cfg.JWTSecret),
+		tickets:        &ticketRepository{pool: pool},
 		jwtSecret:      cfg.JWTSecret,
 		tokenTTL:       cfg.TokenTTL,
 		clientIDHeader: cfg.ClientIDHeader,

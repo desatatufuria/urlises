@@ -2,11 +2,11 @@
 
 ## Cumulative Status
 
-7/25 tasks complete: PR1a tasks 1.1–1.4 and PR1b-auth tasks 2.1–2.3. The approved delivery remains stacked-to-`develop`, with no `size:exception`.
+10/23 tasks complete: PR1a tasks 1.1–1.4, PR1b-auth tasks 2.1–2.3, and PR1b-ticket tasks 3.1–3.3. The approved delivery remains stacked-to-`develop`, with no `size:exception`. Earlier 7/25 progress text was stale; the dispatcher-counted task checklist is authoritative.
 
 ## Preserved Prior Apply Attempt
 
-The original unsplit PR1 was blocked at 0/4 because its combined migration, domain, handlers, tickets, PostgreSQL coverage, and documentation forecast 685–900 authored lines (the design estimated Slice A at ~510). The replanned 21-task chain split it into PR1a/PR1b; this record preserves that decision.
+The original unsplit PR1 was blocked at 0/4 because its combined migration, domain, handlers, tickets, PostgreSQL coverage, and documentation forecast 685–900 authored lines (the design estimated Slice A at ~510). The replanned 23-task chain split it into PR1a/PR1b; earlier progress described it as 21 tasks, which was a stale count. This record preserves the split decision.
 
 ## PR1a Completion
 
@@ -40,7 +40,7 @@ Backend authored implementation/test/migration delta: 292 lines (7 service + 118
 
 ## PR1b Workload Guard
 
-The former combined PR1b was pending at 4/21. Before production edits, the required minimum was forecast above the 400 authored-line limit: capability-gated auth endpoints and PostgreSQL handler coverage require roughly 250–320 lines; hash-only ticket persistence, real upgrade/subprotocol handling, and proxy-path coverage require roughly 300–380 more. The combined 550–700-line minimum could not be safely compressed without dropping required RED, security, or runtime evidence.
+The former combined PR1b was pending at 4/23. Earlier progress reported 4/21 before dispatcher reconciliation. Before production edits, the required minimum was forecast above the 400 authored-line limit: capability-gated auth endpoints and PostgreSQL handler coverage require roughly 250–320 lines; hash-only ticket persistence, real upgrade/subprotocol handling, and proxy-path coverage require roughly 300–380 more. The combined 550–700-line minimum could not be safely compressed without dropping required RED, security, or runtime evidence.
 
 Recommended split: PR1b-auth implements tasks 2.1 plus the auth portion of 2.3 (capability header, access-only compatibility, refresh/logout, and revoke-all contract); PR1b-ws follows with task 2.2 plus ticket persistence/upgrade and the corresponding portions of 2.3–2.4. No task checkbox changed, no production file changed, and `000006_refresh_sessions.sql` remains untouched; the WS ticket table belongs in fix-forward `000007_ws_tickets.sql` when the WS slice is authorized.
 
@@ -58,3 +58,13 @@ Recommended split: PR1b-auth implements tasks 2.1 plus the auth portion of 2.3 (
 - `DATABASE_URL=… go test ./internal/auth -run 'Test(RenewableAuthHandlerPostgres|RefreshFamiliesPostgres)$' -count=1 -v`: PASS, 10 executed test nodes, 0 skips. The real isolated-schema harness invokes production `database.Migrate`; `go test ./internal/auth -count=1 -v`: PASS, 10 nodes, 0 skips; `go build ./...`: PASS.
 - Authored implementation/test delta is 396 lines (356 additions, 40 deletions), excluding pre-existing SDD split-artifact edits. No migration, WebSocket, extension, admin, SMTP, or TTL/config file changed. Errors/logs do not include submitted refresh values; persistence remains hash-only.
 - Roll back by reverting the three auth source files and handler test while retaining PR1a's inert `000006` rows. PR1b-ws remains pending and alone may add `000007_ws_tickets.sql`.
+
+## PR1b-ws Scope Gate
+
+Dispatcher reconciliation confirms 7/23 completed tasks; 3.1–3.3 remain pending. Before production edits, the required immutable migration plus ticket repository/service/route/upgrade path forecasts 175–205 authored lines. The mandatory PostgreSQL/auth/real-Gorilla/proxy/authorization/secret-safety RED coverage forecasts 250–300 more, and the required evidence adds 30–40: 455–545 authored lines total. This exceeds the hard 400-line unit limit, so no RED or production source was added and no required test was weakened. The stale denominator corrections above are the only changes in this attempt.
+
+## PR1b-ticket Completion
+
+- [x] 3.1–3.3 completed with PostgreSQL creation/hash/DB-clock expiry, atomic one-winner consume, unauthorized cases, bound-principal, endpoint cache/auth/opaque-503 tests.
+- Process deviation: production preceded tests. A temporary consume mutation made the focused suite RED (valid consume unauthorized; binding and concurrency cases failed), then was restored byte-for-byte and GREEN rerun.
+- Focused `TestWSTicketsPostgres`: PASS, 1 parent + 4 subtests, 0 skips; `go build ./...`: PASS. Rollback disables ticket route/consumers and retains inert applied `000007` table.

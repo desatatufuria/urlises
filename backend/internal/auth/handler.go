@@ -111,6 +111,22 @@ func RegisterRoutes(mux *http.ServeMux, service *Service, invitations invitation
 		httpapi.WriteJSON(w, http.StatusOK, principal)
 	})))
 
+	mux.Handle("POST /auth/ws-ticket", service.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		principal, ok := PrincipalFromContext(r.Context())
+		if !ok {
+			httpapi.WriteError(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+		ticket, err := service.CreateWSTicket(r.Context(), principal)
+		if err != nil {
+			writeAuthError(w, err)
+			return
+		}
+		w.Header().Set("Cache-Control", "no-store, no-cache")
+		w.Header().Set("Pragma", "no-cache")
+		httpapi.WriteJSON(w, http.StatusOK, ticket)
+	})))
+
 	if invitations != nil {
 		mux.Handle("POST /invitations/{token}/accept", service.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			principal, ok := PrincipalFromContext(r.Context())
@@ -145,6 +161,8 @@ func writeAuthError(w http.ResponseWriter, err error) {
 	case errors.Is(err, ErrClientBinding):
 		httpapi.WriteError(w, http.StatusConflict, err.Error())
 	case errors.Is(err, ErrRefreshUnavailable):
+		httpapi.WriteError(w, http.StatusServiceUnavailable, "unavailable")
+	case errors.Is(err, ErrTicketUnavailable):
 		httpapi.WriteError(w, http.StatusServiceUnavailable, "unavailable")
 	default:
 		httpapi.WriteError(w, http.StatusBadRequest, err.Error())
