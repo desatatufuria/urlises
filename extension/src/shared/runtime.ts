@@ -1,8 +1,11 @@
 export const ROOT_FOLDER_TITLE = "Shared Bookmarks";
 export const DEFAULT_BACKEND_URL = "http://localhost:8081";
 export const STORAGE_KEY = "sharedBookmarkSyncState";
+export const ACCESS_TOKEN_STORAGE_KEY = "sharedBookmarkSyncAccessToken";
 export const DIAGNOSTIC_LIMIT = 50;
 export const CLIENT_ID_HEADER = "X-Client-Id";
+export const SESSION_CAPABILITY_HEADER = "X-Session-Capability";
+export const RENEWABLE_SESSION_CAPABILITY = "renewable-v1";
 export const SYNC_EVENT_ID_HEADER = "X-Sync-Event-Id";
 export const SYNC_BASE_CURSOR_HEADER = "X-Sync-Base-Cursor";
 export const SYNC_CURSOR_HEADER = "X-Sync-Cursor";

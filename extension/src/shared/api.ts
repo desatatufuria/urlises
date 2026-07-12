@@ -5,6 +5,7 @@ import {
   SYNC_DUPLICATE_HEADER,
   SYNC_EVENT_ID_HEADER,
 } from "./runtime.js";
+import { RefreshError, getRuntimeAccessToken, refreshSession } from "./session.js";
 import type {
   BookmarkDeletePayload,
   BookmarkResource,
@@ -15,6 +16,7 @@ import type {
   OrganizationMembership,
   ReplayResult,
   SessionData,
+  RenewableSession,
   TreeResponse,
   WorkspaceAccess,
 } from "./types.js";
@@ -32,11 +34,12 @@ interface JSONRequestInit extends Omit<RequestInit, "body"> {
   body?: unknown;
 }
 
-export async function login(request: LoginRequest, clientId: string): Promise<SessionData> {
-  return requestJSON<SessionData>(request.backendUrl, "/auth/login", {
+export async function login(request: LoginRequest, clientId: string): Promise<RenewableSession> {
+  return requestJSON<RenewableSession>(request.backendUrl, "/auth/login", {
     method: "POST",
     headers: {
       [CLIENT_ID_HEADER]: clientId,
+      "X-Session-Capability": "renewable-v1",
     },
     body: {
       email: request.email,
@@ -203,14 +206,26 @@ async function requestJSON<T>(backendUrl: string, path: string, init: JSONReques
 }
 
 async function requestRaw(backendUrl: string, path: string, init: JSONRequestInit): Promise<Response> {
-  const response = await fetch(`${backendUrl.replace(/\/$/, "")}${path}`, {
+  const headers = new Headers(init.headers);
+  headers.set("Content-Type", "application/json");
+  if (headers.has("Authorization")) headers.set("Authorization", `Bearer ${getRuntimeAccessToken()}`);
+  const execute = () => fetch(`${backendUrl.replace(/\/$/, "")}${path}`, {
     method: init.method ?? "GET",
-    headers: {
-      "Content-Type": "application/json",
-      ...(init.headers ?? {}),
-    },
+    headers,
     body: init.body === undefined ? undefined : JSON.stringify(init.body),
   });
+  let response = await execute();
+  if (response.status === 401 && headers.has("Authorization")) {
+    try {
+      const session = await refreshSession(backendUrl);
+      headers.set("Authorization", `Bearer ${getRuntimeAccessToken()}`);
+      headers.set(CLIENT_ID_HEADER, session.clientId);
+      response = await execute();
+    } catch (error) {
+      if (error instanceof RefreshError) throw new ApiError(error.message, error.status);
+      throw error;
+    }
+  }
 
   if (!response.ok) {
     let message = response.statusText;

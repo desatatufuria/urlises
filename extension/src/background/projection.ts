@@ -24,7 +24,7 @@ import {
   findReusableBookmarkNode,
   findReusableFolderNode,
 } from "../shared/projection-helpers.js";
-import { setBackendUrl, saveSession, clearSession, ensureClientId } from "../shared/session.js";
+import { setBackendUrl, saveSession, clearSession, ensureClientId, restoreSession, setSessionPauseHandler, bestEffortLogout, withRuntimeAccessToken } from "../shared/session.js";
 import { createProjectionState, getState, resetStatePreservingSettings, setState, updateState } from "../shared/storage.js";
 import type {
   ActivitySignal,
@@ -129,6 +129,8 @@ type WorkspaceResyncLock = {
 const workspaceLocks = new Map<string, WorkspaceResyncLock>();
 
 export async function initializeBackground(): Promise<void> {
+  setSessionPauseHandler(closeAllSockets);
+  await restoreSession();
   const state = await getState();
   if (!state.session || state.selectedWorkspaceIds.length === 0) {
     return;
@@ -150,10 +152,11 @@ export async function login(request: LoginRequest): Promise<UiState> {
 export async function logout(): Promise<UiState> {
   closeAllSockets();
   const state = await getState();
+  void bestEffortLogout(state.settings.backendUrl, state.settings.clientId).catch(() => undefined);
+  await clearSession();
   for (const projection of Object.values(state.projectionsByWorkspaceId)) {
     await removeWorkspaceProjection(projection);
   }
-  await clearSession();
   await resetStatePreservingSettings();
   await log("auth", "signed out and cleared local projections", "info");
   return getUiState();
@@ -491,7 +494,7 @@ async function connectWorkspace(workspaceId: string): Promise<void> {
   socketTokens.set(workspaceId, token);
 
   const isActiveSocket = (): boolean => socketTokens.get(workspaceId) === token;
-  const close = connectWorkspaceSocket(state.settings.backendUrl, state.session, workspaceId, {
+  const close = connectWorkspaceSocket(state.settings.backendUrl, withRuntimeAccessToken(state.session), workspaceId, {
     onAck: async (currentCursor) => {
       if (!isActiveSocket()) {
         return;
@@ -640,6 +643,7 @@ function buildUiState(state: ExtensionState): UiState {
   return {
     state: {
       ...state,
+      session: state.session ? { ...state.session, accessToken: "" } : null,
       activitySignal,
       statusOverview,
     },

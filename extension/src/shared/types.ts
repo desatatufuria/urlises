@@ -11,6 +11,10 @@ export interface SessionData {
   user: User;
 }
 
+export interface RenewableSession extends SessionData {
+  refreshToken: string;
+}
+
 export interface OrganizationMembership {
   organizationId: string;
   organizationName: string;
@@ -165,6 +169,7 @@ export interface ProjectionState {
 export interface ExtensionState {
   settings: BackendSettings;
   session: SessionData | null;
+  authState?: "authenticated" | "loginRequired";
   selectedWorkspaceIds: string[];
   cachedOrganizations: OrganizationMembership[];
   cachedWorkspacesByOrganization: Record<string, WorkspaceAccess[]>;
