@@ -18,10 +18,12 @@ var (
 	ErrUnauthorized       = errors.New("unauthorized")
 	ErrInvalidCredentials = errors.New("invalid credentials")
 	ErrClientBinding      = errors.New("client ID is already bound to another user")
+	ErrRefreshUnavailable = errors.New("refresh operation unavailable")
 )
 
 type Service struct {
 	pool           *pgxpool.Pool
+	refresh        *refreshRepository
 	jwtSecret      []byte
 	tokenTTL       time.Duration
 	clientIDHeader string
@@ -68,10 +70,28 @@ type tokenClaims struct {
 func NewService(pool *pgxpool.Pool, cfg config.AuthConfig) *Service {
 	return &Service{
 		pool:           pool,
+		refresh:        newRefreshRepository(pool, cfg.JWTSecret),
 		jwtSecret:      cfg.JWTSecret,
 		tokenTTL:       cfg.TokenTTL,
 		clientIDHeader: cfg.ClientIDHeader,
 	}
+}
+
+// RevokeAllRefreshFamilies is called by password-change and recovery transactions.
+func (s *Service) RevokeAllRefreshFamilies(ctx context.Context, userID string) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if err := s.RevokeAllRefreshFamiliesTx(ctx, tx, userID); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func (s *Service) RevokeAllRefreshFamiliesTx(ctx context.Context, tx pgx.Tx, userID string) error {
+	return s.refresh.revokeAllTx(ctx, tx, userID)
 }
 
 func (s *Service) ClientIDHeader() string {
