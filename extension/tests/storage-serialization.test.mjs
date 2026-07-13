@@ -109,4 +109,19 @@ test("getState hydrates new projection health defaults from legacy persisted pro
   const finalState = await getState();
   assert.equal(finalState.projectionsByWorkspaceId["workspace-a"].health, "live");
   assert.equal(finalState.projectionsByWorkspaceId["workspace-a"].recoveryAttemptCount, 0);
+  assert.deepEqual(finalState.projectionsByWorkspaceId["workspace-a"].convergenceJournal, {
+    version: 1, phase: "plan", operations: [], localIntents: [], attempts: 0,
+  });
+});
+
+test("fake durable storage restores a journal and pauses an ambiguous started operation", async () => {
+  storageData.clear();
+  await setState(createState({ projectionsByWorkspaceId: { "workspace-a": {
+    workspace: { workspaceId: "workspace-a", workspaceName: "Workspace A", workspaceType: "shared", organizationId: "org-1", organizationName: "Org", role: "viewer" },
+    chromeIdByBackendId: {}, backendIdByChromeId: {}, entityTypeByBackendId: {}, excludedBackendNodeIds: [], lastCursor: 0, status: "idle",
+    convergenceJournal: { version: 1, phase: "apply", operations: [{ status: "started" }], localIntents: [], attempts: 0 },
+  } } }));
+
+  const restored = await getState();
+  assert.equal(restored.projectionsByWorkspaceId["workspace-a"].convergenceJournal.pauseReason, "ambiguous-operation");
 });

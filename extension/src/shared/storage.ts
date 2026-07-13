@@ -1,5 +1,6 @@
 import { DEFAULT_BACKEND_URL, STORAGE_KEY } from "./runtime.js";
 import type { ActivitySignal, ExtensionState, ProjectionState } from "./types.js";
+import { normalizeJournal } from "../background/convergence.js";
 
 let stateMutationQueue: Promise<unknown> = Promise.resolve();
 
@@ -79,6 +80,7 @@ function normalizeProjectionState(projection: ProjectionState): ProjectionState 
     health: projection.health ?? deriveLegacyHealth(projection),
     recoveryAttemptCount: projection.recoveryAttemptCount ?? 0,
     activityRevision: projection.activityRevision ?? 0,
+    convergenceJournal: normalizeJournal(projection.convergenceJournal),
   };
 }
 

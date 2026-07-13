@@ -1,0 +1,63 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+
+const convergence = await import("../dist/background/convergence.js");
+
+const desired = [{ backendId: "folder-a", type: "folder", title: "A", position: 0 }];
+const root = { chromeId: "managed-root-42", type: "folder", managed: true, position: 0 };
+const base = { epoch: 4, snapshotId: "snapshot-1", cursor: 9, managedRootChromeId: root.chromeId, desired, inventory: [root], mappings: {} };
+
+test("same snapshot has stable operation IDs and ambiguous candidates never create", () => {
+  const input = base;
+  assert.deepEqual(convergence.plan(input), convergence.plan(input));
+  const ambiguous = convergence.plan({ ...input, inventory: [root,
+    { chromeId: "a", parentChromeId: root.chromeId, type: "folder", title: "A", position: 0, managed: true },
+    { chromeId: "b", parentChromeId: root.chromeId, type: "folder", title: "A", position: 0, managed: true },
+  ] });
+  assert.equal(ambiguous.pauseReason, "identity-ambiguous");
+  assert.equal(ambiguous.operations.length, 0);
+  const collisionA = convergence.plan({ ...base, desired: [{ backendId: "bookmark", type: "bookmark", title: "A:B", url: "C", position: 0 }] });
+  const collisionB = convergence.plan({ ...base, desired: [{ backendId: "bookmark", type: "bookmark", title: "A", url: "B:C", position: 0 }] });
+  assert.notEqual(collisionA.operations[0].id, collisionB.operations[0].id);
+});
+
+test("planner pauses invalid bijections and never deletes outside supplied managed inventory", () => {
+  const input = { ...base, epoch: 1, desired: [], mappings: { backendToChrome: { a: "x", b: "x" }, chromeToBackend: { x: "a" }, }, inventory: [root, { chromeId: "outside", type: "bookmark", managed: false, position: 0 }] };
+  assert.equal(convergence.plan(input).pauseReason, "mapping-not-bijective");
+  const deletion = convergence.plan({ ...input, mappings: {}, inventory: [root, { chromeId: "inside", type: "bookmark", managed: true, position: 0 }, { chromeId: "outside", type: "bookmark", managed: false, position: 0 }] });
+  assert.deepEqual(deletion.operations.map((op) => op.chromeId), ["inside"]);
+  assert.equal(convergence.plan({ ...base, managedRootChromeId: "missing" }).pauseReason, "managed-root-missing");
+});
+
+test("adoption is claimed and mapped nodes are validated and reconciled", () => {
+  const adopted = { chromeId: "adopted", parentChromeId: root.chromeId, type: "folder", title: "A", position: 0, managed: true };
+  const adoption = convergence.plan({ ...base, inventory: [root, adopted] });
+  assert.deepEqual(adoption.operations.map((op) => [op.kind, op.chromeId]), [["adopt", "adopted"]]);
+  const mappings = { backendToChrome: { "folder-a": "adopted" }, chromeToBackend: { adopted: "folder-a" } };
+  assert.deepEqual(convergence.plan({ ...base, inventory: [root, adopted], mappings }).operations, []);
+  assert.equal(convergence.plan({ ...base, mappings }).pauseReason, "stale-mapping");
+  const divergent = convergence.plan({ ...base, inventory: [root, { ...adopted, title: "Old" }], mappings });
+  assert.deepEqual(divergent.operations.map((op) => [op.kind, op.chromeId]), [["reconcile", "adopted"]]);
+});
+
+test("scheduler coalesces latest epoch and stale checkpoints stop", () => {
+  let journal = convergence.emptyJournal();
+  journal = convergence.requestEpoch(journal, 1);
+  journal = convergence.requestEpoch(journal, 5);
+  journal = convergence.requestEpoch(journal, 3);
+  assert.deepEqual([journal.epoch, journal.queuedEpoch], [1, 5]);
+  journal = convergence.checkpoint(journal, 1);
+  assert.deepEqual([journal.epoch, journal.queuedEpoch], [5, undefined]);
+  assert.equal(convergence.checkpoint(journal, 1).epoch, 5);
+  const otherWorkspace = convergence.requestEpoch(convergence.emptyJournal(), 9);
+  assert.deepEqual([journal.epoch, otherWorkspace.epoch], [5, 9]);
+  const paused = convergence.requestEpoch({ ...convergence.emptyJournal(), epoch: 1, queuedEpoch: 2, phase: "paused", pauseReason: "stale-mapping" }, 5);
+  assert.deepEqual([paused.phase, convergence.checkpoint(paused, 1).phase], ["paused", "paused"]);
+});
+
+test("caps, legacy migration, and started restart ambiguity pause safely", () => {
+  assert.equal(convergence.normalizeJournal({ operations: Array(501).fill({}) }).pauseReason, "operation-overflow");
+  assert.equal(convergence.normalizeJournal({ localIntents: Array(101).fill({}) }).pauseReason, "intent-overflow");
+  assert.deepEqual(convergence.normalizeJournal(undefined), convergence.emptyJournal());
+  assert.equal(convergence.normalizeJournal({ version: 1, operations: [{ status: "started" }] }).pauseReason, "ambiguous-operation");
+});

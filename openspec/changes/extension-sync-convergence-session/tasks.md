@@ -76,8 +76,8 @@ Candidate paths: `extension/src/shared/{api,session,websocket}.ts`, `extension/s
 
 ## Phase 7: PR3 — Dormant convergence planner/journal
 
-- [ ] 7.1 RED: planner/reducer invariants for N snapshots, bijection, epochs/latest queue, caps, restart migration, ambiguity pause, and no outside-root deletion.
-- [ ] 7.2 Add versioned journal/checkpoints/scheduler behind `convergent_projection` off; document diagnostics and record fake-storage restart/rollback evidence.
+- [x] 7.1 RED: planner/reducer invariants for N snapshots, bijection, epochs/latest queue, caps, restart migration, ambiguity pause, and no outside-root deletion.
+- [x] 7.2 Add versioned journal/checkpoints/scheduler behind `convergent_projection` off; document diagnostics and record fake-storage restart/rollback evidence.
 
 ## Phase 8: PR4a — Ownership and exact-once replay
 

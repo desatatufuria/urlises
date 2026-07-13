@@ -142,6 +142,29 @@ export interface StatusOverview {
 
 export type ProjectionHealth = "bootstrap" | "live" | "recovering" | "degraded";
 
+export type ConvergencePhase = "plan" | "apply" | "replay" | "live" | "paused";
+
+export interface ConvergenceOperation {
+  id: string;
+  kind: "create" | "adopt" | "reconcile" | "delete";
+  backendId: string;
+  chromeId?: string;
+  fingerprint: string;
+  status: "planned" | "started" | "done";
+}
+
+export interface ConvergenceJournal {
+  version: 1;
+  epoch?: number;
+  desired?: { snapshotId: string; cursor: number };
+  phase: ConvergencePhase;
+  operations: ConvergenceOperation[];
+  localIntents: { eventId: string; kind: string; payload: unknown; status: "queued" | "sent" | "acked" }[];
+  attempts: number;
+  pauseReason?: "ambiguous-operation" | "identity-ambiguous" | "mapping-not-bijective" | "managed-root-missing" | "stale-mapping" | "operation-overflow" | "intent-overflow";
+  queuedEpoch?: number;
+}
+
 export interface ProjectionState {
   workspace: WorkspaceAccess;
   rootChromeId?: string;
@@ -164,6 +187,7 @@ export interface ProjectionState {
   lastActivityAt?: string;
   lastActivity?: ProjectionActivityDetail;
   activityRevision?: number;
+  convergenceJournal?: ConvergenceJournal;
 }
 
 export interface ExtensionState {
