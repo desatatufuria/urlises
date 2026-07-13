@@ -89,7 +89,14 @@ globalThis.chrome = {
           callback();
         }, 0);
       },
+      remove(key, callback) {
+        setTimeout(() => {
+          storageData.delete(key);
+          callback();
+        }, 0);
+      },
     },
+    session: { remove(_key, callback) { callback(); } },
   },
   bookmarks: {
     get(id, callback) {
@@ -158,8 +165,9 @@ class MockWebSocket {
 
   static CLOSED = 3;
 
-  constructor(url) {
+  constructor(url, protocols = []) {
     this.url = url;
+    this.protocol = protocols[0] ?? "";
     this.listeners = { open: [], message: [], error: [], close: [] };
     this.closed = false;
     this.readyState = MockWebSocket.OPEN;
@@ -220,19 +228,28 @@ import {
   handleBookmarkChanged,
   handleBookmarkMoved,
   handleBookmarkRemoved,
+  logout,
   markActivitySeen,
   projectionTestHooks,
   runCoalescedWorkspaceTask,
+  setSelectedWorkspaces,
 } from "../dist/background/projection.js";
 import { getState, setState } from "../dist/shared/storage.js";
 import { connectWorkspaceSocket } from "../dist/shared/websocket.js";
 
 const fetchLog = [];
 let fetchHandlers = [];
+let pendingTicketResponse;
 
 globalThis.fetch = async (input) => {
   const url = String(input);
   fetchLog.push(url);
+  if (url.endsWith("/auth/ws-ticket")) {
+    if (pendingTicketResponse) {
+      return pendingTicketResponse.promise;
+    }
+    return jsonResponse({ ticket: `ticket-${fetchLog.length}`, expiresAt: "2099-01-01T00:00:30.000Z" });
+  }
   const handler = fetchHandlers.find((candidate) => candidate.match(url));
   if (!handler) {
     throw new Error(`Unhandled fetch: ${url}`);
@@ -364,6 +381,7 @@ async function resetRuntime() {
   MockWebSocket.reset();
   fetchLog.length = 0;
   fetchHandlers = [];
+  pendingTicketResponse = undefined;
   enforceStrictIndices = false;
   globalThis.chrome.runtime.lastError = null;
   projectionTestHooks.resetRuntimeState();
@@ -429,7 +447,7 @@ test("connectWorkspaceSocket sends keepalive only after an idle window and clear
       onError: async () => {},
     };
 
-    const close = connectWorkspaceSocket("http://localhost:8081", createRuntimeState().session, "workspace-1", callbacks);
+    const close = connectWorkspaceSocket("http://localhost:8081", "workspace-1", "ticket-1", callbacks);
     const socket = MockWebSocket.instances[0];
 
     await socket.emitOpen();
@@ -454,6 +472,19 @@ test("connectWorkspaceSocket sends keepalive only after an idle window and clear
     globalThis.setTimeout = realSetTimeout;
     globalThis.clearTimeout = realClearTimeout;
   }
+});
+
+test("connectWorkspaceSocket fails closed when the negotiated ticket protocol differs", async () => {
+  const errors = [];
+  connectWorkspaceSocket("http://localhost:8081", "workspace-1", "ticket-1", {
+    onAck: async () => {}, onEvent: async () => {}, onResyncRequired: async () => {}, onClose: async () => {},
+    onError: async (message) => { errors.push(message); },
+  });
+  const socket = MockWebSocket.instances[0];
+  socket.protocol = "sbs-ticket.other";
+  await socket.emitOpen();
+  assert.equal(socket.closed, true);
+  assert.deepEqual(errors, ["websocket protocol rejected for workspace workspace-1"]);
 });
 
 test("filterFoldersForProjection preserves local exclusions across snapshot rebuilds", () => {
@@ -741,8 +772,8 @@ test("connectWorkspace replays ack gaps before returning to live health", async 
   await MockWebSocket.instances[0].emitMessage({ type: "ack", currentCursor: 7 });
 
   const projection = (await getState()).projectionsByWorkspaceId["workspace-1"];
-  assert.equal(fetchLog.length, 1);
-  assert.match(fetchLog[0], /afterCursor=5$/);
+  assert.equal(fetchLog.length, 2);
+  assert.match(fetchLog[1], /afterCursor=5$/);
   assert.equal(projection.lastCursor, 7);
   assert.equal(projection.health, "live");
   assert.equal(projection.status, "ready");
@@ -767,6 +798,40 @@ test("connectWorkspace silently reconnects after socket close and restores live 
   assert.equal(projection.status, "ready");
   assert.equal(projection.recoveryAttemptCount, 0);
 });
+
+test("concurrent connection triggers share one ticket and one active socket", async () => {
+  await setState(createRuntimeState());
+  await Promise.all([
+    projectionTestHooks.connectWorkspace("workspace-1"),
+    projectionTestHooks.connectWorkspace("workspace-1"),
+    projectionTestHooks.connectWorkspace("workspace-1"),
+  ]);
+  assert.equal(MockWebSocket.instances.length, 1);
+  assert.equal(fetchLog.filter((url) => url.endsWith("/auth/ws-ticket")).length, 1);
+});
+
+for (const [action, invalidate] of [
+  ["logout", () => logout()],
+  ["workspace deselection", () => setSelectedWorkspaces([])],
+]) {
+  test(`ticket completion after ${action} does not open or reconnect a socket`, async () => {
+    const ticketResponse = deferred();
+    pendingTicketResponse = ticketResponse;
+    fetchHandlers = [{ match: (url) => url.endsWith("/organizations"), respond: () => jsonResponse({ organizations: [] }) }];
+    const connection = projectionTestHooks.connectWorkspace("workspace-1");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.equal(fetchLog.filter((url) => url.endsWith("/auth/ws-ticket")).length, 1);
+
+    await invalidate();
+    ticketResponse.resolve(jsonResponse({ ticket: "stale-ticket", expiresAt: "2099-01-01T00:00:30.000Z" }));
+    await connection;
+    await flushMicrotasks();
+
+    assert.equal(MockWebSocket.instances.length, 0);
+    assert.deepEqual(projectionTestHooks.socketRuntimeCounts(), { tokens: 0, closers: 0, flights: 0 });
+    assert.equal(fetchLog.filter((url) => url.endsWith("/auth/ws-ticket")).length, 1);
+  });
+}
 
 test("live remote activity updates revision metadata and markActivitySeen acknowledges it", async () => {
   bookmarkNodes.set("workspace-node", createBookmarkNode({ id: "workspace-node", parentId: "1", title: "Workspace", index: 0 }));

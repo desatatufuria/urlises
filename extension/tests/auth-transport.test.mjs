@@ -17,6 +17,7 @@ const session = await import("../dist/shared/session.js");
 const api = await import("../dist/shared/api.js");
 const storage = await import("../dist/shared/storage.js");
 const projection = await import("../dist/background/projection.js");
+const websocket = await import("../dist/shared/websocket.js");
 
 const user = { id: "user-1", email: "user@example.test" };
 const renewable = (accessToken = "access-1", refreshToken = "refresh-1") => ({
@@ -139,4 +140,36 @@ test("lost response reuses attempt, while invalid and operational failures prese
   await assert.rejects(session.refreshSession("https://api.test"));
   assert.equal(data.get("sharedBookmarkSyncPrivate"), undefined);
   assert.equal(data.get("sharedBookmarkSyncState").authState, "loginRequired");
+});
+
+test("ticket acquisition renews once and websocket credentials stay out of the URL", async () => {
+  await session.saveSession(renewable("expired"));
+  const requests = [];
+  globalThis.fetch = async (url, init) => {
+    requests.push({ url, auth: new Headers(init.headers).get("Authorization") });
+    if (url.endsWith("/auth/refresh")) return response(200, renewable("fresh", "refresh-2"));
+    return requests.at(-1).auth === "Bearer fresh"
+      ? response(200, { ticket: "one-use-ticket", expiresAt: "2099-01-01T00:00:30.000Z" })
+      : response(401, { error: "expired" });
+  };
+  const ticket = await api.createWSTicket("https://api.test", { ...renewable(), accessToken: "" });
+  assert.deepEqual(ticket, { ticket: "one-use-ticket", expiresAt: "2099-01-01T00:00:30.000Z" });
+  assert.deepEqual(requests.map((request) => request.auth), ["Bearer expired", null, "Bearer fresh"]);
+
+  const constructed = [];
+  class FakeWebSocket {
+    static OPEN = 1;
+    constructor(url, protocols) { this.url = url; this.protocols = protocols; this.protocol = protocols[0]; this.readyState = 1; constructed.push(this); }
+    addEventListener() {}
+    close() {}
+    send() {}
+  }
+  globalThis.WebSocket = FakeWebSocket;
+  websocket.connectWorkspaceSocket("https://api.test", "workspace-1", ticket.ticket, {
+    onAck() {}, onEvent() {}, onResyncRequired() {}, onClose() {}, onError() {},
+  });
+  assert.match(constructed[0].url, /workspaceId=workspace-1/);
+  assert.doesNotMatch(constructed[0].url, /accessToken|clientId|one-use-ticket/);
+  assert.deepEqual(constructed[0].protocols, ["sbs-ticket.one-use-ticket"]);
+  assert.doesNotMatch(JSON.stringify((await storage.getState()).diagnostics), /one-use-ticket|expired|fresh|refresh-2/);
 });

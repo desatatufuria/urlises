@@ -7,6 +7,7 @@ import {
   getWorkspaceTree,
   getWorkspaces,
   login as apiLogin,
+  createWSTicket,
   parseBookmarkDeletePayload,
   parseFolderDeletePayload,
   replayEvents,
@@ -24,7 +25,7 @@ import {
   findReusableBookmarkNode,
   findReusableFolderNode,
 } from "../shared/projection-helpers.js";
-import { setBackendUrl, saveSession, clearSession, ensureClientId, restoreSession, setSessionPauseHandler, bestEffortLogout, withRuntimeAccessToken } from "../shared/session.js";
+import { setBackendUrl, saveSession, clearSession, ensureClientId, restoreSession, setSessionPauseHandler, bestEffortLogout } from "../shared/session.js";
 import { createProjectionState, getState, resetStatePreservingSettings, setState, updateState } from "../shared/storage.js";
 import type {
   ActivitySignal,
@@ -62,6 +63,7 @@ import type { BookmarkChangeInfo, BookmarkMoveInfo, BookmarkRemoveInfo } from ".
 
 const socketClosers = new Map<string, () => void>();
 const socketTokens = new Map<string, symbol>();
+const socketConnectFlights = new Map<string, Promise<void>>();
 const suppressedChromeIds = new Set<string>();
 const abandonedMutationKeys = new Map<string, ReturnType<typeof setTimeout>>();
 const pendingRemoteBookmarkOps = new Map<string, PendingRemoteBookmarkOp>();
@@ -118,6 +120,7 @@ export const projectionTestHooks = {
   recoverWorkspace,
   replayWorkspaceDelta,
   resetRuntimeState,
+  socketRuntimeCounts: () => ({ tokens: socketTokens.size, closers: socketClosers.size, flights: socketConnectFlights.size }),
 };
 
 type WorkspaceResyncLock = {
@@ -483,18 +486,57 @@ async function ensureWorkspaceProjection(workspaceId: string, reason: string): P
 }
 
 async function connectWorkspace(workspaceId: string): Promise<void> {
+  const active = socketConnectFlights.get(workspaceId);
+  if (active) {
+    return active;
+  }
+  const flight = connectWorkspaceNow(workspaceId).finally(() => {
+    if (socketConnectFlights.get(workspaceId) === flight) {
+      socketConnectFlights.delete(workspaceId);
+    }
+  });
+  socketConnectFlights.set(workspaceId, flight);
+  return flight;
+}
+
+async function connectWorkspaceNow(workspaceId: string): Promise<void> {
   const state = await getState();
   const projection = state.projectionsByWorkspaceId[workspaceId];
-  if (!state.session || !projection) {
+  if (!state.session || !state.selectedWorkspaceIds.includes(workspaceId) || !projection) {
     return;
   }
 
   closeWorkspaceSocket(workspaceId);
   const token = Symbol(workspaceId);
   socketTokens.set(workspaceId, token);
+  const isCurrent = (latest: typeof state): boolean => socketTokens.get(workspaceId) === token
+    && Boolean(latest.session)
+    && latest.authState !== "loginRequired"
+    && latest.selectedWorkspaceIds.includes(workspaceId)
+    && Boolean(latest.projectionsByWorkspaceId[workspaceId]);
+
+  let ticket: string;
+  try {
+    ticket = (await createWSTicket(state.settings.backendUrl, state.session)).ticket;
+  } catch {
+    const latest = await getState();
+    if (!isCurrent(latest)) {
+      return;
+    }
+    await log(`ws:${workspaceId}`, "websocket ticket unavailable", "warn");
+    if (await enterRecovery(workspaceId, "websocket ticket unavailable")) {
+      setTimeout(() => { void connectWorkspace(workspaceId); }, 250);
+    }
+    return;
+  }
+
+  const latest = await getState();
+  if (!isCurrent(latest)) {
+    return;
+  }
 
   const isActiveSocket = (): boolean => socketTokens.get(workspaceId) === token;
-  const close = connectWorkspaceSocket(state.settings.backendUrl, withRuntimeAccessToken(state.session), workspaceId, {
+  const close = connectWorkspaceSocket(latest.settings.backendUrl, workspaceId, ticket, {
     onAck: async (currentCursor) => {
       if (!isActiveSocket()) {
         return;
@@ -1968,6 +2010,7 @@ async function materializeChildren(
 }
 
 function closeWorkspaceSocket(workspaceId: string): void {
+  socketTokens.delete(workspaceId);
   const closer = socketClosers.get(workspaceId);
   if (!closer) {
     return;
@@ -1977,6 +2020,7 @@ function closeWorkspaceSocket(workspaceId: string): void {
 }
 
 function closeAllSockets(): void {
+  socketTokens.clear();
   for (const [workspaceId, close] of socketClosers.entries()) {
     socketClosers.delete(workspaceId);
     close();
@@ -1987,6 +2031,7 @@ function resetRuntimeState(): void {
   closeAllSockets();
   socketClosers.clear();
   socketTokens.clear();
+  socketConnectFlights.clear();
   suppressedChromeIds.clear();
   pendingRemoteBookmarkOps.clear();
   for (const timeout of abandonedMutationKeys.values()) {

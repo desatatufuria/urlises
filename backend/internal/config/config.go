@@ -133,7 +133,7 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 
-	tokenTTL, err := envDuration("AUTH_TOKEN_TTL", 24*time.Hour)
+	tokenTTL, err := envDuration("AUTH_TOKEN_TTL", 15*time.Minute)
 	if err != nil {
 		return Config{}, err
 	}

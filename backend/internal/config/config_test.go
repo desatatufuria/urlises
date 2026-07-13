@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"testing"
+	"time"
 )
 
 func TestLoadMailConfig(t *testing.T) {
@@ -39,6 +40,21 @@ func TestLoadMailConfig(t *testing.T) {
 				t.Fatal("none auth retained credentials")
 			}
 		})
+	}
+}
+
+func TestLoadAuthTokenTTL(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgres://example")
+	t.Setenv("AUTH_JWT_SECRET", "test-secret")
+	t.Setenv("AUTH_TOKEN_TTL", "")
+	cfg, err := Load()
+	if err != nil || cfg.Auth.TokenTTL != 15*time.Minute {
+		t.Fatalf("default TokenTTL = %v, %v; want 15m, nil", cfg.Auth.TokenTTL, err)
+	}
+	t.Setenv("AUTH_TOKEN_TTL", "2s")
+	cfg, err = Load()
+	if err != nil || cfg.Auth.TokenTTL != 2*time.Second {
+		t.Fatalf("override TokenTTL = %v, %v; want 2s, nil", cfg.Auth.TokenTTL, err)
 	}
 }
 

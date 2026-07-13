@@ -64,15 +64,15 @@ Candidate paths: `extension/src/shared/{types,storage,api,session}.ts`, `extensi
 
 - [x] 5.1 RED: renewable-capability login; private durable refresh absent from UI state; legacy access-only → `loginRequired` preserving selection/mappings/cursor; five 401s → one refresh; one same-header/body replay; response-loss retry; restart recovery; invalid/revoked pause/preserve.
 - [x] 5.2 Implement storage/types/session coordinator, authenticated REST transport, and background wiring; exclude WebSocket ticket use, TTL cutover, and convergence changes.
-- [ ] 5.3 Separately record Chromium login/restart/REST-expiry, private-state inspection, and rollback evidence.
+- [x] 5.3 Separately record Chromium login/restart/REST-expiry, private-state inspection, and rollback evidence.
 
 ## Phase 6: PR2b — Extension ticket WebSocket and TTL cutover
 
 Candidate paths: `extension/src/shared/{api,session,websocket}.ts`, `extension/src/background/{service-worker,projection}.ts`, `extension/tests/auth-transport.test.mjs`, `backend/config/config.go`.
 
-- [ ] 6.1 RED: ticket acquisition via renewable transport, subprotocol/no URL credential, reconnect/cursor resume, invalid ticket/refresh pause, concurrent reconnect, and secret-free diagnostics.
-- [ ] 6.2 Wire only required websocket/service-worker/projection paths; after compatibility proof set backend TTL to 15m and stop extension legacy URL tokens while retaining the backend legacy route.
-- [ ] 6.3 Separately record Chromium socket-expiry/reconnect, docs/threat matrix, cutover and rollback evidence.
+- [x] 6.1 RED: ticket acquisition via renewable transport, subprotocol/no URL credential, reconnect/cursor resume, invalid ticket/refresh pause, concurrent reconnect, and secret-free diagnostics.
+- [x] 6.2 Wire only required websocket/service-worker/projection paths; after compatibility proof set backend TTL to 15m and stop extension legacy URL tokens while retaining the backend legacy route.
+- [x] 6.3 Separately record Chromium socket-expiry/reconnect, docs/threat matrix, cutover and rollback evidence.
 
 ## Phase 7: PR3 — Dormant convergence planner/journal
 

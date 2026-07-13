@@ -21,6 +21,11 @@ import type {
   WorkspaceAccess,
 } from "./types.js";
 
+export interface WSTicket {
+  ticket: string;
+  expiresAt: string;
+}
+
 export class ApiError extends Error {
   constructor(
     message: string,
@@ -77,6 +82,10 @@ export async function replayEvents(backendUrl: string, session: SessionData, wor
   return requestJSON<ReplayResult>(backendUrl, `/sync/events?workspaceId=${encodeURIComponent(workspaceId)}&afterCursor=${afterCursor}`, {
     headers: authHeaders(session),
   });
+}
+
+export function createWSTicket(backendUrl: string, session: SessionData): Promise<WSTicket> {
+  return requestJSON<WSTicket>(backendUrl, "/auth/ws-ticket", { method: "POST", headers: authHeaders(session) });
 }
 
 export async function createFolder(

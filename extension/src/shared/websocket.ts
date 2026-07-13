@@ -1,4 +1,4 @@
-import type { SessionData, SyncEnvelope } from "./types.js";
+import type { SyncEnvelope } from "./types.js";
 
 const KEEPALIVE_IDLE_MS = 20_000;
 const KEEPALIVE_PAYLOAD = JSON.stringify({ type: "keepalive" });
@@ -13,12 +13,13 @@ export interface SyncSocketCallbacks {
 
 export function connectWorkspaceSocket(
   backendUrl: string,
-  session: SessionData,
   workspaceId: string,
+  ticket: string,
   callbacks: SyncSocketCallbacks,
 ): () => void {
-  const wsUrl = buildWebsocketUrl(backendUrl, workspaceId, session);
-  const socket = new WebSocket(wsUrl);
+  const wsUrl = buildWebsocketUrl(backendUrl, workspaceId);
+  const protocol = `sbs-ticket.${ticket}`;
+  const socket = new WebSocket(wsUrl, [protocol]);
   let keepaliveTimeout: ReturnType<typeof setTimeout> | undefined;
 
   const clearKeepalive = (): void => {
@@ -49,6 +50,11 @@ export function connectWorkspaceSocket(
   };
 
   socket.addEventListener("open", () => {
+    if (socket.protocol !== protocol) {
+      void callbacks.onError(`websocket protocol rejected for workspace ${workspaceId}`);
+      socket.close();
+      return;
+    }
     scheduleKeepalive();
   });
 
@@ -88,12 +94,10 @@ export function connectWorkspaceSocket(
   };
 }
 
-function buildWebsocketUrl(backendUrl: string, workspaceId: string, session: SessionData): string {
+function buildWebsocketUrl(backendUrl: string, workspaceId: string): string {
   const base = new URL(backendUrl);
   base.protocol = base.protocol === "https:" ? "wss:" : "ws:";
   base.pathname = "/sync/ws";
   base.searchParams.set("workspaceId", workspaceId);
-  base.searchParams.set("accessToken", session.accessToken);
-  base.searchParams.set("clientId", session.clientId);
   return base.toString();
 }
