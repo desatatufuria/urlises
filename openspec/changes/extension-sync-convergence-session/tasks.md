@@ -14,7 +14,7 @@ Chained PRs recommended: Yes
 Chain strategy: stacked-to-main
 400-line budget risk: High
 
-Progress: 20/30. PR4a has no implementation or test changes; PR4h precedes PR4a1a.
+Progress: 22/30. PR4a has no implementation or test changes; PR4h precedes PR4a1a.
 
 ```text
 develop ← PR1a ← PR1b-auth ← PR1b-ticket ← PR1b-ws-upgrade ← PR2a REST ← PR2b WS/TTL ← PR3 journal ← PR4h harness ← PR4a1a create/delete ← PR4a1b update/move ← PR4a2 outbox ← PR4b repair
@@ -68,8 +68,8 @@ develop ← PR1a ← PR1b-auth ← PR1b-ticket ← PR1b-ws-upgrade ← PR2a REST
 
 Candidate paths: `extension/tests/{helpers/fake-chrome,convergence}.mjs`, `extension/package.json`.
 
-- [ ] 8.1 RED: self-test structured-cloned persistence, one callback mode at a time, before/after/delayed/duplicate/reordered delivery, workspace trees, module/runtime reset, and zero open timers/sockets; add no PR4 behavior assertions.
-- [ ] 8.2 Build reusable fake Chrome bookmarks/storage/runtime bus with controllable mutator promises, explicit timer/socket teardown, persisted-worker reload, and backend fetch/mutation recording utilities; keep the suite green without skipped/failing cases.
+- [x] 8.1 RED: self-test structured-cloned persistence, one callback mode at a time, before/after/delayed/duplicate/reordered delivery, workspace trees, module/runtime reset, and zero open timers/sockets; add no PR4 behavior assertions.
+- [x] 8.2 Build reusable fake Chrome bookmarks/storage/runtime bus with controllable mutator promises, explicit timer/socket teardown, persisted-worker reload, and backend fetch/mutation recording utilities; keep the suite green without skipped/failing cases.
 
 ## Phase 9: PR4a1a — Durable create/delete ownership
 
