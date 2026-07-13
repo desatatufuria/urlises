@@ -151,6 +151,7 @@ export interface ConvergenceOperation {
   chromeId?: string;
   fingerprint: string;
   status: "planned" | "started" | "done";
+  ownership?: { workspaceId: string; type: "folder" | "bookmark"; parentChromeId: string; title: string; url?: string; index: number };
 }
 
 export interface ConvergenceJournal {

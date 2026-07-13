@@ -14,7 +14,7 @@ Chained PRs recommended: Yes
 Chain strategy: stacked-to-main
 400-line budget risk: High
 
-Progress: 24/34. PR4h2 is complete; create ownership precedes delete ownership.
+Progress: 26/34. PR4a1a-create is complete; delete ownership follows.
 
 ```text
 develop ← PR1a ← PR1b-auth ← PR1b-ticket ← PR1b-ws-upgrade ← PR2a REST ← PR2b WS/TTL ← PR3 journal ← PR4h harness ← PR4h2 harness fidelity ← PR4a1a-create ← PR4a1a-delete ← PR4a1b update/move ← PR4a2 outbox ← PR4b repair
@@ -84,8 +84,8 @@ Candidate paths: `extension/tests/{helpers/fake-chrome,chrome-harness.test}.mjs`
 
 Candidate paths: `extension/src/background/{projection,bookmark-listeners,convergence}.ts`, `extension/src/shared/{types,storage}.ts`, `extension/tests/convergence.test.mjs`.
 
-- [ ] 10.1 RED: prove remote folder/bookmark create persists `started` before mutation; `onCreated` early/delayed/duplicate/restart correlation, final parent/type/title/url/index verification, workspace isolation, and unmatched local create exactly once.
-- [ ] 10.2 Add create-only journal ownership and `onCreated` correlation; checkpoint only after final verification while retaining unmatched-local create exactly once. Exclude delete/update/move/outbox/resync replacement.
+- [x] 10.1 RED: prove remote folder/bookmark create persists `started` before mutation; `onCreated` early/delayed/duplicate/restart correlation, final parent/type/title/url/index verification, workspace isolation, and unmatched local create exactly once.
+- [x] 10.2 Add create-only journal ownership and `onCreated` correlation; checkpoint only after final verification while retaining unmatched-local create exactly once. Exclude delete/update/move/outbox/resync replacement.
 
 ## Phase 11: PR4a1a-delete — Durable delete ownership
 

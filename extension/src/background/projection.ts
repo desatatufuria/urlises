@@ -116,6 +116,7 @@ class RemoteApplyError extends Error {
 }
 
 export const projectionTestHooks = {
+  applyRemoteEnvelope,
   connectWorkspace,
   recoverWorkspace,
   replayWorkspaceDelta,
@@ -225,7 +226,8 @@ export async function resyncAll(): Promise<UiState> {
   return getUiState();
 }
 
-export async function handleBookmarkCreated(_id: string, node: chrome.bookmarks.BookmarkTreeNode): Promise<void> {
+export async function handleBookmarkCreated(id: string, node: chrome.bookmarks.BookmarkTreeNode): Promise<void> {
+  if (await ownsRemoteCreate(id, node)) return;
   if (isSuppressed(node.id) || isSuppressed(node.parentId)) {
     return;
   }
@@ -975,6 +977,8 @@ async function applyRemoteFolderUpsert(
       ...baseContext,
       branch: "create",
     });
+    const ownership = await startRemoteCreate(workspaceId, event, folder.id, "folder", parentChromeId, folder.name, undefined, folder.position);
+    if (!ownership) return;
     const created = await withSuppression(
       async () => {
         try {
@@ -991,6 +995,7 @@ async function applyRemoteFolderUpsert(
     await updateProjectionState(workspaceId, (current) => {
       setMapping(current, folder.id, created.id, "folder");
     });
+    await finishRemoteCreate(workspaceId, ownership, created.id);
     return;
   }
 
@@ -1075,6 +1080,8 @@ async function applyRemoteBookmarkUpsert(
       ...baseContext,
       branch: "create",
     });
+    const ownership = await startRemoteCreate(workspaceId, event, bookmark.id, "bookmark", parentChromeId, bookmark.title, bookmark.url, bookmark.position);
+    if (!ownership) return;
     const created = await withSuppression(
       async () => {
         try {
@@ -1091,6 +1098,7 @@ async function applyRemoteBookmarkUpsert(
     await updateProjectionState(workspaceId, (current) => {
       setMapping(current, bookmark.id, created.id, "bookmark");
     });
+    await finishRemoteCreate(workspaceId, ownership, created.id);
     return;
   }
 
@@ -1329,6 +1337,50 @@ async function updateProjectionState(
         [workspaceId]: current,
       },
     };
+  });
+}
+
+async function startRemoteCreate(workspaceId: string, event: SyncEnvelope, backendId: string, type: "folder" | "bookmark", parentChromeId: string, title: string, url: string | undefined, index: number): Promise<string | null> {
+  const id = `${event.cursor}:${backendId}:create`, ownership = { workspaceId, type, parentChromeId, title, url, index };
+  let admitted = false;
+  await updateProjectionState(workspaceId, (projection) => {
+    const journal = projection.convergenceJournal ?? { version: 1 as const, phase: "live" as const, operations: [], localIntents: [], attempts: 0 };
+    const existing = journal.operations.some((operation) => operation.id === id);
+    const maximum = existing ? 500 : 499;
+    while (journal.operations.length > maximum) {
+      const oldestDone = journal.operations.findIndex((operation) => operation.id !== id && operation.ownership && operation.status === "done");
+      if (oldestDone < 0) { journal.phase = "paused"; journal.pauseReason = "operation-overflow"; projection.convergenceJournal = journal; return; }
+      journal.operations.splice(oldestDone, 1);
+    }
+    if (!existing) journal.operations.push({ id, kind: "create", backendId, fingerprint: JSON.stringify(ownership), status: "started", ownership });
+    projection.convergenceJournal = journal;
+    admitted = true;
+  });
+  return admitted ? id : null;
+}
+
+async function finishRemoteCreate(workspaceId: string, id: string, chromeId: string): Promise<void> {
+  const node = await getNode(chromeId);
+  await updateProjectionState(workspaceId, (projection) => {
+    const journal = projection.convergenceJournal, operation = journal?.operations.find((item) => item.id === id), ownership = operation?.ownership;
+    if (!journal || !operation || !ownership) return;
+    if (!node || node.parentId !== ownership.parentChromeId || node.index !== ownership.index || node.title !== ownership.title || node.url !== ownership.url) { journal.phase = "paused"; journal.pauseReason = "ambiguous-operation"; return; }
+    operation.chromeId = chromeId; operation.status = "done";
+    if (journal.pauseReason === "ambiguous-operation") { journal.phase = "live"; journal.pauseReason = undefined; }
+    const done = journal.operations.filter((item) => item.ownership && item.status === "done");
+    if (done.length > 20) journal.operations = journal.operations.filter((item) => !done.slice(0, -20).includes(item));
+  });
+}
+
+async function ownsRemoteCreate(id: string, node: chrome.bookmarks.BookmarkTreeNode): Promise<boolean> {
+  const state = await getState();
+  return Object.entries(state.projectionsByWorkspaceId).some(([workspaceId, projection]) => {
+    if (projection.backendIdByChromeId[id] !== undefined) return true;
+    return projection.convergenceJournal?.operations.some((operation) => {
+      const ownership = operation.ownership;
+      const sameShape = ownership?.workspaceId === workspaceId && ownership.type === (node.url ? "bookmark" : "folder") && ownership.parentChromeId === node.parentId && ownership.title === node.title && ownership.url === node.url && ownership.index === node.index;
+      return sameShape && (operation.status === "started" || (operation.status === "done" && operation.chromeId === id));
+    }) ?? false;
   });
 }
 
