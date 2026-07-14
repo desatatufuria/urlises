@@ -91,8 +91,8 @@ Candidate paths: `extension/src/background/{projection,bookmark-listeners,conver
 
 Candidate paths: `extension/src/background/{projection,bookmark-listeners,convergence}.ts`, `extension/src/shared/{types,storage}.ts`, `extension/tests/convergence.test.mjs`.
 
-- [ ] 11.1 RED: prove remote folder/bookmark delete persists `started` before mutation; `onRemoved` early/delayed/duplicate/restart correlation, mapping/absence verification, workspace isolation, and unmatched local delete exactly once.
-- [ ] 11.2 Add delete-only journal ownership and `onRemoved` correlation; checkpoint only after mapping/absence verification while retaining unmatched-local delete exactly once. Exclude update/move/outbox/resync replacement.
+- [x] 11.1 RED: prove remote folder/bookmark delete persists `started` before mutation; `onRemoved` early/delayed/duplicate/restart correlation, mapping/absence verification, workspace isolation, and unmatched local delete exactly once.
+- [x] 11.2 Add delete-only journal ownership and `onRemoved` correlation; checkpoint only after mapping/absence verification while retaining unmatched-local delete exactly once. Exclude update/move/outbox/resync replacement.
 
 ## Phase 12: PR4a1b — Durable update/move ownership
 

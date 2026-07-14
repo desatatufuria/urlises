@@ -115,6 +115,8 @@ class RemoteApplyError extends Error {
   }
 }
 
+class RemoteDeleteReadError extends Error {}
+
 export const projectionTestHooks = {
   applyRemoteEnvelope,
   connectWorkspace,
@@ -382,6 +384,7 @@ export async function handleBookmarkMoved(id: string, moveInfo: BookmarkMoveInfo
 }
 
 export async function handleBookmarkRemoved(id: string, removeInfo: BookmarkRemoveInfo): Promise<void> {
+  if (await ownsRemoteDelete(id, removeInfo)) return;
   if (isSuppressed(id)) {
     return;
   }
@@ -912,12 +915,14 @@ async function applyRemoteEnvelope(workspaceId: string, event: SyncEnvelope, all
   } catch (error) {
     const context = error instanceof RemoteApplyError ? error.context : baseContext;
     const detail = error instanceof Error ? error.message : String(error);
+    const failClosed = error instanceof RemoteDeleteReadError;
     await logRemoteApplyDiagnostic(workspaceId, {
       ...context,
-      action: "resync",
+      action: failClosed ? "degraded" : "resync",
       failure: detail,
     }, "warn");
     await log(`sync:${workspaceId}`, `remote apply failed for ${event.kind}: ${detail}`, "warn");
+    if (failClosed) return;
     await recoverWorkspace(workspaceId, `remote apply fallback for ${event.kind}`, "resync");
   }
 }
@@ -1180,7 +1185,7 @@ async function applyRemoteFolderDelete(
     pruneExclusions: true,
   });
   const parentChromeId = payload.parentId ? projection.chromeIdByBackendId[payload.parentId] : projection.workspaceChromeId;
-  const validation = await validateRecoveryScope(scope, parentChromeId);
+  const validation = await validateRecoveryScope(scope, parentChromeId, true);
   if (validation.status !== "valid") {
     await invalidateSubtreeMappings(scope, [...(validation.invalidateBackendIds ?? []), payload.id]);
     if (!allowReplayCatchup) {
@@ -1270,8 +1275,10 @@ async function deleteChromeNode(
   entityType: "folder" | "bookmark",
   pruneRemovedExclusions = true,
 ): Promise<void> {
-  const subtree = entityType === "folder" ? await getSubTree(chromeId) : null;
+  const subtree = entityType === "folder" ? await readDeleteSubTree(workspaceId, chromeId) : null;
   const chromeIds = subtree ? collectChromeIds(subtree) : [chromeId];
+  const operationId = await startRemoteDelete(workspaceId, backendId, chromeId, entityType, chromeIds);
+  if (!operationId) return;
   await withSuppression(async () => {
     if (entityType === "folder") {
       await removeTree(chromeId);
@@ -1279,14 +1286,27 @@ async function deleteChromeNode(
       await removeNode(chromeId);
     }
   }, chromeIds);
-  await updateProjectionState(workspaceId, (current) => {
-    const removedBackendIds = collectBackendIdsByChromeIds(current, chromeIds);
-    removeMappingsByChromeIds(current, chromeIds);
-    removeMappingByBackendId(current, backendId);
-    if (pruneRemovedExclusions) {
-      removeExclusions(current, [...removedBackendIds, backendId]);
-    }
-  });
+  await finishRemoteDelete(workspaceId, operationId, pruneRemovedExclusions);
+}
+
+async function readDeleteSubTree(workspaceId: string, chromeId: string): Promise<chrome.bookmarks.BookmarkTreeNode | null> {
+  try {
+    return await new Promise((resolve, reject) => {
+      chrome.bookmarks.getSubTree(chromeId, (nodes) => {
+        const error = chrome.runtime.lastError;
+        if (error) { reject(new RemoteDeleteReadError(error.message)); return; }
+        resolve(nodes?.[0] ?? null);
+      });
+    });
+  } catch (error) {
+    await updateProjectionState(workspaceId, (projection) => {
+      const journal = projection.convergenceJournal ?? { version: 1 as const, phase: "live" as const, operations: [], localIntents: [], attempts: 0 };
+      journal.phase = "paused";
+      journal.pauseReason = "ambiguous-operation";
+      projection.convergenceJournal = journal;
+    });
+    throw error;
+  }
 }
 
 async function refreshWorkspaceCatalog(session: SessionData, backendUrl: string): Promise<void> {
@@ -1370,6 +1390,56 @@ async function finishRemoteCreate(workspaceId: string, id: string, chromeId: str
     const done = journal.operations.filter((item) => item.ownership && item.status === "done");
     if (done.length > 20) journal.operations = journal.operations.filter((item) => !done.slice(0, -20).includes(item));
   });
+}
+
+async function startRemoteDelete(workspaceId: string, backendId: string, chromeId: string, type: "folder" | "bookmark", chromeIds: string[]): Promise<string | null> {
+  const id = `delete:${backendId}:${chromeId}`;
+  let admitted = false;
+  await updateProjectionState(workspaceId, (projection) => {
+    const journal = projection.convergenceJournal ?? { version: 1 as const, phase: "live" as const, operations: [], localIntents: [], attempts: 0 };
+    const existing = journal.operations.some((operation) => operation.id === id);
+    if (existing) { projection.convergenceJournal = journal; return; }
+    const mappedChromeIds = chromeIds.filter((id) => projection.backendIdByChromeId[id] !== undefined);
+    if (mappedChromeIds.length > 500) { journal.phase = "paused"; journal.pauseReason = "ambiguous-operation"; projection.convergenceJournal = journal; return; }
+    while (!existing && journal.operations.length >= 500) {
+      const oldestDone = journal.operations.findIndex((operation) => operation.ownership && operation.status === "done");
+      if (oldestDone < 0) { journal.phase = "paused"; journal.pauseReason = "operation-overflow"; projection.convergenceJournal = journal; return; }
+      journal.operations.splice(oldestDone, 1);
+    }
+    const ownership = { workspaceId, effect: "delete" as const, type, chromeId, mappedChromeIds };
+    journal.operations.push({ id, kind: "delete", backendId, chromeId, fingerprint: JSON.stringify(ownership), status: "started", ownership });
+    projection.convergenceJournal = journal; admitted = true;
+  });
+  return admitted ? id : null;
+}
+
+async function finishRemoteDelete(workspaceId: string, id: string, pruneRemovedExclusions = true): Promise<void> {
+  const state = await getState(), operation = state.projectionsByWorkspaceId[workspaceId]?.convergenceJournal?.operations.find((item) => item.id === id), ownership = operation?.ownership;
+  if (!operation || ownership?.effect !== "delete" || !ownership.chromeId || await getNode(ownership.chromeId)) {
+    await updateProjectionState(workspaceId, (projection) => { const journal = projection.convergenceJournal; if (journal?.operations.some((item) => item.id === id)) { journal.phase = "paused"; journal.pauseReason = "ambiguous-operation"; } });
+    return;
+  }
+  await updateProjectionState(workspaceId, (projection) => {
+    const current = projection.convergenceJournal?.operations.find((item) => item.id === id), owned = current?.ownership;
+    if (!current || !owned?.chromeId || owned.effect !== "delete") return;
+    const removedBackendIds = collectBackendIdsByChromeIds(projection, owned.mappedChromeIds ?? [owned.chromeId]);
+    removeMappingsByChromeIds(projection, owned.mappedChromeIds ?? [owned.chromeId]); removeMappingByBackendId(projection, current.backendId);
+    const clean = [current.backendId, ...removedBackendIds].every((backendId) => !projection.chromeIdByBackendId[backendId] && !projection.entityTypeByBackendId[backendId]);
+    if (!clean) { projection.convergenceJournal!.phase = "paused"; projection.convergenceJournal!.pauseReason = "ambiguous-operation"; return; }
+    if (pruneRemovedExclusions) removeExclusions(projection, [...removedBackendIds, current.backendId]);
+    current.status = "done"; if (projection.convergenceJournal!.pauseReason === "ambiguous-operation") { projection.convergenceJournal!.phase = "live"; projection.convergenceJournal!.pauseReason = undefined; }
+    const done = projection.convergenceJournal!.operations.filter((item) => item.ownership?.effect === "delete" && item.status === "done");
+    if (done.length > 20) projection.convergenceJournal!.operations = projection.convergenceJournal!.operations.filter((item) => !done.slice(0, -20).includes(item));
+  });
+}
+
+async function ownsRemoteDelete(id: string, removeInfo: BookmarkRemoveInfo): Promise<boolean> {
+  const state = await getState();
+  for (const [workspaceId, projection] of Object.entries(state.projectionsByWorkspaceId)) {
+    const operation = projection.convergenceJournal?.operations.find((item) => item.status === "started" && item.ownership?.effect === "delete" && item.ownership.workspaceId === workspaceId && item.ownership.chromeId === id && item.ownership.type === (removeInfo.node?.url ? "bookmark" : "folder"));
+    if (operation) { await finishRemoteDelete(workspaceId, operation.id); return true; }
+  }
+  return false;
 }
 
 async function ownsRemoteCreate(id: string, node: chrome.bookmarks.BookmarkTreeNode): Promise<boolean> {
@@ -1698,7 +1768,7 @@ function isCascadeRecoveryError(error: unknown): boolean {
   return detail.includes("404") || detail.includes("not found") || detail.includes("parent");
 }
 
-async function validateRecoveryScope(scope: RecoveryScope, parentChromeId: string | undefined): Promise<RecoveryValidation> {
+async function validateRecoveryScope(scope: RecoveryScope, parentChromeId: string | undefined, failClosedFolderRead = false): Promise<RecoveryValidation> {
   if (!parentChromeId) {
     return {
       status: "recover-subtree",
@@ -1721,7 +1791,7 @@ async function validateRecoveryScope(scope: RecoveryScope, parentChromeId: strin
   }
 
   const mappedNode = scope.reason === "stale-mapping" && scope.entityType === "folder"
-    ? await getSubTree(scope.mappedChromeId)
+    ? failClosedFolderRead ? await readDeleteSubTree(scope.workspaceId, scope.mappedChromeId) : await getSubTree(scope.mappedChromeId)
     : await getNode(scope.mappedChromeId);
   if (!mappedNode) {
     return {
