@@ -2,77 +2,60 @@
 
 ## Technical Approach
 
-Ship renewable transport first, then durable desired-state convergence. Slice B pauses its journal on expiry.
+Keep Slice A unchanged. Redesign Slice B update/move as a durable receipt ledger plus local-intent outbox. Create/delete ownership at `482ed88` remains unchanged. Rebuild/resync is not enabled until final repair.
 
-## Architecture Decisions
+## Phase 12/13 — Update/Move Convergence Redesign
 
-| Decision | Choice and rationale |
-|---|---|
-| Lifetime | Access JWT is **15 minutes**. Refresh families have **no routine idle or absolute expiry**: remembered sessions end only on current-device sign-out, device/server revocation, reuse compromise, or password change/recovery. |
-| Family security | Device family, hash-only metadata, rotation/reuse detection, explicit and optional admin revocation secure non-expiring sessions without periodic login. |
-| Lost refresh response | Persist UUID `attemptId` before refresh. Transactional rotation derives child secret as `HMAC(parentSecret, attemptId)`, stores only its SHA-256 hash, and accepts retired parent only for that attempt for 60s. Retry returns the same child without server plaintext; other/late reuse revokes family. |
-| Socket credential | `POST /auth/ws-ticket` requires current access authentication plus `X-Client-Id` and returns a 30-second single-use opaque ticket for later `Sec-WebSocket-Protocol` use; upgrade consumes its hash. Header stripping fails closed: no socket, journal pauses/retries, never refresh-token or URL fallback. |
-| Projection | A durable desired-state journal replaces normal destructive rebuild; mapping, not title/URL, is identity. |
+### Observable boundary and decision
 
-## Slice A — Session Continuity
+`onChanged(id, {title?, url?})` is partial; `onMoved(id, {oldParentId, oldIndex, parentId, index})` is a tuple. Neither has a token, workspace, or complete node. Callbacks may precede/follow promises and duplicate/reorder. A callback alone cannot prove ownership or distinguish a delayed remote callback from an identical local action after consumption. **No clock/window or chromeId-wide suppression is permitted.**
 
-Migration `000006_refresh_sessions.sql` adds `refresh_families(id,user_id,device_id,revoked_at,reuse_detected_at)` and `refresh_tokens(id,family_id,secret_hash,retired_at,retry_attempt_id,retry_until,rotated_to_id,created_at)`. Fix-forward `000007_ws_tickets.sql` adds hash-only one-use WS tickets, indexes and cascade FKs. Login/register require exact `X-Session-Capability: renewable-v1` to return `{accessToken,expiresAt,refreshToken,clientId,user}`; otherwise they retain the access-only response. `POST /auth/refresh {refreshToken,attemptId}` rotates atomically; `POST /auth/logout` revokes its family. Invalid/reused refresh is generic `401 unauthenticated`; malformed input is `400`; expired/consumed ticket is `401`. Legacy access-only state becomes `loginRequired`, retaining selection, mapping, cursor, and journal.
+| Option | Tradeoff | Decision |
+|---|---|---|
+| Retain done ownership / timing suppression | Drops legitimate immediate edits | Reject |
+| Consume partial payload | Cannot establish complete transition identity | Reject |
+| Receipt + full read + outbox no-op contract | Requires Phase 12 foundation and spec clarification | Choose |
 
-`auth.Service.RevokeAllRefreshFamilies(ctx,userID)` revokes every family in the same transaction as current/future password-change or recovery credential updates. No account UI/endpoints are added. Service tests prove a credential change rejects every family; future handlers use this transaction.
+### Receipt and transition model
 
-`chrome.storage.local` holds private refresh data plus durable state; `chrome.storage.session` holds access JWT/expiry and in-flight marker. Background alone reads secrets; UI receives redacted status. Storage is persistence, not encryption: no content-script exposure or secret diagnostics.
+Persist a bounded, versioned per-workspace `transitionReceipts` ledger. A receipt is `{id, workspaceId, entityType, backendId, chromeId, cursor, eventId, before, expectedAfter, signatures, state}`. Shapes include type/title/URL/parent/index; signatures are changed fields/values and/or move old/new tuple. States: `pending | consumed | verified | failed`; compact terminal receipts only after cursor advance. Persist `lastAcknowledgedShape` per mapped node.
 
-`AuthenticatedTransport` owns REST: refresh near expiry, single-flight, one replay using persisted `X-Sync-Event-Id`; refresh/ticket bypass interception. Failure pauses journals; success reconnects sockets and replays cursors.
+Before `updateNode`/`moveNode`, the workspace serial reducer verifies mapping/managed containment, reads `before`, writes `pending`, then calls Chrome. The callback uses that reducer, proves containment, reads the full node, and compares `expectedAfter` plus signature. A partial `onChanged` never consumes without this read. Mark `consumed` and update `lastAcknowledgedShape`; mark `verified` only after promise/read confirms final shape. Mismatch becomes a local intent.
+
+### Phase boundary and flow
+
+Phase 12 must move local-intent capture/outbox **before** remote update/move application; it cannot be correct as the former later phase.
 
 ```text
-401 x5 -> one refresh -> private state -> each original request replayed once
-socket close -> ticket(access JWT) -> WS upgrade -> replay(cursor)
+listener -> workspace reducer -> full node read -> pending receipt match?
+                                     | yes, pending: consume -> verify
+                                     | no/already consumed: durable local intent -> outbox
+remote event -> receipt(pending) -> Chrome effect -> read/verify -> cursor checkpoint
 ```
 
-## Slice B — Convergence Engine
+After consumption, an indistinguishable callback queues, never suppresses. Required invariant: an outbox update/move whose complete shape already equals backend canonical state is a no-op (no mutation/event/cursor advance). Without it, remote-feedback prevention and preserving indistinguishable local actions are information-theoretically incompatible.
 
-Each `ProjectionState` gains:
+### State machine, failures, and invariants
 
-```ts
-{version:1,epoch,desired:{snapshotId,cursor},phase:"plan"|"apply"|"replay"|"live"|"paused",
- operations:[{id,kind,backendId,chromeId?,fingerprint,status:"planned"|"started"|"done"}],
- localIntents:[{eventId,kind,payload,status:"queued"|"sent"|"acked"}],attempts,pauseReason?,queuedEpoch?}
-```
+`planned -> pending -> consumed -> verified`; `pending|consumed -> failed -> paused`. Checkpoint requires verified predecessor cursor. Capacity/write/read/promise error or mismatch pauses and preserves cursor. Refuse replay `cursor <= lastCursor`; no later event passes a failed cursor. On restart, prove then verify; retry only pre-effect pending with proof, else pause `ambiguous-transition`. No-op remote shape has no receipt/effect. Pending local edits queue with stable IDs.
 
-Serialized `updateState` commits `started` before every Chrome call, then mapping/result and `done`. On revival: prove done, retry not-started, or pause `ambiguous-operation`; never create ambiguously. Planner fetches snapshot, inventories mappings, emits `epoch:backendId:kind:fingerprint`, checkpoints each, replays cursor, then sends queued intents once. During repair persist unmatched local listeners. Identical Chrome events are indistinguishable: dedupe only the same durable event/operation.
-
-Mapping is workspace-scoped bijection. Inventory stays under managed root; adoption requires parent mapping, type, canonical order, and one candidate. Duplicate title/URL pauses `identity-ambiguous`; Rebuild deletes only managed-root children. No deletion targets outside root.
-
-Listeners inspect durable `started` operations by workspace, Chrome/backend ID and shape. A match is owned before promises resolve or after restart; consume only after tree verification. Others become local intent or queue during repair.
-
-| Transition | Rule |
+| Failure | Safe outcome |
 |---|---|
-| Request | one active epoch/workspace plus latest `queuedEpoch` |
-| Checkpoint | stale epoch stops; latest runs once afterward |
-| Retry | 3 attempts, 1/5/25s backoff, then paused with Retry/Rebuild |
-| Auth failure | preserve same journal/cursor; renewal/login resumes it |
+| Full-node read/runtime error, unknown containment, signature/shape mismatch | Queue local intent when observable; otherwise pause, no cursor advance |
+| Receipt/outbox capacity or durable-write failure | Pause before Chrome/API effect; retain failed cursor |
+| Callback before/after promise, duplicate before consumption | Serialized first exact pending match consumes once; others queue |
+| Duplicate after consumption / immediate local reversion | Queue; backend no-op invariant prevents feedback, reversion is preserved |
 
-## Interfaces / File Changes
+Invariants: every receipt and intent names one workspace; only its managed root may match; receipt consumption requires exact complete transition proof; each cursor is terminally verified before checkpoint; queues are bounded and fail closed; create/delete semantics remain unchanged.
 
-| File | Action | Impact |
-|---|---|---|
-| `backend/migrations/000006_refresh_sessions.sql`, `000007_ws_tickets.sql` | Create | non-expiring families/tokens; fix-forward hash-only tickets |
-| `backend/internal/auth/{service,handler,middleware}.go`, `config/config.go` | Modify | rotation, revocation, `RevokeAllRefreshFamilies`, 15m config, ticket routes |
-| `backend/internal/websocket/handler.go` | Modify | fail-closed ticket upgrade |
-| `extension/src/shared/{types,storage,api,session,websocket}.ts` | Modify | secret boundary, transport, journal |
-| `extension/src/background/{service-worker,projection,bookmark-listeners}.ts` | Modify | reducer/planner/listeners/UI actions |
-| `extension/tests/{chrome-fake,auth-transport,convergence}.test.mjs` | Create/modify | deterministic evidence |
+## Delivery, Interfaces, and Rollback
 
-## Verification Strategy
+12a (<=400 lines): types/storage migration, reducer, receipt/outbox normalization, no-op contract tests. 12b (<=400): remote update/move application and listener correlation. 13 (<=400): recovery, compaction, cursor sequencing, behavior matrix. Modify shared types/storage/API, projection/convergence, and fake-Chrome tests. Migrate v1 additively; unknown legacy in-flight update/move pauses. Rollback disables only new update/move application, retains ledger/outbox, and never auto-Rebuilds.
 
-Extract pure planner/reducer tests. Fake Chrome persists storage across worker restart and fires callbacks before API promises. Cover repeated snapshots, reordered events, every checkpoint crash, reconnect/triggers, duplicate-title mapping loss, repair edit, bounded pause, five 401s, response loss/reuse, revoked refresh. Slice A: Go auth/WS integration verifies password-transaction revocation and proxy subprotocol preservation; stripped header rejects without fallback. Add extension transport and manual Chromium login/restart/socket-expiry evidence. Slice B: fake schedules and manual repeated resync/restart/Retry/Rebuild with unrelated-bookmark inspection.
+## Testing Strategy
 
-## Migration / Rollout
+Fake-Chrome tests must construct each state: title-/URL-only callback with full-node mismatch; immediate reversion; repeated move; duplicates before/after consumption; callback before/after promise; restart per receipt state; same chrome-like IDs in two workspaces; containment violation; read/write/capacity failures; cursor-0 failure then later event; replay refusal at `currentCursor <= lastCursor`. Assert receipt, outbox, mapping, calls, cursor, pause. Preserve create/delete regressions.
 
-Gate `renewable_sessions`, then `convergent_projection`; retain legacy projection while B is off. Migration is additive; rollback disables issuance/tickets and forces login, leaving inert hashes. Preserve mappings only with proof; otherwise pause for Rebuild. Diagnostics exclude secrets. Cap journals at 500 operations/100 intents; overflow pauses.
+## Specification and Rollout Implications
 
-## Threat Matrix
-
-N/A — no routing, shell, subprocess, VCS/PR automation, executable-file classification, or process-integration boundary.
-
-**Delivery forecast:** Slice A ~510 authored lines; Slice B ~760; each is within 800, total ~1,270. Chained PRs: A then B.
+The convergence spec lacks the backend no-op contract and post-consumption ambiguity routing. A **spec delta is required**, not tasks-only: complete-shape no-op without publish/cursor advance, partial-callback full-read proof, containment isolation, fail-closed cursor ordering. Proposal scope is unchanged. Threat matrix: N/A — no routing, shell, subprocess, VCS/PR automation, executable classification, or process-integration boundary.

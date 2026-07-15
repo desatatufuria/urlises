@@ -2,81 +2,89 @@
 
 ## Requirements
 
-### Requirement: Canonical Idempotent Projection
+### Requirement: Complete-Shape Backend No-Op
 
-Canonical backend state MUST win. N identical snapshot/event applications MUST yield one managed tree, one node per canonical ID, and no remote-caused backend mutation. The system MUST NOT delete outside managed subtree.
+Update/move MUST compare complete final shape to canonical state. Equal shape MUST return stable acknowledgement for its idempotency header/key, publish no event, and advance no cursor. Same key/shape SHALL acknowledge equivalently; reused key/different shape MUST fail without mutation.
 
-#### Scenario: Apply the same snapshot N times
-- GIVEN a canonical snapshot
-- WHEN the snapshot is applied N times
-- THEN tree and mapping bijection remain unchanged after first convergence
+#### Scenario: Replayed final shape
+- GIVEN canonical state equals the request
+- WHEN submitted or retried
+- THEN success has no event or cursor advance
 
-#### Scenario: Remote listener event is delivered twice
-- GIVEN a correlated remote Chrome operation
-- WHEN its listener event is delivered twice
-- THEN neither delivery becomes a local backend mutation
+#### Scenario: Incompatible key reuse
+- GIVEN a key acknowledged for one shape
+- WHEN submitted with another shape
+- THEN it rejects without mutation
 
-### Requirement: Durable Apply Ownership and Recovery
+### Requirement: Durable Receipt and Intent Ownership
 
-Before remote Chrome effects, the extension MUST durably record workspace ownership and checkpoint epoch, phase, canonical/Chrome identity or result, and cursor/progress. Restart MUST resume/reconcile it, not treat event as local.
+Before remote update/move, the extension MUST durably queue callbacks unproven as pending transitions as stable-ID local intent. Receipts SHALL bind workspace, backend/Chrome IDs and type, before/expected-after shapes, event/cursor, expected signature(s), pending/consumed state, and bounded lifecycle. Per-node transitions MUST serialize; pending local edits MUST queue.
 
-#### Scenario: Worker stops after side effect
-- GIVEN a Chrome side effect completes before its next checkpoint commit
-- WHEN the service worker restarts
-- THEN it reconciles the recorded operation without duplicate creation or local mutation
+#### Scenario: Callback during pending transition
+- GIVEN a pending receipt and unproven local callback
+- WHEN the callback is reduced
+- THEN its stable intent is retained, not suppressed or discarded
 
-#### Scenario: Listener around mapping persistence
-- GIVEN create, remove, change, or move events arrive before and after mapping persistence
-- WHEN the owned operation is reconciled
-- THEN each event is classified from durable correlation, not timing
+#### Scenario: Restart with receipt or intent
+- GIVEN restart with pending receipt/intents
+- WHEN recovery runs
+- THEN it safely proves/resumes or pauses without losing intent
 
-### Requirement: Epoch-Scoped Bounded Work
+### Requirement: Complete Callback Proof
 
-Each workspace MUST allow one active apply and one latest queued rerun. Newer epochs MUST invalidate stale work. Recovery MUST converge or pause/degrade after a bounded limit; it MUST NOT loop.
+`onChanged` partial data MUST have complete-node read and durable last-acknowledged before-shape before consumption. `onMoved` MUST prove exact old/new parent/index and workspace. Hidden-field, signature, shape, mapping, or containment mismatch MUST NOT consume and SHALL queue observable intent.
 
-#### Scenario: Concurrent resync and reconnect
-- GIVEN two resync intents and a reconnect arrive for one workspace
-- WHEN a newer snapshot epoch begins
-- THEN stale work is invalidated and only active work plus one latest rerun execute
+#### Scenario: Hidden URL differs
+- GIVEN a title-only callback with unexpected complete-node URL
+- WHEN receipt matching runs
+- THEN it is not consumed and is queued
 
-#### Scenario: Bounded repair failure
-- GIVEN repair reaches its configured attempt limit
-- WHEN the last attempt fails
-- THEN the workspace pauses/degrades and requires explicit Retry or Rebuild action
+#### Scenario: Adversarial Chrome-like ID
+- GIVEN workspaces reuse an equivalent Chrome-like ID
+- WHEN a move callback arrives outside the receipt workspace root
+- THEN it cannot match or affect the receipt workspace
 
-### Requirement: Local Mutation and Identity Safety
+### Requirement: Post-Consumption Ambiguity
 
-Repair-time local edits MUST queue durably with stable event IDs and apply once after convergence. Title/URL similarity MUST NOT establish identity. Mapping loss, stale IDs, or ambiguity MUST pause or use controlled rebuild, never guess or duplicate.
+MUST NOT use timing, Chrome-ID-wide suppression, or terminal receipts for later callback ownership. Duplicate, delayed, reordered, or identical post-consumption callbacks MUST use stable local-intent/no-op semantics. Only one exact pending receipt may consume.
 
-#### Scenario: Local edit during repair
-- GIVEN a user edit occurs while repair is active
-- WHEN the workspace converges
-- THEN its durable event is sent exactly once after convergence
+#### Scenario: Immediate local reversion
+- GIVEN a remote transition has been consumed
+- WHEN the user immediately restores the former title or position
+- THEN the action is queued as local intent, not suppressed
 
-#### Scenario: Ambiguous legacy mapping
-- GIVEN mapping is lost and two Chrome nodes share title and URL
-- WHEN migration or reconciliation evaluates candidates
-- THEN it pauses or starts controlled rebuild without adopting or creating a duplicate implicitly
+#### Scenario: Two sequential remote transitions
+- GIVEN two serialized receipts for one node
+- WHEN callbacks arrive before/after promise, duplicate, or reordered
+- THEN each exact pending transition consumes once and all others queue
 
-### Requirement: Isolation, Authentication, and Operator Controls
+### Requirement: Verified Fail-Closed Sequencing
 
-Workspace state MUST be isolated. Authentication expiry during REST/WebSocket/apply MUST pause work for renewal without duplicate resync, then resume from checkpoint. Retry MUST resume bounded recovery; Rebuild MUST be explicit, remain owned, and preserve rollback boundaries.
+Workspace MUST checkpoint only after predecessor final-shape verification. Capacity, write, read, verification, promise, or ambiguity errors MUST cause no effect/checkpoint, pause, stop later live/replay cursor advancement, and retry the failed cursor. Replay at/below checkpoint MUST be refused.
 
-#### Scenario: Expiry during apply
-- GIVEN an apply is checkpointed when authentication expires
-- WHEN renewal succeeds
-- THEN it resumes from that checkpoint with no duplicate apply or resync
+#### Scenario: Read failure at cursor zero
+- GIVEN the node read fails while applying cursor zero
+- WHEN a later live event or replay event arrives
+- THEN it remains paused at zero with no later effect or advance
 
-#### Scenario: Retry and rebuild scope
-- GIVEN a workspace is degraded
-- WHEN Retry or Rebuild is selected
-- THEN only that workspace's managed subtree is affected and unrelated workspaces remain unchanged
+### Requirement: Bounded Durable Retention
 
-### Requirement: Migration, Diagnostics, and Evidence
+Receipt/outbox capacity MUST be bounded; deterministic pruning requires terminal verification and safe cursor progress. Unacknowledged intent MUST NOT be pruned; exhaustion MUST pause before effect/API call.
 
-Legacy mappings MUST migrate or adopt only with unambiguous proof; otherwise they MUST pause or use controlled rebuild and MUST NOT duplicate. Diagnostics MUST expose workspace, epoch, cause, attempt, listener disposition, and pause reason without secrets. Tests MUST model Chrome listener order, delayed/duplicate events, storage concurrency, restart, mapping loss, expiry, and reconnect.
+#### Scenario: Full outbox
+- GIVEN the outbox has unacknowledged intent
+- WHEN a local edit occurs
+- THEN it pauses without discarding intent or remote work
 
-#### Scenario: Deterministic recovery matrix
-- GIVEN schedules covering reordered listeners, duplicate events, concurrent storage, restart, mapping loss, expiry, and reconnect
-- WHEN each schedule executes
-- THEN it proves convergence or the specified bounded paused/degraded terminal state without secret output
+### Requirement: Isolation, Repair, and Diagnostics
+
+Containment MUST be strict for all receipts, intents, callbacks, and effects. Durable create/delete behavior SHALL remain unchanged; destructive normal resync MUST remain disabled until final repair/enablement. Diagnostics MUST explain pause, no-op, queued intent, cursor, and disposition without secrets.
+
+#### Scenario: Repair and diagnosis
+- GIVEN a containment or verification failure during repair
+- WHEN diagnostics are requested
+- THEN only the affected workspace pauses, the reason is observable without secrets, and no destructive resync runs
+
+## Unaffected Capabilities
+
+`extension-session-continuity` is unaffected by this specification.

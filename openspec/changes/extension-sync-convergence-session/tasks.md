@@ -4,113 +4,60 @@
 
 | Field | Value |
 |---|---|
-| Estimated authored changed lines | 3,480–4,610 |
-| 400-line budget risk | High |
-| Delivery / chain | auto-forecast / stacked-to-main; each unit merges to `develop` before the next starts |
-| Units | PR1a → PR1b-auth → PR1b-ticket → PR1b-ws-upgrade → PR2a → PR2b → PR3 → PR4h 250–350 → PR4h2 120–220 → PR4a1a-create 250–350 → PR4a1a-delete 250–350 → PR4a1b 250–350 → PR4a2 300–400 → PR4b 350–400 |
+| Remaining authored lines (tests + artifact update included) | 1,650 |
+| Per-unit budget / correction reserve | 270–380 / 20–70 |
+| Delivery / chain | auto-forecast / stacked-to-main; target `develop` in order |
+| Suggested chain | PR4a0 → PR4a1 → PR4a2 → PR4a3 → PR4b |
 
 Decision needed before apply: No
 Chained PRs recommended: Yes
 Chain strategy: stacked-to-main
 400-line budget risk: High
 
-Progress: 26/34. PR4a1a-create is complete; delete ownership follows.
+Progress: 28/38 — 28 completed legacy tasks in Phases 1–11; 10 newly expanded tasks are unchecked. No new implementation task is complete.
 
-```text
-develop ← PR1a ← PR1b-auth ← PR1b-ticket ← PR1b-ws-upgrade ← PR2a REST ← PR2b WS/TTL ← PR3 journal ← PR4h harness ← PR4h2 harness fidelity ← PR4a1a-create ← PR4a1a-delete ← PR4a1b update/move ← PR4a2 outbox ← PR4b repair
-```
-
-| Unit | Start → end; out of scope | Focused test; runtime harness | Rollback boundary |
+| Unit (estimate) | Start → end; exclusions | Focused RED/GREEN evidence; runtime evidence | Rollback boundary |
 |---|---|---|---|
-| PR1a–PR2b | Completed session work. | Recorded in completed evidence. | Completed-unit boundaries. |
-| PR3 | Completed dormant journal; legacy projection unchanged. | `cd extension && npm run build && node --test tests/convergence.test.mjs`; fake-storage restart. | Journal/module/types/gate. |
-| PR4h | PR3 → deterministic ownership harness; no production code or PR4 behavior assertions. | `cd extension && npm run build && node --test tests/chrome-harness.test.mjs`; event-mode/restart/no-handle self-tests. | Test helpers and harness self-tests. |
-| PR4h2 | PR4h → faithful fake Chrome self-tests/fixes only; no production source or ownership behavior. | `cd extension && npm run build && node --test tests/chrome-harness.test.mjs`; reset/order/timer/clone/listener/no-handle scenarios. | `fake-chrome.mjs` and chrome-harness self-tests. |
-| PR4a1a-create | PR4h2 → durable folder/bookmark create ownership; no delete/update/move/outbox/resync replacement. | `cd extension && npm run build && node --test tests/convergence.test.mjs`; create early/delayed/duplicate/restart. | Create ownership, correlation, and tests. |
-| PR4a1a-delete | PR4a1a-create → durable folder/bookmark delete ownership; no update/move/outbox/resync replacement. | `cd extension && npm run build && node --test tests/convergence.test.mjs`; remove early/delayed/duplicate/restart. | Delete ownership, correlation, and tests. |
-| PR4a1b | PR4a1a-delete → durable update/move ownership; no outbox/controls. | `cd extension && npm run build && node --test tests/convergence.test.mjs`; fake Chrome update/move reorder/restart. | Update/move ownership and gated wiring. |
-| PR4a2 | PR4a1b → durable local-intent outbox/replay; no controls or destructive-resync removal. | `cd extension && npm run build && node --test tests/convergence.test.mjs`; fake Chrome repair/auth/restart. | Outbox/replay wiring and gated engine. |
-| PR4b | PR4a2 → repair controls/enablement; no unrelated bookmarks. | `cd extension && npm run build && node --test tests/convergence.test.mjs`; Chromium Retry/Rebuild. | Controls, enablement, destructive-normal-resync removal. |
+| PR4a0 backend no-op (270) | Existing routes → complete-shape update/move acknowledgement; no extension wiring | `cd backend && go test ./internal/sync ./internal/bookmarks`; replay same key/shape proves no event/cursor advance | backend no-op comparison/idempotency/tests |
+| PR4a1 outbox (330) | PR4a0 → durable local capture, disabled remote update/move; no receipt consumption | `cd extension && npm run build && node --test tests/convergence.test.mjs`; fake-worker restart delivers one stable intent/no-op once | intent types/storage/listener capture/tests |
+| PR4a2 receipts (340) | PR4a1 → dormant per-node receipt/last-ack state; no remote effect | `cd extension && npm run build && node --test tests/convergence.test.mjs`; fake callback proves one exact pending receipt only | receipt reducer/types/storage/tests |
+| PR4a3 apply (380) | PR4a2 → gated remote update/move and verified cursor; no repair controls | `cd extension && npm run build && node --test tests/convergence.test.mjs`; fake Chrome early/delayed/reordered/restart matrix | update/move gate, reducer, listeners/tests |
+| PR4b repair (330) | PR4a3 invariants green → enable repair/controls and remove destructive normal resync; no unrelated UX | `cd extension && npm run build && node --test tests/convergence.test.mjs`; scoped Retry/Rebuild and failed-cursor recovery | enablement/controls/resync path/tests |
 
-## Phase 1: PR1a — Refresh-family persistence/domain (complete)
-- [x] 1.1 RED: hash-only rotation and response-loss.
-- [x] 1.2 RED: reuse, revocation, and secret safety.
-- [x] 1.3 Add persistence/domain only.
-- [x] 1.4 Record DB and rollback evidence.
+## Completed legacy phases (preserved: 28/28)
+- [x] 1.1–1.4 Refresh-family persistence/domain; RED, implementation, rollback evidence.
+- [x] 2.1–2.3 Capability-gated auth endpoints; RED, wiring, evidence.
+- [x] 3.1–3.3 Ticket issue/persistence; RED, migration/domain, evidence.
+- [x] 4.1–4.2 Ticket-consuming WebSocket upgrade; RED and compatible wiring.
+- [x] 5.1–5.3 Renewable REST session; RED, coordinator, Chromium evidence.
+- [x] 6.1–6.3 Ticket WebSocket/TTL; RED, cutover, evidence.
+- [x] 7.1–7.2 Dormant journal/planner; RED and gated checkpoints.
+- [x] 8.1–8.2 Deterministic Chrome ownership harness.
+- [x] 9.1–9.2 Harness fidelity hardening.
+- [x] 10.1–10.2 Durable create ownership.
+- [x] 11.1–11.2 Durable delete ownership.
 
-## Phase 2: PR1b-auth — Capability-gated auth endpoints (complete)
-- [x] 2.1 RED: capability and refresh/logout errors.
-- [x] 2.2 Wire endpoints; exclude WebSocket work.
-- [x] 2.3 Record auth and rollback evidence.
+## Phase 12: Backend contract — PR4a0
+Candidate: `backend/internal/{bookmarks/service.go,sync/{service,postgres,handler}.go,sync/*_test.go}`, `tasks.md`.
+- [ ] 12.1 RED: folder/bookmark title/url/parent/index complete-shape no-op; same idempotency key/shape acknowledges, different shape rejects; assert no event/cursor advance.
+- [ ] 12.2 GREEN: compare canonical final shape before mutation/publish; retain idempotency header semantics; record focused/runtime evidence in this artifact.
 
-## Phase 3: PR1b-ticket — Ticket issue and persistence (complete)
-- [x] 3.1 RED: expiry, one-use, binding, and secrecy.
-- [x] 3.2 Add `000007`, domain, and issue endpoint.
-- [x] 3.3 Record DB and rollback evidence.
+## Phase 13: Intent foundation — PR4a1
+Candidate: `extension/src/{shared/{types,storage,api}.ts,background/{bookmark-listeners,projection,convergence}.ts}`, `extension/tests/{convergence,helpers/fake-chrome}.test.mjs`, `tasks.md`.
+- [ ] 13.1 RED: stable-ID, workspace-contained intent capture; two workspaces with equivalent Chrome-like IDs; capacity/read/final failure at cursor 0 plus later live envelope; unacknowledged intent never prunes.
+- [ ] 13.2 GREEN: bounded persisted outbox, restart and exact-once/no-op delivery; keep remote update/move disabled and record evidence.
 
-## Phase 4: PR1b-ws-upgrade — Ticket-consuming upgrade (complete)
-- [x] 4.1 RED: protocol, authorization, legacy, and secrecy.
-- [x] 4.2 Wire handler; preserve legacy path.
+## Phase 14: Receipt foundation — PR4a2
+Candidate: Phase 13 extension paths and `tasks.md`.
+- [ ] 14.1 RED: durable per-node serialized receipt/last-ack shape; title-only or URL-only callback with hidden full-node mismatch queues; exact duplicate before/after consumption; pending receipt plus queued intent restart.
+- [ ] 14.2 GREEN: add versioned receipt reducer and complete-node proof gate, dormant from remote effects; record evidence.
 
-## Phase 5: PR2a — Extension renewable REST session (complete)
-- [x] 5.1 RED: private session, refresh/replay, restart/pause.
-- [x] 5.2 Implement REST coordinator and wiring.
-- [x] 5.3 Record Chromium and rollback evidence.
+## Phase 15: Remote update/move — PR4a3
+Candidate: Phase 13 extension paths and `tasks.md`.
+- [ ] 15.1 RED: partial full-node proof and move old/new tuple; callbacks early/delayed/reordered/restart; immediate local action after consumption, return to older title/URL, repeated old move, and two sequential node transitions queue correctly.
+- [ ] 15.2 GREEN: receipt+outbox application verifies before checkpoint; replay `currentCursor` cannot pass failure; post-consumption routing has no timers/suppression; record evidence.
 
-## Phase 6: PR2b — Extension ticket WebSocket and TTL cutover (complete)
-- [x] 6.1 RED: ticket transport, reconnect, pause, secrecy.
-- [x] 6.2 Wire cutover and 15m TTL; retain legacy route.
-- [x] 6.3 Record Chromium and rollback evidence.
-
-## Phase 7: PR3 — Dormant convergence planner/journal (complete)
-- [x] 7.1 RED: planner, queue, cap, migration, ambiguity.
-- [x] 7.2 Add gated journal/checkpoints and evidence.
-
-## Phase 8: PR4h — Deterministic Chrome ownership harness
-
-Candidate paths: `extension/tests/{helpers/fake-chrome,convergence}.mjs`, `extension/package.json`.
-
-- [x] 8.1 RED: self-test structured-cloned persistence, one callback mode at a time, before/after/delayed/duplicate/reordered delivery, workspace trees, module/runtime reset, and zero open timers/sockets; add no PR4 behavior assertions.
-- [x] 8.2 Build reusable fake Chrome bookmarks/storage/runtime bus with controllable mutator promises, explicit timer/socket teardown, persisted-worker reload, and backend fetch/mutation recording utilities; keep the suite green without skipped/failing cases.
-
-## Phase 9: PR4h2 — Chrome harness fidelity hardening
-
-Candidate paths: `extension/tests/{helpers/fake-chrome,chrome-harness.test}.mjs`, `extension/package.json` only if a script correction is required.
-
-- [x] 9.1 RED: prove queued delayed events survive persisted runtime reset; `after` follows a Promise continuation; duplicates capture count at schedule time; timer flush snapshots recurring/new timers; revived local/session/tree values are isolated structured clones; explicit numeric seed IDs never collide; fetch counts only bookmark/folder writes; changed/moved/removed payload/order and `removeListener` are faithful; production reload hook only if practical; teardown leaves zero handles.
-- [x] 9.2 Fix only fake Chrome helper/self-tests to satisfy 9.1, including event queues, timer flushing, clone revival, ID allocation, fetch filtering, listener removal, and teardown; add no production source or ownership assertions.
-
-## Phase 10: PR4a1a-create — Durable create ownership
-
-Candidate paths: `extension/src/background/{projection,bookmark-listeners,convergence}.ts`, `extension/src/shared/{types,storage}.ts`, `extension/tests/convergence.test.mjs`.
-
-- [x] 10.1 RED: prove remote folder/bookmark create persists `started` before mutation; `onCreated` early/delayed/duplicate/restart correlation, final parent/type/title/url/index verification, workspace isolation, and unmatched local create exactly once.
-- [x] 10.2 Add create-only journal ownership and `onCreated` correlation; checkpoint only after final verification while retaining unmatched-local create exactly once. Exclude delete/update/move/outbox/resync replacement.
-
-## Phase 11: PR4a1a-delete — Durable delete ownership
-
-Candidate paths: `extension/src/background/{projection,bookmark-listeners,convergence}.ts`, `extension/src/shared/{types,storage}.ts`, `extension/tests/convergence.test.mjs`.
-
-- [x] 11.1 RED: prove remote folder/bookmark delete persists `started` before mutation; `onRemoved` early/delayed/duplicate/restart correlation, mapping/absence verification, workspace isolation, and unmatched local delete exactly once.
-- [x] 11.2 Add delete-only journal ownership and `onRemoved` correlation; checkpoint only after mapping/absence verification while retaining unmatched-local delete exactly once. Exclude update/move/outbox/resync replacement.
-
-## Phase 12: PR4a1b — Durable update/move ownership
-
-Candidate paths: `extension/src/background/{projection,bookmark-listeners,convergence}.ts`, `extension/src/shared/{types,storage,api}.ts`, `extension/tests/convergence.test.mjs`.
-
-- [ ] 12.1 RED: fake Chrome bus emits changed/moved before resolution and delayed, duplicate, reordered callbacks; prove final parent/index/title/url verification, restart, and workspace isolation.
-- [ ] 12.2 Persist `started` before remote folder/bookmark update/move; correlate `onChanged`/`onMoved`, replace covered process-local pending operations after final verification, and keep planner/engine gated without an outbox.
-
-## Phase 13: PR4a2 — Durable local intent outbox and exact-once replay
-
-Candidate paths: `extension/src/background/{projection,bookmark-listeners,convergence}.ts`, `extension/src/shared/{types,storage,api}.ts`, `extension/tests/convergence.test.mjs`.
-
-- [ ] 13.1 RED: local edits during repair, auth pause, and restart retain stable IDs; prove one replay/request, ack checkpoint, cap, and workspace isolation.
-- [ ] 13.2 Queue unmatched local events during active repair; replay through existing idempotency headers once after convergence and resume after auth/restart, retaining the off gate and excluding Retry/Rebuild UI.
-
-## Phase 14: PR4b — Repair controls and enablement
-
-Candidate paths: `extension/src/background/{projection,convergence}.ts`, `extension/src/{shared,ui}/**`, `extension/tests/convergence.test.mjs`.
-
-- [ ] 14.1 RED: ambiguous duplicates pause; bounded three-attempt recovery, scoped Retry/Rebuild, auth-checkpoint resume, and no destructive normal resync.
-- [ ] 14.2 Add controls/backoff/auth resume; remove destructive normal resync and enable only after invariants/evidence pass.
+## Phase 16: Repair enablement — PR4b
+Candidate: `extension/src/{background/{projection,convergence}.ts,shared/{types,storage}.ts,ui/**}`, `extension/tests/convergence.test.mjs`, `tasks.md`.
+- [ ] 16.1 RED: invariant gate, scoped diagnostics/retry/rebuild, and cursor-0 failure blocks later live/replay effect/advance; preserve create/delete behavior.
+- [ ] 16.2 GREEN: enable repair only after matrix passes; remove destructive normal resync; retain failed cursor/outbox and record evidence.
