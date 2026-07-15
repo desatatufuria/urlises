@@ -14,7 +14,7 @@ Chained PRs recommended: Yes
 Chain strategy: stacked-to-main
 400-line budget risk: High
 
-Progress: 30/44 semantic tasks complete — the prior combined PR4a0a2 had two unchecked tasks; its four-task executor/domain split adds two unchecked semantic tasks, so 14 remain. Native checklist progress is 13/27 because legacy grouped checkboxes represent multiple semantic tasks.
+Progress: 32/44 semantic tasks complete. Native checklist progress is 15/27 because legacy grouped checkboxes represent multiple semantic tasks.
 
 | Unit (estimate / reserve) | Start → end; exclusions | Candidate files; RED matrix; commands/runtime evidence | Rollback boundary |
 |---|---|---|---|
@@ -45,8 +45,8 @@ Progress: 30/44 semantic tasks complete — the prior combined PR4a0a2 had two u
 - [x] 12.2 GREEN: generalize ledger transaction; no PATCH routing/events; record rollback/evidence.
 
 ## Phase 13a: Executor foundation — PR4a0a2
-- [ ] 13a.1 RED: in `backend/internal/httpapi/idempotency_{test,integration_test}.go`, prove same executor tx; prepare/auth before receipt lookup; replay/conflict/in-progress; atomic rollback; returned but never invoked post-commit; and existing-201 `Execute` compatibility via PostgreSQL.
-- [ ] 13a.2 GREEN: in `backend/internal/httpapi/idempotency.go`, add only `IdempotencyScope`, `Prepared`, `Prepare`, `Command`, `PostCommit`, `ExecutePrepared`, private shared receipt primitives, and an `Execute` adapter; prepare is read/lock/auth only, command is transactional, no sync/bookmarks/routes/publisher/migration.
+- [x] 13a.1 RED: in `backend/internal/httpapi/idempotency_{test,integration_test}.go`, prove same executor tx; prepare/auth before receipt lookup; replay/conflict/in-progress; atomic rollback; returned but never invoked post-commit; and existing-201 `Execute` compatibility via PostgreSQL.
+- [x] 13a.2 GREEN: in `backend/internal/httpapi/idempotency.go`, add only `IdempotencyScope`, `Prepared`, `Prepare`, `Command`, `PostCommit`, `ExecutePrepared`, private shared receipt primitives, and an `Execute` adapter; prepare is read/lock/auth only, command is transactional, no sync/bookmarks/routes/publisher/migration.
 
 ## Phase 13b: Domain transaction foundation — PR4a0a3
 - [ ] 13b.1 RED: in `backend/internal/{bookmarks/service_integration_test.go,sync/postgres_integration_test.go}`, prove external-`pgx.Tx` prepare/apply, target and stable sibling `FOR UPDATE`, workspace authorization/containment, normalize/fingerprint, and opposite-move PostgreSQL deadlock/race safety.

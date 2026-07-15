@@ -3,6 +3,7 @@ package httpapi
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -180,6 +181,100 @@ func TestIdempotencyExecutorAuthorizesBeforeLedgerLookup(t *testing.T) {
 	})
 	if err != nil || outcome != IdempotencyCreated || created != 1 {
 		t.Fatalf("result=%#v outcome=%q created=%d err=%v", result, outcome, created, err)
+	}
+}
+
+func TestExecutePreparedPostgresContracts(t *testing.T) {
+	ctx, pool := openIdempotencyTestPool(t)
+	executor := NewIdempotencyExecutor(pool)
+	principal := seedIdempotencyPrincipal(t, ctx, pool, "prepared-principal@example.com")
+	if _, err := pool.Exec(ctx, `CREATE TABLE prepared_evidence (value text NOT NULL)`); err != nil {
+		t.Fatal(err)
+	}
+	scope := IdempotencyScope{PrincipalID: principal, Method: "PATCH", Route: "PATCH /prepared|one", Key: "prepared-key"}
+	prepareCalls, commandCalls, hookCalls := 0, 0, 0
+	prepare := func(ctx context.Context, tx pgx.Tx) (Prepared, error) {
+		prepareCalls++
+		if _, err := tx.Exec(ctx, `CREATE TEMP TABLE prepared_tx_evidence (value text) ON COMMIT DROP; INSERT INTO prepared_tx_evidence VALUES ('prepared')`); err != nil {
+			return Prepared{}, err
+		}
+		return Prepared{Fingerprint: "shape-a", Command: func(ctx context.Context, tx pgx.Tx) (SafeResult, PostCommit, error) {
+			commandCalls++
+			var value string
+			if err := tx.QueryRow(ctx, `SELECT value FROM prepared_tx_evidence`).Scan(&value); err != nil || value != "prepared" {
+				return SafeResult{}, nil, fmt.Errorf("prepared evidence: %w", err)
+			}
+			if _, err := tx.Exec(ctx, `INSERT INTO prepared_evidence VALUES ('created')`); err != nil {
+				return SafeResult{}, nil, err
+			}
+			return SafeResult{Status: 200, Body: map[string]string{"value": value}}, func(context.Context) error { hookCalls++; return nil }, nil
+		}}, nil
+	}
+
+	created, outcome, hook, err := executor.ExecutePrepared(ctx, scope, prepare)
+	if err != nil || outcome != IdempotencyCreated || created.Status != 200 || commandCalls != 1 || hook == nil || hookCalls != 0 {
+		t.Fatalf("created=%#v outcome=%q command=%d hook=%v called=%d err=%v", created, outcome, commandCalls, hook != nil, hookCalls, err)
+	}
+	if err := hook(ctx); err != nil || hookCalls != 1 {
+		t.Fatalf("post-commit hook err=%v calls=%d", err, hookCalls)
+	}
+	replayed, outcome, hook, err := executor.ExecutePrepared(ctx, scope, prepare)
+	if err != nil || outcome != IdempotencyReplayed || replayed.Status != 200 || prepareCalls != 2 || commandCalls != 1 || hook != nil {
+		t.Fatalf("replayed=%#v outcome=%q prepare=%d command=%d hook=%v err=%v", replayed, outcome, prepareCalls, commandCalls, hook != nil, err)
+	}
+	if _, _, _, err := executor.ExecutePrepared(ctx, scope, func(context.Context, pgx.Tx) (Prepared, error) {
+		return Prepared{Fingerprint: "shape-b", Command: func(context.Context, pgx.Tx) (SafeResult, PostCommit, error) {
+			commandCalls++
+			return SafeResult{}, nil, nil
+		}}, nil
+	}); !errors.Is(err, ErrIdempotencyKeyConflict) || commandCalls != 1 {
+		t.Fatalf("conflict err=%v command=%d", err, commandCalls)
+	}
+
+	denied := IdempotencyScope{PrincipalID: principal, Method: "PATCH", Route: "PATCH /prepared|denied", Key: "denied-key"}
+	if _, err := pool.Exec(ctx, `INSERT INTO idempotency_records (principal_id,method,route,key,fingerprint,status,response_status,safe_response,completed_at,expires_at) VALUES ($1,$2,$3,$4,'shape','completed',200,'{"stored":"secret"}'::jsonb,NOW(),NOW()+INTERVAL '1 hour')`, denied.PrincipalID, denied.Method, denied.Route, denied.Key); err != nil {
+		t.Fatal(err)
+	}
+	if result, _, _, err := executor.ExecutePrepared(ctx, denied, func(context.Context, pgx.Tx) (Prepared, error) { return Prepared{}, errors.New("forbidden") }); err == nil || result.Body != nil {
+		t.Fatalf("denied result=%#v err=%v", result, err)
+	}
+
+	for _, tc := range []struct {
+		key string
+		err error
+	}{
+		{"command-error", errors.New("command failed")},
+		{"completion-error", nil},
+	} {
+		t.Run(tc.key, func(t *testing.T) {
+			rollback := IdempotencyScope{PrincipalID: principal, Method: "PATCH", Route: "PATCH /prepared|rollback", Key: tc.key}
+			_, _, _, err := executor.ExecutePrepared(ctx, rollback, func(ctx context.Context, tx pgx.Tx) (Prepared, error) {
+				return Prepared{Fingerprint: tc.key, Command: func(ctx context.Context, tx pgx.Tx) (SafeResult, PostCommit, error) {
+					_, _ = tx.Exec(ctx, `INSERT INTO prepared_evidence VALUES ($1)`, tc.key)
+					if tc.err != nil {
+						return SafeResult{}, nil, tc.err
+					}
+					return SafeResult{Status: 200, Body: make(chan int)}, nil, nil
+				}}, nil
+			})
+			if err == nil {
+				t.Fatal("failed execution succeeded")
+			}
+			var evidence, receipts int
+			if err := pool.QueryRow(ctx, `SELECT count(*) FROM prepared_evidence WHERE value=$1`, tc.key).Scan(&evidence); err != nil {
+				t.Fatal(err)
+			}
+			if err := pool.QueryRow(ctx, `SELECT count(*) FROM idempotency_records WHERE principal_id=$1 AND key=$2`, principal, tc.key).Scan(&receipts); err != nil || evidence != 0 || receipts != 0 {
+				t.Fatalf("evidence=%d receipts=%d err=%v", evidence, receipts, err)
+			}
+			if _, outcome, _, err := executor.ExecutePrepared(ctx, rollback, func(context.Context, pgx.Tx) (Prepared, error) {
+				return Prepared{Fingerprint: tc.key, Command: func(context.Context, pgx.Tx) (SafeResult, PostCommit, error) {
+					return SafeResult{Status: 200, Body: map[string]string{"retry": "ok"}}, nil, nil
+				}}, nil
+			}); err != nil || outcome != IdempotencyCreated {
+				t.Fatalf("retry outcome=%q err=%v", outcome, err)
+			}
+		})
 	}
 }
 

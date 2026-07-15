@@ -2,12 +2,17 @@
 
 ## Cumulative Status
 
-30/40 semantic tasks complete; native checkbox progress is 13/23. Legacy PR1a–PR3, PR4h/PR4h2, create/delete ownership, and PR4a0a are complete. Delivery remains stacked-to-`develop`, no `size:exception`.
+32/44 semantic tasks complete; native checkbox progress is 15/27. Legacy PR1a–PR3, PR4h/PR4h2, create/delete ownership, PR4a0a, and PR4a0a2 are complete. Delivery remains stacked-to-`develop`, no `size:exception`.
 
 ## PR4a0a Generic Receipt Ledger
 
 - [x] 12.1 RED: PostgreSQL receipt tests first failed to compile because `SafeResult` could not carry semantic headers or a fixed acknowledgement cursor.
 - [x] 12.2 GREEN: migration `000008` permits completed 200/201 receipts and nullable semantic headers/cursor; the executor persists/replays them under the existing lock, conflict, rollback, and 24-hour cleanup behavior. No PATCH route, event, cursor mutation, or extension code changed.
+
+## PR4a0a2 Prepared Executor Foundation
+
+- [x] 13a.1 RED: PostgreSQL prepared-executor contracts first failed to compile because `IdempotencyScope`, `Prepared`, `PostCommit`, and `ExecutePrepared` did not exist.
+- [x] 13a.2 GREEN: `ExecutePrepared` now owns one transaction, scope lock, prepare-before-receipt sequencing, shared receipt claim/completion, atomic rollback, and returned-only post-commit hooks. Legacy `Execute` adapts through the same receipt primitives without changing create behavior.
 
 ## PR3 Dormant Journal
 
@@ -46,7 +51,10 @@
 | PR4a0a RED | `cd backend && go test ./internal/httpapi`: FAIL before implementation (`SafeResult.Headers` and `AckCursor` undefined). |
 | PR4a0a focused/runtime GREEN | PostgreSQL harness: `go test ./internal/httpapi ./internal/sync`: PASS; covers 200 body/header/cursor replay, conflict, concurrent lock/in-progress, rollback/retry, 24-hour cleanup, and retained 201 creation. |
 | PR4a0a full/quality/rollback | PostgreSQL-backed `go test ./...`: PASS; `go vet ./...` and `git diff --check`: PASS. Roll back migration/executor/tests together; remove or expire all 200 receipts before restoring the old 201-only constraint. |
+| PR4a0a2 RED | `cd backend && go test ./internal/httpapi`: FAIL before implementation: prepared executor API symbols were undefined. |
+| PR4a0a2 focused/runtime GREEN | PostgreSQL `go test ./internal/httpapi -run '^(TestExecutePreparedPostgresContracts|TestIdempotencyExecutorPostgresContracts|TestIdempotencyExecutorAuthorizesBeforeReplay|TestIdempotencyExecutorReplaysSafe200Receipt|TestIdempotencyExecutorRollsBackIncompleteReceipt|TestIdempotencyExecutorAuthorizesBeforeLedgerLookup|TestIdempotencyRoutesCreateAndReplayAllFive)$' -count=1`: PASS. Covers one `pgx.Tx`, prepare-before-lookup denial, replay/conflict/in-progress command suppression, command/completion rollback and retry, non-invoked returned hook, legacy 201 and PR4a0a 200/headers. |
+| PR4a0a2 full/quality/rollback | PostgreSQL-backed `go test ./...`: PASS; `go vet ./...`, `gofmt`, and `git diff --check`: PASS. Roll back only `httpapi` prepared types/primitives/tests and these entries; PR4a0a ledger plus legacy `Execute` remains. |
 
 ## Next
 
-PR4a0b complete-shape integration. Follow-up: `create-ownership.test.mjs` has a minor assertion weakness and is intentionally unchanged in this unit.
+PR4a0a3 domain transaction foundation. Follow-up: `create-ownership.test.mjs` has a minor assertion weakness and is intentionally unchanged in this unit.
