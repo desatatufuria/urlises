@@ -28,8 +28,10 @@ type IdempotencyIdentity struct {
 }
 
 type SafeResult struct {
-	Status int
-	Body   any
+	Status    int
+	Body      any
+	Headers   map[string]string
+	AckCursor *int64
 }
 
 type IdempotencyOutcome string
@@ -118,7 +120,9 @@ func (e *IdempotencyExecutor) Execute(ctx context.Context, identity IdempotencyI
 	var status string
 	var responseStatus *int
 	var safeResponse []byte
-	err = tx.QueryRow(ctx, `SELECT fingerprint,status,response_status,safe_response FROM idempotency_records WHERE principal_id=$1 AND method=$2 AND route=$3 AND key=$4 FOR UPDATE`, identity.PrincipalID, identity.Method, identity.Route, identity.Key).Scan(&fingerprint, &status, &responseStatus, &safeResponse)
+	var responseHeaders []byte
+	var ackCursor *int64
+	err = tx.QueryRow(ctx, `SELECT fingerprint,status,response_status,safe_response,response_headers,ack_cursor FROM idempotency_records WHERE principal_id=$1 AND method=$2 AND route=$3 AND key=$4 FOR UPDATE`, identity.PrincipalID, identity.Method, identity.Route, identity.Key).Scan(&fingerprint, &status, &responseStatus, &safeResponse, &responseHeaders, &ackCursor)
 	if err == nil {
 		if fingerprint != identity.Fingerprint {
 			return SafeResult{}, "", ErrIdempotencyKeyConflict
@@ -128,10 +132,14 @@ func (e *IdempotencyExecutor) Execute(ctx context.Context, identity IdempotencyI
 			if json.Unmarshal(safeResponse, &body) != nil || responseStatus == nil {
 				return SafeResult{}, "", fmt.Errorf("invalid stored idempotency response")
 			}
-			return SafeResult{Status: *responseStatus, Body: body}, IdempotencyReplayed, tx.Commit(ctx)
+			var headers map[string]string
+			if responseHeaders != nil && json.Unmarshal(responseHeaders, &headers) != nil {
+				return SafeResult{}, "", fmt.Errorf("invalid stored idempotency headers")
+			}
+			return SafeResult{Status: *responseStatus, Body: body, Headers: headers, AckCursor: ackCursor}, IdempotencyReplayed, tx.Commit(ctx)
 		}
 		if status == "failed" {
-			_, err = tx.Exec(ctx, `UPDATE idempotency_records SET status='in_progress',created_at=NOW(),expires_at=NOW()+$5::interval,response_status=NULL,safe_response=NULL,completed_at=NULL WHERE principal_id=$1 AND method=$2 AND route=$3 AND key=$4`, identity.PrincipalID, identity.Method, identity.Route, identity.Key, e.ttl.String())
+			_, err = tx.Exec(ctx, `UPDATE idempotency_records SET status='in_progress',created_at=NOW(),expires_at=NOW()+$5::interval,response_status=NULL,safe_response=NULL,response_headers=NULL,ack_cursor=NULL,completed_at=NULL WHERE principal_id=$1 AND method=$2 AND route=$3 AND key=$4`, identity.PrincipalID, identity.Method, identity.Route, identity.Key, e.ttl.String())
 		} else {
 			return SafeResult{}, "", ErrIdempotencyInProgress
 		}
@@ -145,14 +153,21 @@ func (e *IdempotencyExecutor) Execute(ctx context.Context, identity IdempotencyI
 	if err != nil {
 		return SafeResult{}, "", err
 	}
-	if result.Status != 201 {
+	if result.Status != 200 && result.Status != 201 {
 		return SafeResult{}, "", fmt.Errorf("unsafe idempotency response status")
 	}
 	body, err := json.Marshal(result.Body)
 	if err != nil {
 		return SafeResult{}, "", err
 	}
-	_, err = tx.Exec(ctx, `UPDATE idempotency_records SET status='completed',response_status=201,safe_response=$5,completed_at=NOW() WHERE principal_id=$1 AND method=$2 AND route=$3 AND key=$4`, identity.PrincipalID, identity.Method, identity.Route, identity.Key, body)
+	var headers []byte
+	if result.Headers != nil {
+		headers, err = json.Marshal(result.Headers)
+		if err != nil {
+			return SafeResult{}, "", err
+		}
+	}
+	_, err = tx.Exec(ctx, `UPDATE idempotency_records SET status='completed',response_status=$5,safe_response=$6,response_headers=$7,ack_cursor=$8,completed_at=NOW() WHERE principal_id=$1 AND method=$2 AND route=$3 AND key=$4`, identity.PrincipalID, identity.Method, identity.Route, identity.Key, result.Status, body, headers, result.AckCursor)
 	if err != nil {
 		return SafeResult{}, "", err
 	}

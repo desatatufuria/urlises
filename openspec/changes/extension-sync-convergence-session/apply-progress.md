@@ -2,7 +2,12 @@
 
 ## Cumulative Status
 
-28/34 tasks complete. PR1a–PR3, PR4h/PR4h2, and PR4a1a-create remain complete; PR4a1a-delete is complete. Delivery remains stacked-to-`develop`, no `size:exception`.
+30/40 semantic tasks complete; native checkbox progress is 13/23. Legacy PR1a–PR3, PR4h/PR4h2, create/delete ownership, and PR4a0a are complete. Delivery remains stacked-to-`develop`, no `size:exception`.
+
+## PR4a0a Generic Receipt Ledger
+
+- [x] 12.1 RED: PostgreSQL receipt tests first failed to compile because `SafeResult` could not carry semantic headers or a fixed acknowledgement cursor.
+- [x] 12.2 GREEN: migration `000008` permits completed 200/201 receipts and nullable semantic headers/cursor; the executor persists/replays them under the existing lock, conflict, rollback, and 24-hour cleanup behavior. No PATCH route, event, cursor mutation, or extension code changed.
 
 ## PR3 Dormant Journal
 
@@ -38,7 +43,10 @@
 | PR4a1a-delete RED/GREEN | `npm run build && node --test tests/delete-ownership.test.mjs`: RED (4 failing assertions before implementation), then PASS 9/9. |
 | PR4a1a-delete regressions | `node --test tests/create-ownership.test.mjs tests/convergence.test.mjs tests/projection-behavior.test.mjs`: PASS 54/54; `npm run typecheck && npm run test:projection`: PASS 90/90. |
 | PR4a1a-delete runtime/rollback | Deterministic fake-Chrome callbacks/restart are the runtime boundary; rollback `projection.ts`, `types.ts`, `delete-ownership.test.mjs`, and these task/progress entries. |
+| PR4a0a RED | `cd backend && go test ./internal/httpapi`: FAIL before implementation (`SafeResult.Headers` and `AckCursor` undefined). |
+| PR4a0a focused/runtime GREEN | PostgreSQL harness: `go test ./internal/httpapi ./internal/sync`: PASS; covers 200 body/header/cursor replay, conflict, concurrent lock/in-progress, rollback/retry, 24-hour cleanup, and retained 201 creation. |
+| PR4a0a full/quality/rollback | PostgreSQL-backed `go test ./...`: PASS; `go vet ./...` and `git diff --check`: PASS. Roll back migration/executor/tests together; remove or expire all 200 receipts before restoring the old 201-only constraint. |
 
 ## Next
 
-PR4a1b update/move ownership. Follow-up: `create-ownership.test.mjs` has a minor assertion weakness and is intentionally unchanged in this unit.
+PR4a0b complete-shape integration. Follow-up: `create-ownership.test.mjs` has a minor assertion weakness and is intentionally unchanged in this unit.

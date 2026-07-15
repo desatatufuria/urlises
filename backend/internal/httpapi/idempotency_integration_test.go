@@ -61,7 +61,7 @@ func TestIdempotencyExecutorPostgresContracts(t *testing.T) {
 	if _, _, err := executor.Execute(ctx, IdempotencyIdentity{PrincipalID: failedPrincipal, Method: "POST", Route: identity.Route, Key: "failed-key", Fingerprint: "failed-fingerprint"}, allow, command); err != nil {
 		t.Fatalf("reclaim failed row: %v", err)
 	}
-	if _, err := pool.Exec(ctx, `INSERT INTO idempotency_records (principal_id,method,route,key,fingerprint,status,expires_at,completed_at,response_status,safe_response) VALUES ($1,'POST',$3,'expired-key','x','completed',NOW()-INTERVAL '1 minute',NOW(),201,'{}'::jsonb), ($2,'POST',$3,'in-progress-key','x','in_progress',NOW()-INTERVAL '1 minute',NULL,NULL,NULL)`, expiredPrincipal, inProgressPrincipal, identity.Route); err != nil {
+	if _, err := pool.Exec(ctx, `INSERT INTO idempotency_records (principal_id,method,route,key,fingerprint,status,expires_at,completed_at,response_status,safe_response) VALUES ($1,'PATCH',$3,'expired-key','x','completed',NOW()-INTERVAL '1 minute',NOW(),200,'{}'::jsonb), ($2,'POST',$3,'in-progress-key','x','in_progress',NOW()-INTERVAL '1 minute',NULL,NULL,NULL)`, expiredPrincipal, inProgressPrincipal, identity.Route); err != nil {
 		t.Fatal(err)
 	}
 	if deleted, err := executor.Cleanup(ctx, 10); err != nil || deleted != 1 {
@@ -114,6 +114,52 @@ func TestIdempotencyExecutorAuthorizesBeforeReplay(t *testing.T) {
 	}
 	if outcome != "" || authorized != 1 || created != 0 {
 		t.Fatalf("outcome=%q authorized=%d created=%d", outcome, authorized, created)
+	}
+}
+
+func TestIdempotencyExecutorReplaysSafe200Receipt(t *testing.T) {
+	ctx, pool := openIdempotencyTestPool(t)
+	executor := NewIdempotencyExecutor(pool)
+	principal := seedIdempotencyPrincipal(t, ctx, pool, "receipt-principal@example.com")
+	identity := IdempotencyIdentity{PrincipalID: principal, Method: "PATCH", Route: "PATCH /workspaces/folders|folder-1", Key: "receipt-key", Fingerprint: "canonical-shape"}
+	ackCursor := int64(7)
+	calls := 0
+	command := func(context.Context, pgx.Tx) (SafeResult, error) {
+		calls++
+		return SafeResult{Status: 200, Body: map[string]any{"id": "folder-1", "name": "Canonical"}, Headers: map[string]string{"X-Sync-Event-Id": "receipt-key", "X-Sync-Cursor": "7"}, AckCursor: &ackCursor}, nil
+	}
+
+	first, outcome, err := executor.Execute(ctx, identity, func(context.Context, pgx.Tx) error { return nil }, command)
+	if err != nil || outcome != IdempotencyCreated || first.Status != 200 || calls != 1 {
+		t.Fatalf("first=%#v outcome=%q calls=%d err=%v", first, outcome, calls, err)
+	}
+	ackCursor = 99 // A later cursor-like value must not alter the stored acknowledgement.
+	replayed, outcome, err := executor.Execute(ctx, identity, func(context.Context, pgx.Tx) error { return nil }, command)
+	if err != nil || outcome != IdempotencyReplayed || calls != 1 || replayed.Headers["X-Sync-Cursor"] != "7" || replayed.AckCursor == nil || *replayed.AckCursor != 7 {
+		t.Fatalf("replayed=%#v outcome=%q calls=%d err=%v", replayed, outcome, calls, err)
+	}
+	if _, _, err := executor.Execute(ctx, IdempotencyIdentity{PrincipalID: principal, Method: identity.Method, Route: identity.Route, Key: identity.Key, Fingerprint: "other-shape"}, func(context.Context, pgx.Tx) error { return nil }, command); !errors.Is(err, ErrIdempotencyKeyConflict) {
+		t.Fatalf("incompatible receipt err=%v", err)
+	}
+}
+
+func TestIdempotencyExecutorRollsBackIncompleteReceipt(t *testing.T) {
+	ctx, pool := openIdempotencyTestPool(t)
+	executor := NewIdempotencyExecutor(pool)
+	identity := IdempotencyIdentity{PrincipalID: seedIdempotencyPrincipal(t, ctx, pool, "rollback-principal@example.com"), Method: "PATCH", Route: "PATCH /workspaces/folders|folder-1", Key: "rollback-key", Fingerprint: "shape"}
+	if _, _, err := executor.Execute(ctx, identity, func(context.Context, pgx.Tx) error { return nil }, func(context.Context, pgx.Tx) (SafeResult, error) {
+		return SafeResult{}, errors.New("crash before commit")
+	}); err == nil {
+		t.Fatal("crashed command succeeded")
+	}
+	var count int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM idempotency_records WHERE principal_id=$1 AND method=$2 AND route=$3 AND key=$4`, identity.PrincipalID, identity.Method, identity.Route, identity.Key).Scan(&count); err != nil || count != 0 {
+		t.Fatalf("partial receipt count=%d err=%v", count, err)
+	}
+	if _, outcome, err := executor.Execute(ctx, identity, func(context.Context, pgx.Tx) error { return nil }, func(context.Context, pgx.Tx) (SafeResult, error) {
+		return SafeResult{Status: 200, Body: map[string]string{"id": "folder-1"}}, nil
+	}); err != nil || outcome != IdempotencyCreated {
+		t.Fatalf("retry outcome=%q err=%v", outcome, err)
 	}
 }
 

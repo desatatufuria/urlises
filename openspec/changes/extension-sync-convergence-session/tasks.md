@@ -14,7 +14,7 @@ Chained PRs recommended: Yes
 Chain strategy: stacked-to-main
 400-line budget risk: High
 
-Progress: 28/40 — 28 completed legacy tasks in Phases 1–11; 12 redesigned tasks are unchecked. No new implementation task is complete.
+Progress: 30/40 — 28 completed legacy tasks and PR4a0a are complete; native checklist progress is 13/23. Ten redesigned tasks remain.
 
 | Unit (estimate / reserve) | Start → end; exclusions | Candidate files; RED matrix; commands/runtime evidence | Rollback boundary |
 |---|---|---|---|
@@ -39,8 +39,8 @@ Progress: 28/40 — 28 completed legacy tasks in Phases 1–11; 12 redesigned ta
 - [x] 11.1–11.2 Durable delete ownership.
 
 ## Phase 12: Ledger foundation — PR4a0a
-- [ ] 12.1 RED: safe 200+201 receipt/replay, conflict, stable cursor/headers, race/crash, and 201-create tests.
-- [ ] 12.2 GREEN: generalize ledger transaction; no PATCH routing/events; record rollback/evidence.
+- [x] 12.1 RED: safe 200+201 receipt/replay, conflict, stable cursor/headers, race/crash, and 201-create tests.
+- [x] 12.2 GREEN: generalize ledger transaction; no PATCH routing/events; record rollback/evidence.
 
 ## Phase 13: Complete-shape integration — PR4a0b
 - [ ] 13.1 RED: partial shape, replay/conflict, stable ack, no advance, and real-mutation regression.
