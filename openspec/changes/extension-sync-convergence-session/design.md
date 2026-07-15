@@ -2,24 +2,29 @@
 
 ## Technical Approach
 
-Keep Slice A, integrated PR4a0a (`0a9bf44`), the extension redesign, and completed create/delete behavior unchanged. Insert autonomous **PR4a0a2** before PR4a0b: it makes the generic receipt executor prepare a PATCH only inside its executor-owned transaction. PR4a0b then wires folder/bookmark routes to that prepared path. Equal complete shapes persist/replay a 200 acknowledgement without domain/order/event/cursor work; unequal shapes do one update/event/cursor.
+Keep Slice A, integrated PR4a0a (`0a9bf44`), completed create/delete behavior, and the exact executor transaction model and lock order unchanged. The reverted combined PR4a0a2 is split into two independently reversible foundations before PR4a0b. No PATCH behavior changes until PR4a0b integrates both.
 
 ## Architecture Decisions
 
 | Decision | Alternatives considered | Rationale |
 |---|---|---|
-| Generalize `idempotency_records` for PATCH 200 receipts | A `sync_noop_receipts` table; encoding a receipt in `sync_events` | Reuse the existing principal/key/route/fingerprint ledger, TTL cleanup, advisory first-writer lock, safe response storage, and conflict semantics. `sync_events` is invalid because recording it allocates a cursor. A dedicated table duplicates that model. |
-| Bind receipt to canonical complete shape | Raw PATCH JSON | Partial PATCH bodies cannot distinguish equivalent final state from incompatible reuse. The fingerprint hashes route, resource ID, and normalized final folder `{parentId,name,position}` or bookmark `{folderId,title,url,position}`. |
-| Prepare inside the executor transaction | Route-owned receipt transaction; pre-read fingerprint then revalidate | `Execute` currently requires its fingerprint before `Begin`, while `runMutation` starts another transaction and always records an event. A pre-read can be stale/unauthorized and cannot canonically normalize concurrent siblings; route ownership would duplicate the existing lock, receipt, replay, and rollback primitives. |
-| Serialize affected sibling lists by ordered advisory scope locks | Target-row lock only; unordered sibling row updates | Current `Update*Tx` reads target/siblings without `FOR UPDATE` and reorders sequentially. A target lock cannot serialize two resources moving across the same lists. |
+| Split executor from domain preparation | Restore combined PR4a0a2 | The combined executor, lock harness, and external-transaction seam cannot retain correction reserve under 400 lines. |
+| Prepare inside executor transaction | Pre-read fingerprint; route-owned receipt transaction | Canonical position and authorization depend on locked server state. Pre-read is stale; route ownership duplicates receipt semantics. |
+| Sort sibling scope locks | Target-row lock; query-order locks | Opposing moves need a stable source/destination ordering to avoid deadlock. |
 
-## Backend PATCH Idempotency Amendment — PR4a0a2 then PR4a0b
+## Delivery Chain and Boundaries
 
-`X-Sync-Event-Id` remains the PATCH idempotency key (a generated key is returned when absent). Its scope is `(principal_id, PATCH, route-template + resource ID, key)`; the final-shape fingerprint includes the resource binding, so a key cannot cross user, route, or resource boundaries. The generic ledger is extended to retain `response_status`, canonical JSON body, semantic response headers, and nullable `ack_cursor`; the receipt expires under the current 24-hour terminal-record cleanup policy.
+`PR4a0a → PR4a0a2 → PR4a0a3 → PR4a0b → PR4a1 → PR4a2 → PR4a3 → PR4b`
 
-For a no-op, store status `200`, the canonical resource body, `X-Sync-Event-Id`, and the selected `X-Sync-Cursor`; derive `X-Sync-Duplicate` on replay rather than storing a stale first/replay marker. `ack_cursor` is read from the workspace's current cursor in the receipt transaction and stored permanently. It therefore does not advance, and later workspace events cannot change an acknowledgement already issued.
+| Slice | Estimate / reserve | Includes | Explicitly excludes | Rollback |
+|---|---:|---|---|---|
+| PR4a0a2 — executor foundation | 180–240 / >=100 | `httpapi` prepared executor and PostgreSQL tests | sync, bookmarks, routes, publisher invocation, migration | Remove unused generic API/tests; PR4a0a remains. |
+| PR4a0a3 — domain transaction foundation | 240–310 / >=90 | bookmarks/sync tx prepare/apply seam and lock tests | idempotency executor changes, routes, publisher invocation, migration | Remove unused domain seam/tests; legacy `Update*` remains. |
+| PR4a0b — route integration | 250–300 / >=100 | PATCH route adaptation, response headers, post-commit publisher invocation | extension and migration | Restore legacy PATCH routing; both foundations remain unused. |
 
-PR4a0a already generalized completed records to safe `200`/`201`; no migration follows it. The exact additive executor API is:
+## Interfaces / Contracts
+
+PR4a0a2 adds the generic contract only:
 
 ```go
 type IdempotencyScope struct { PrincipalID, Method, Route, Key string }
@@ -34,52 +39,38 @@ func (e *IdempotencyExecutor) ExecutePrepared(
 ) (SafeResult, IdempotencyOutcome, PostCommit, error)
 ```
 
-`ExecutePrepared` owns scope validation, `Begin`/rollback/commit, advisory scope lock, receipt lookup/insert/update, safe-response validation, and replay/conflict/in-progress errors. `Prepare` owns only read/lock/authorize/containment/normalization and returns the canonical fingerprint plus a no-op or mutation command; it MUST NOT mutate or publish. Command owns domain/event/cursor work and returns its response and optional publisher closure. The closure is returned only after commit and the route invokes it only for a created real mutation; a publisher failure is reported after durable commit and retry replays the receipt without a second event. Domain errors from prepare/command are returned to the route's existing error mapper; executor/receipt errors remain HTTP idempotency errors. Existing `Execute(identity, authorize, command)` remains source-compatible: implement it as an adapter that supplies a `Prepare` calling `authorize`, uses `identity.Fingerprint`, returns the old command, discards a nil post-commit hook, and reuses the same private receipt decision/completion helpers rather than copying them.
+It owns validation, `Begin`/rollback/commit, the receipt-scope advisory lock, receipt decision/completion, safe response validation, replay/conflict/in-progress handling. `Execute` becomes a source-compatible adapter through the same receipt primitives; existing 201 behavior remains covered. `Prepare` may read, lock, authorize, validate containment, normalize, and fingerprint; it must not mutate or publish. `Command` mutates only in that supplied transaction and returns an optional post-commit closure.
+
+PR4a0a3 owns a sync/bookmarks `PreparedPatch` value and `Prepare*PatchTx`/`ApplyPrepared*PatchTx` operations, not HTTP route wiring. Its value carries the canonical fingerprint plus an apply closure/result that PR4a0b adapts to `httpapi.Prepared`; this keeps `sync` independent of HTTP receipt policy and makes either foundation removable while unused. It must never call `runMutation` or `PostgresStore.Update*`, which begin independent transactions.
 
 ## Data Flow
 
 ```text
-PATCH + event key
-  -> executor scope advisory lock -> Prepare: target FOR UPDATE
-  -> derive server workspace -> authorize -> containment/ancestry
-  -> ordered sibling-scope locks -> lock/read siblings -> normalize -> fingerprint
-  -> existing receipt?
-       same shape: replay stored 200/body/headers/cursor (no event)
-       different shape: 409 idempotency_key_conflict (no mutation)
-       absent: equal? store receipt + current cursor -> 200 (no event)
-                unequal? update + record one event/cursor -> store 200 result
-  -> commit; publish only the real mutation's event
+PR4a0b adapter -> ExecutePrepared scope lock
+  -> PR4a0a3 Prepare*PatchTx -> target FOR UPDATE -> workspace auth/containment
+  -> sorted sibling-scope advisory locks -> sibling rows FOR UPDATE -> normalize/fingerprint
+  -> receipt replay/conflict or ApplyPrepared*PatchTx -> receipt completion -> commit
+  -> route invokes post-commit publisher only for a created mutation
 ```
 
-The precise lock order is: (1) non-blocking receipt scope advisory lock `(principal, method, route+resource, key)`; (2) target folder/bookmark `FOR UPDATE`; (3) derive its workspace and require write access; (4) lock/validate target parent/folder and folder ancestry; (5) take blocking transaction advisory locks for every affected ordering scope, sorted by stable `(kind, workspaceID, parentID-or-root)` key—source then destination after sorting, once when equal; (6) select every sibling in each scope `FOR UPDATE ORDER BY position,id`; (7) normalize/clamp position and fingerprint. The apply command uses those prepared locked IDs/order, never rereads an unlocked list. This prevents opposing moves from taking sibling locks in different orders. Authorization and containment deliberately precede receipt lookup, so revoked or cross-workspace callers cannot replay stored bodies/cursors.
+Lock order is fixed: (1) non-blocking receipt scope `(principal, method, route+resource, key)`; (2) target folder/bookmark `FOR UPDATE`; (3) derive workspace and require write access; (4) validate target parent/folder and folder ancestry; (5) blocking affected sibling-scope advisory locks sorted by `(kind, workspaceID, parentID-or-root)`, once if equal; (6) sibling rows `FOR UPDATE ORDER BY position,id`; (7) clamp/normalize and fingerprint. Authorization and containment precede receipt lookup.
 
-`sync.PostgresStore` gains tx-taking prepared PATCH operations (for example `PrepareFolderPatchTx`/`PrepareBookmarkPatchTx` and `ApplyPrepared*PatchTx`) and returns an event-backed post-commit publisher closure only for a mutation. The sync `Store`/`Service` seam exposes this narrow path to routes. It is forbidden for executor callbacks to call `PostgresStore.Update*` or `runMutation`: both call `pool.Begin` and would create a nested independent transaction. Bookmark helpers factor target load, validation, normalization, and locked sibling ordering so `Update*Tx` remains the legacy public path and create/delete remain unchanged.
+## File Changes and Tests
 
-## File Changes
-
-| File | Action | Description |
+| Slice | Exact files | PostgreSQL RED coverage |
 |---|---|---|
-| `backend/internal/httpapi/idempotency.go` | Modify (PR4a0a2) | Add `IdempotencyScope`, `Prepared`, `Prepare`, `PostCommit`, `ExecutePrepared`; factor shared receipt primitives; retain `Execute`. |
-| `backend/internal/httpapi/idempotency_integration_test.go` | Modify (PR4a0a2) | Prove executor-tx preparation, first-writer/in-progress, auth-before-receipt, and atomic rollback. |
-| `backend/internal/bookmarks/service.go` | Modify (PR4a0a2) | Add locked canonical prepare/apply helpers and deterministic sibling lock/read ordering. |
-| `backend/internal/sync/{types,service,postgres}.go` | Modify (PR4a0a2) | Define and implement the external-`pgx.Tx` prepared PATCH seam; no route use yet. |
-| `backend/internal/sync/{bookmark_routes,headers}.go` | Modify (PR4a0b) | Use `ExecutePrepared`, emit stored headers, and invoke post-commit publishing only for mutations. |
-| `backend/internal/{bookmarks, sync}/{service,postgres,bookmark_routes}_test.go` | Modify (split) | Foundation lock/normalization tests in PR4a0a2; end-to-end PATCH receipt tests in PR4a0b. |
-
-## Testing Strategy
-
-| Layer | What to test | Approach |
-|---|---|---|
-| PR4a0a2 integration | executor tx identity; prepare-only behavior; auth-before-receipt; rollback; ordered opposite moves | Assert no prepare mutation/publication, one first writer, no receipt/domain residue on failure, and no lock-order deadlock. |
-| PR4a0b route/PostgreSQL | partial canonical shape, same-key replay/conflict, later-event-stable ack, no-op, mutation | Assert no-op has no event/cursor/publish; mutation has exactly one event/cursor/publish; revoked/cross-workspace cannot replay. |
-| Regression | Existing 201 creation and create/delete paths | Assert `Execute` compatibility and untouched `runMutation` behavior. |
+| PR4a0a2 | `backend/internal/httpapi/idempotency.go`; `backend/internal/httpapi/idempotency_test.go`; `backend/internal/httpapi/idempotency_integration_test.go` | Same executor transaction; authorization/prepare before receipt lookup; replay and fingerprint conflict; rollback removes receipt/domain work; returned post-commit hook; existing 201 `Execute` compatibility. |
+| PR4a0a3 | `backend/internal/bookmarks/service.go`; `backend/internal/bookmarks/service_integration_test.go`; `backend/internal/sync/types.go`; `backend/internal/sync/service.go`; `backend/internal/sync/postgres.go`; `backend/internal/sync/postgres_integration_test.go` | External `pgx.Tx` prepare/apply; target and sibling `FOR UPDATE`; authorization/containment; normalization; sorted scopes; opposite-move deadlock harness. |
+| PR4a0b | `backend/internal/sync/bookmark_routes.go`; `backend/internal/sync/bookmark_routes_test.go`; `backend/internal/sync/headers.go`; `backend/internal/sync/postgres_integration_test.go` | Complete-shape no-op/replay/conflict, stable acknowledgement, no event/cursor/publish for no-op, and one event/cursor/publish for mutation. |
 
 ## Migration / Rollout
 
-No migration is required beyond integrated `000008_sync_patch_idempotency.sql`. A crash/response loss after commit replays the completed receipt; before commit (including receipt completion failure) rolls back resource reorder, event, cursor, and receipt. The first same-scope writer holds the advisory lock; contenders receive in-progress and retry. Rollback PR4a0a2 removes its unused API/seam without touching PR4a0a. Rollback PR4a0b restores existing PATCH routing; do not restore a 201-only constraint until 200 receipts expire or are removed.
+No migration follows integrated `000008_sync_patch_idempotency.sql`. PR4a0a2 and PR4a0a3 are unused foundations; neither alters external behavior. PR4a0b alone exposes durable PATCH acknowledgement behavior. No spec amendment is required.
 
-## Scope, Delivery, and Open Questions
+## Threat Matrix
 
-PR4a0a2 is autonomous: **300–340 authored lines**, reserve **60–100**; it adds unused prepared infrastructure and tests only. PR4a0b is complete-shape route integration: **250–300**, reserve **100–150**. Neither alters extension work or completed create/delete. Threat matrix: N/A — no shell, subprocess, VCS/PR automation, executable classification, or process-integration boundary.
+N/A — no shell, subprocess, VCS/PR automation, executable-file classification, or process-integration boundary.
 
-No spec amendment is required: the delta already requires durable same-key acknowledgement, incompatible-reuse rejection, and no event/cursor advance. Next phase: revise tasks to insert PR4a0a2 before PR4a0b.
+## Open Questions
+
+None. Next phase: sdd-tasks updates the delivery plan only.
