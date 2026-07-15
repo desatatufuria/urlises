@@ -2,60 +2,62 @@
 
 ## Technical Approach
 
-Keep Slice A unchanged. Redesign Slice B update/move as a durable receipt ledger plus local-intent outbox. Create/delete ownership at `482ed88` remains unchanged. Rebuild/resync is not enabled until final repair.
+Keep Slice A and completed create/delete behavior unchanged. PR4a0 makes PATCH update/move convergence safe by recognizing the requested **complete final shape** before mutation. Equality returns a durable 200 acknowledgement; it never changes a folder/bookmark or ordering, inserts/publishes a `sync_events` record, or advances `workspace_cursors`. Persisting that acknowledgement is required and is not a sync mutation.
 
-## Phase 12/13 — Update/Move Convergence Redesign
+## Architecture Decisions
 
-### Observable boundary and decision
-
-`onChanged(id, {title?, url?})` is partial; `onMoved(id, {oldParentId, oldIndex, parentId, index})` is a tuple. Neither has a token, workspace, or complete node. Callbacks may precede/follow promises and duplicate/reorder. A callback alone cannot prove ownership or distinguish a delayed remote callback from an identical local action after consumption. **No clock/window or chromeId-wide suppression is permitted.**
-
-| Option | Tradeoff | Decision |
+| Decision | Alternatives considered | Rationale |
 |---|---|---|
-| Retain done ownership / timing suppression | Drops legitimate immediate edits | Reject |
-| Consume partial payload | Cannot establish complete transition identity | Reject |
-| Receipt + full read + outbox no-op contract | Requires Phase 12 foundation and spec clarification | Choose |
+| Generalize `idempotency_records` for PATCH 200 receipts | A `sync_noop_receipts` table; encoding a receipt in `sync_events` | Reuse the existing principal/key/route/fingerprint ledger, TTL cleanup, advisory first-writer lock, safe response storage, and conflict semantics. `sync_events` is invalid because recording it allocates a cursor. A dedicated table duplicates that model. |
+| Bind receipt to canonical complete shape | Raw PATCH JSON | Partial PATCH bodies cannot distinguish equivalent final state from incompatible reuse. The fingerprint hashes route, resource ID, and normalized final folder `{parentId,name,position}` or bookmark `{folderId,title,url,position}`. |
+| Run both PATCH outcomes through the receipt transaction | Probe then existing mutation | One transaction prevents a same-key/different-shape request from slipping between no-op detection and mutation. The real mutation retains its current result: exactly one event and cursor increment. |
 
-### Receipt and transition model
+## PR4a0 Receipt Contract
 
-Persist a bounded, versioned per-workspace `transitionReceipts` ledger. A receipt is `{id, workspaceId, entityType, backendId, chromeId, cursor, eventId, before, expectedAfter, signatures, state}`. Shapes include type/title/URL/parent/index; signatures are changed fields/values and/or move old/new tuple. States: `pending | consumed | verified | failed`; compact terminal receipts only after cursor advance. Persist `lastAcknowledgedShape` per mapped node.
+`X-Sync-Event-Id` remains the PATCH idempotency key (a generated key is returned when absent). Its scope is `(principal_id, PATCH, route-template + resource ID, key)`; the final-shape fingerprint includes the resource binding, so a key cannot cross user, route, or resource boundaries. The generic ledger is extended to retain `response_status`, canonical JSON body, semantic response headers, and nullable `ack_cursor`; the receipt expires under the current 24-hour terminal-record cleanup policy.
 
-Before `updateNode`/`moveNode`, the workspace serial reducer verifies mapping/managed containment, reads `before`, writes `pending`, then calls Chrome. The callback uses that reducer, proves containment, reads the full node, and compares `expectedAfter` plus signature. A partial `onChanged` never consumes without this read. Mark `consumed` and update `lastAcknowledgedShape`; mark `verified` only after promise/read confirms final shape. Mismatch becomes a local intent.
+For a no-op, store status `200`, the canonical resource body, `X-Sync-Event-Id`, and the selected `X-Sync-Cursor`; derive `X-Sync-Duplicate` on replay rather than storing a stale first/replay marker. `ack_cursor` is read from the workspace's current cursor in the receipt transaction and stored permanently. It therefore does not advance, and later workspace events cannot change an acknowledgement already issued.
 
-### Phase boundary and flow
+The existing completed-record constraint and executor's 201-only guard are generalized to permit safe `200` and `201` responses; existing create records remain valid. No new general PATCH API is introduced: only folder/bookmark PATCH use this capability in PR4a0.
 
-Phase 12 must move local-intent capture/outbox **before** remote update/move application; it cannot be correct as the former later phase.
+## Data Flow
 
 ```text
-listener -> workspace reducer -> full node read -> pending receipt match?
-                                     | yes, pending: consume -> verify
-                                     | no/already consumed: durable local intent -> outbox
-remote event -> receipt(pending) -> Chrome effect -> read/verify -> cursor checkpoint
+PATCH + event key
+  -> key advisory lock -> authorize + lock/load resource
+  -> derive complete target -> fingerprint -> existing receipt?
+       same shape: replay stored 200/body/headers/cursor (no event)
+       different shape: 409 idempotency_key_conflict (no mutation)
+       absent: equal? store receipt + current cursor -> 200 (no event)
+                unequal? update + record one event/cursor -> store 200 result
+  -> commit; publish only the real mutation's event
 ```
 
-After consumption, an indistinguishable callback queues, never suppresses. Required invariant: an outbox update/move whose complete shape already equals backend canonical state is a no-op (no mutation/event/cursor advance). Without it, remote-feedback prevention and preserving indistinguishable local actions are information-theoretically incompatible.
+The implementation factors the current sync PATCH transaction so the idempotency executor owns the transaction and the store performs authorization, canonical load/target calculation, and either update/event recording inside it. Lock order is idempotency advisory key, then resource row; concurrent first writers for the same key receive the existing in-progress conflict and retry. A committed no-op survives a response-loss/crash and replays exactly. A pre-commit failure rolls back both resource work and receipt. Post-commit publisher failure retains the existing mutation retry behavior; no-op never calls the publisher.
 
-### State machine, failures, and invariants
+## File Changes
 
-`planned -> pending -> consumed -> verified`; `pending|consumed -> failed -> paused`. Checkpoint requires verified predecessor cursor. Capacity/write/read/promise error or mismatch pauses and preserves cursor. Refuse replay `cursor <= lastCursor`; no later event passes a failed cursor. On restart, prove then verify; retry only pre-effect pending with proof, else pause `ambiguous-transition`. No-op remote shape has no receipt/effect. Pending local edits queue with stable IDs.
-
-| Failure | Safe outcome |
-|---|---|
-| Full-node read/runtime error, unknown containment, signature/shape mismatch | Queue local intent when observable; otherwise pause, no cursor advance |
-| Receipt/outbox capacity or durable-write failure | Pause before Chrome/API effect; retain failed cursor |
-| Callback before/after promise, duplicate before consumption | Serialized first exact pending match consumes once; others queue |
-| Duplicate after consumption / immediate local reversion | Queue; backend no-op invariant prevents feedback, reversion is preserved |
-
-Invariants: every receipt and intent names one workspace; only its managed root may match; receipt consumption requires exact complete transition proof; each cursor is terminally verified before checkpoint; queues are bounded and fail closed; create/delete semantics remain unchanged.
-
-## Delivery, Interfaces, and Rollback
-
-12a (<=400 lines): types/storage migration, reducer, receipt/outbox normalization, no-op contract tests. 12b (<=400): remote update/move application and listener correlation. 13 (<=400): recovery, compaction, cursor sequencing, behavior matrix. Modify shared types/storage/API, projection/convergence, and fake-Chrome tests. Migrate v1 additively; unknown legacy in-flight update/move pauses. Rollback disables only new update/move application, retains ledger/outbox, and never auto-Rebuilds.
+| File | Action | Description |
+|---|---|---|
+| `backend/migrations/000008_sync_patch_idempotency.sql` | Create | Generalize terminal receipt constraint and add response-header/ack-cursor storage compatibly. |
+| `backend/internal/httpapi/idempotency.go` | Modify | Permit safe 200 receipts and preserve semantic headers/cursor through replay. |
+| `backend/internal/sync/{types,headers,service,postgres,bookmark_routes}.go` | Modify | Route PATCH through the transactional complete-shape receipt path; publish only real events. |
+| `backend/internal/sync/{bookmark_routes,postgres}_test.go` | Modify | Cover contract and PostgreSQL persistence/races. |
 
 ## Testing Strategy
 
-Fake-Chrome tests must construct each state: title-/URL-only callback with full-node mismatch; immediate reversion; repeated move; duplicates before/after consumption; callback before/after promise; restart per receipt state; same chrome-like IDs in two workspaces; containment violation; read/write/capacity failures; cursor-0 failure then later event; replay refusal at `currentCursor <= lastCursor`. Assert receipt, outbox, mapping, calls, cursor, pause. Preserve create/delete regressions.
+| Layer | What to test | Approach |
+|---|---|---|
+| Route | Folder/bookmark name/title, URL, parent/folder, and position equality | Assert 200 canonical body, stable event/cursor headers, no event publication, and no cursor advance. |
+| Integration | Same key/shape, changed final shape, later workspace events, and concurrent first writers | Assert replayed stored receipt; 409 before mutation; stored ack cursor remains old; one winner/no event for equal shape. |
+| Regression | Unequal PATCH | Assert current one-event/one-cursor behavior and existing create/delete idempotency remains 201. |
 
-## Specification and Rollout Implications
+## Migration / Rollout
 
-The convergence spec lacks the backend no-op contract and post-consumption ambiguity routing. A **spec delta is required**, not tasks-only: complete-shape no-op without publish/cursor advance, partial-callback full-read proof, containment isolation, fail-closed cursor ordering. Proposal scope is unchanged. Threat matrix: N/A — no routing, shell, subprocess, VCS/PR automation, executable classification, or process-integration boundary.
+Migration is additive except replacing the too-narrow completed-response check; it accepts existing 201 rows and allows nullable new fields for them. Rollback deploys code first/last safely: old code ignores added columns, while retained 200 receipts are inert if rollback restores the prior constraint only after those records expire or are removed. Access is rechecked before ledger lookup; resource workspace is derived server-side, preventing cross-workspace key or cursor disclosure. Log only route/resource IDs, disposition, and cursor—not bodies or keys.
+
+## Scope, Delivery, and Open Questions
+
+PR4a0 remains autonomous: estimated **360–390 authored lines** including migration, focused tests, and design artifact update. It must not alter extension receipt/outbox work or completed create/delete paths. Threat matrix: N/A — no shell, subprocess, VCS/PR automation, executable classification, or process-integration boundary.
+
+No spec amendment is required: the current delta already mandates durable same-key acknowledgement, rejection of incompatible reuse, and no event/cursor advance. Next phase: revise tasks, then apply PR4a0.
