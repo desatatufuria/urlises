@@ -4,24 +4,25 @@
 
 | Field | Value |
 |---|---|
-| Remaining authored lines (tests + artifact update included) | 2,050–2,230 |
-| Per-unit budget / correction reserve | 180–200 / 200–220 (PR4a0a, complete); 180–240 / >=100 (PR4a0a2); 240–310 / >=90 (PR4a0a3); 250–300 / 100–150 (PR4a0b); 330–380 / 20–70 thereafter |
+| Remaining authored lines (tests + artifact update included) | 2,310–2,570 |
+| Per-unit budget / correction reserve | 180–200 / 200–220 (PR4a0a, complete); 180–240 / >=100 (PR4a0a2); 280–350 / >=50 (PR4a0a3a); 220–300 / >=100 (PR4a0a3b); 250–300 / 100–150 (PR4a0b); 330–380 / 20–70 thereafter |
 | Delivery / chain | auto-forecast / stacked-to-main; target `develop` in order |
-| Suggested chain | PR4a0a → PR4a0a2 → PR4a0a3 → PR4a0b → PR4a1 → PR4a2 → PR4a3 → PR4b |
+| Suggested chain | PR4a0a → PR4a0a2 → PR4a0a3a → PR4a0a3b → PR4a0b → PR4a1 → PR4a2 → PR4a3 → PR4b |
 
 Decision needed before apply: No
 Chained PRs recommended: Yes
 Chain strategy: stacked-to-main
 400-line budget risk: High
 
-Progress: 32/44 semantic tasks complete. Native checklist progress is 15/27 because legacy grouped checkboxes represent multiple semantic tasks.
+Progress: 32/46 semantic tasks complete. Native checklist progress is 15/29 because legacy grouped checkboxes represent multiple semantic tasks; splitting two unchecked PR4a0a3 checkboxes into four changes the denominator only.
 
 | Unit (estimate / reserve) | Start → end; exclusions | Candidate files; RED matrix; commands/runtime evidence | Rollback boundary |
 |---|---|---|---|
 | PR4a0a ledger foundation (180–200 / 200–220) | 201-only ledger → generic 200/201 receipt/replay; exclude PATCH routing, events, extension | `backend/migrations/000008_sync_patch_idempotency.sql`, `backend/internal/httpapi/{idempotency,idempotency_test}.go`, `backend/internal/sync/{postgres,postgres_test}.go`. RED: 200 replay, canonical conflict, stable headers/nullable fixed ack, concurrent writers, crash/replay, 201 create. `cd backend && go test ./internal/httpapi ./internal/sync`; PostgreSQL harness replays after a later workspace event. | Migration + generic receipt executor/store/tests; expire 200 records before restoring old constraint. |
 | PR4a0a2 executor foundation (180–240 / >=100) | PR4a0a → unused `httpapi` prepared executor; exclude sync, bookmarks, routes, publisher invocation, migration | `backend/internal/httpapi/{idempotency.go,idempotency_test.go,idempotency_integration_test.go}`. RED: same tx; prepare/auth before receipt lookup; replay/conflict/in-progress; atomic rollback; returned/not-invoked post-commit; 201 `Execute` compatibility. `cd backend && go test ./internal/httpapi`; PostgreSQL executor scenario. | Remove only prepared executor, private receipt primitives, and tests; retain PR4a0a ledger and legacy `Execute`. |
-| PR4a0a3 domain transaction foundation (240–310 / >=90) | PR4a0a2 → unused bookmarks/sync external-`pgx.Tx` prepare/apply seam; exclude idempotency, routes, publisher invocation, migration | `backend/internal/bookmarks/{service.go,service_integration_test.go}`, `backend/internal/sync/{types.go,service.go,postgres.go,postgres_integration_test.go}`. RED: target/siblings `FOR UPDATE`, auth/containment, normalize/fingerprint, sorted scope locks, opposite-move deadlock/race. `cd backend && go test ./internal/bookmarks ./internal/sync`; PostgreSQL opposite-move harness. | Remove only `PreparedPatch` seam/helpers/tests; retain legacy `Update*` routes and PR4a0a2 unused. |
-| PR4a0b complete-shape integration (250–300 / 100–150) | PR4a0a2 + PR4a0a3 → folder/bookmark route wiring and post-commit invocation; exclude extension | `backend/internal/sync/{types,service,postgres,bookmark_routes,headers}.go`, `{bookmark_routes,postgres}_test.go`. RED: partial composition, replay/conflict, later-event-stable ack, no event/cursor advance, real mutation one event/cursor with auth/base-cursor/containment. `cd backend && go test ./internal/sync ./internal/bookmarks`; HTTP/PostgreSQL route harness proves no-op and mutation. | PATCH route wiring/tests; revert to unused prepared foundations, no route event semantics. |
+| PR4a0a3a prepare foundation (280–350 / >=50) | PR4a0a2 → unused immutable locked preparation; exclude resource/order/event/cursor mutation, routes, publisher, HTTP idempotency, migration | `backend/internal/bookmarks/{service.go,service_integration_test.go}`, `backend/internal/sync/{types.go,service.go,postgres.go,postgres_integration_test.go}`. RED: external-tx prepare, lock/order, auth/containment/ancestry, canonical no-op. `cd backend && go test ./internal/bookmarks ./internal/sync`; PostgreSQL blocking/opposite-move harness. | Remove only prepare API, lock/normalization helpers, and tests; retain legacy `Update*` and PR4a0a2. |
+| PR4a0a3b apply foundation (220–300 / >=100) | PR4a0a3a → unused same-tx prepared apply; exclude prepare/lock changes, routes, HTTP idempotency, migration, publisher invocation | `backend/internal/bookmarks/{service.go,service_integration_test.go}`, `backend/internal/sync/{types.go,service.go,postgres.go,postgres_integration_test.go}`. RED: zero-write no-op, exact prepared mutation/one event-cursor, rollback, legacy compatibility. `cd backend && go test ./internal/bookmarks ./internal/sync`; PostgreSQL transaction harness. | Remove only apply API/tests; retain unused prepare foundation and legacy `Update*`. |
+| PR4a0b complete-shape integration (250–300 / 100–150) | PR4a0a2 + PR4a0a3a + PR4a0a3b → folder/bookmark route wiring and post-commit invocation; exclude extension | `backend/internal/sync/{types,service,postgres,bookmark_routes,headers}.go`, `{bookmark_routes,postgres}_test.go`. RED: partial composition, replay/conflict, later-event-stable ack, no event/cursor advance, real mutation one event/cursor with auth/base-cursor/containment. `cd backend && go test ./internal/sync ./internal/bookmarks`; HTTP/PostgreSQL route harness proves no-op and mutation. | PATCH route wiring/tests; revert to unused prepared foundations, no route event semantics. |
 | PR4a1 outbox (330 / 70) | PR4a0b → capture; no consumption | extension outbox paths; `cd extension && npm run build && node --test tests/convergence.test.mjs`; restart harness. | intent capture/tests |
 | PR4a2 receipts (340 / 60) | PR4a1 → dormant receipts; no effects | PR4a1 paths; same command; callback harness. | receipt reducer/tests |
 | PR4a3 apply (380 / 20) | PR4a2 → gated update/move; no repair | PR4a1 paths; same command; ordering/restart harness. | application/tests |
@@ -48,12 +49,16 @@ Progress: 32/44 semantic tasks complete. Native checklist progress is 15/27 beca
 - [x] 13a.1 RED: in `backend/internal/httpapi/idempotency_{test,integration_test}.go`, prove same executor tx; prepare/auth before receipt lookup; replay/conflict/in-progress; atomic rollback; returned but never invoked post-commit; and existing-201 `Execute` compatibility via PostgreSQL.
 - [x] 13a.2 GREEN: in `backend/internal/httpapi/idempotency.go`, add only `IdempotencyScope`, `Prepared`, `Prepare`, `Command`, `PostCommit`, `ExecutePrepared`, private shared receipt primitives, and an `Execute` adapter; prepare is read/lock/auth only, command is transactional, no sync/bookmarks/routes/publisher/migration.
 
-## Phase 13b: Domain transaction foundation — PR4a0a3
-- [ ] 13b.1 RED: in `backend/internal/{bookmarks/service_integration_test.go,sync/postgres_integration_test.go}`, prove external-`pgx.Tx` prepare/apply, target and stable sibling `FOR UPDATE`, workspace authorization/containment, normalize/fingerprint, and opposite-move PostgreSQL deadlock/race safety.
-- [ ] 13b.2 GREEN: in `backend/internal/bookmarks/service.go` and `backend/internal/sync/{types.go,service.go,postgres.go}`, add only `PreparedPatch` and `Prepare*PatchTx`/`ApplyPrepared*PatchTx`: lock target, derive workspace, authorize/contain, sorted affected sibling-scope locks, lock siblings `ORDER BY position,id`, normalize/fingerprint, then apply prepared state; never nest `runMutation`/`Update*`, add idempotency/routes/publisher/migration.
+## Phase 13b: Prepare foundation — PR4a0a3a
+- [ ] 13b.1 RED: in `backend/internal/{bookmarks/service_integration_test.go,sync/postgres_integration_test.go}`, prove external-`pgx.Tx` `PrepareFolderPatchTx`/`PrepareBookmarkPatchTx`; target `FOR UPDATE`; workspace auth, containment, ancestry; sorted source/destination sibling scopes and stable sibling `FOR UPDATE`; trim/validate/clamp/normalize, fingerprint/final-shape/no-op; blocking/opposite-move/no-deadlock/no-mutation PostgreSQL cases. Run `cd backend && go test ./internal/bookmarks ./internal/sync`; rollback: remove only these RED tests.
+- [ ] 13b.2 GREEN: in `backend/internal/bookmarks/service.go` and `backend/internal/sync/{types.go,service.go,postgres.go}`, add immutable `PreparedPatch` and external-tx prepare methods that lock/authorize/contain, sort scopes, lock siblings `ORDER BY position,id`, and canonicalize before fingerprinting; zero resource/order/event/cursor mutation. Run the same command; rollback: remove only prepare API/helpers/tests, retaining legacy `Update*` and PR4a0a2.
+
+## Phase 13c: Apply foundation — PR4a0a3b
+- [ ] 13c.1 RED: in `backend/internal/{bookmarks/service_integration_test.go,sync/postgres_integration_test.go}`, prove same-tx prepared apply: no-op has zero writes; mutation writes exact prepared resource/order and one event/cursor; publisher data is returned, not invoked; rollback removes all; legacy `Update*` remains compatible. Run `cd backend && go test ./internal/bookmarks ./internal/sync`; rollback: remove only these RED tests.
+- [ ] 13c.2 GREEN: in `backend/internal/bookmarks/service.go` and `backend/internal/sync/{types.go,service.go,postgres.go}`, add `ApplyPreparedFolderPatchTx`/`ApplyPreparedBookmarkPatchTx` consuming the same prepared state/tx and returning uninvoked publisher data; make no prepare/lock changes and add no routes, HTTP idempotency, or migration. Run the same command; rollback: remove only apply API/tests, retaining prepare and legacy `Update*`.
 
 ## Phase 14: Complete-shape integration — PR4a0b
-- [ ] 14.1 RED: partial shape, replay/conflict, stable ack, no advance, and real-mutation regression.
+- [ ] 14.1 RED: after PR4a0a2 + PR4a0a3a + PR4a0a3b, prove partial shape, replay/conflict, stable ack, no advance, and real mutation regression.
 - [ ] 14.2 GREEN: ledger-routed update/move retains auth/base-cursor/containment and one event/cursor.
 
 ## Phase 15: Intent foundation — PR4a1
