@@ -14,7 +14,7 @@ Chained PRs recommended: Yes
 Chain strategy: stacked-to-main
 400-line budget risk: High
 
-Progress: 32/48 semantic tasks complete. Native checklist progress is 15/31 because legacy grouped checkboxes represent multiple semantic tasks; splitting two unchecked PR4a0a3a tasks into four changes denominators only.
+Progress: 34/48 semantic tasks complete. Native checklist progress is 17/31 because legacy grouped checkboxes represent multiple semantic tasks; splitting two unchecked PR4a0a3a tasks into four changes denominators only.
 
 | Unit (estimate / reserve) | Start → end; exclusions | Candidate files; RED matrix; commands/runtime evidence | Rollback boundary |
 |---|---|---|---|
@@ -51,8 +51,8 @@ Progress: 32/48 semantic tasks complete. Native checklist progress is 15/31 beca
 - [x] 13a.2 GREEN: in `backend/internal/httpapi/idempotency.go`, add only `IdempotencyScope`, `Prepared`, `Prepare`, `Command`, `PostCommit`, `ExecutePrepared`, private shared receipt primitives, and an `Execute` adapter; prepare is read/lock/auth only, command is transactional, no sync/bookmarks/routes/publisher/migration.
 
 ## Phase 13b: Prepare foundation — PR4a0a3a.1 → PR4a0a3a.2
-- [ ] 13b.1 RED (PR4a0a3a.1): in `backend/internal/sync/postgres_integration_test.go`, fail for opposite/same-scope moves until `prepareScopeKeys`, scope locks, locked revalidation, retryable drift refusal, and no-post-row-lock scope acquisition exist; assert zero resource/order/event/cursor writes. Run `cd backend && go test ./internal/sync`; use deterministic PostgreSQL `postgres:5432`; rollback: kernel RED tests only.
-- [ ] 13b.2 GREEN (PR4a0a3a.1): in `backend/internal/sync/postgres.go`, add sorted/deduplicated scope advisory locking before target/sibling `FOR UPDATE`, locked scope rederivation, and bounded whole-tx retryable drift refusal; never acquire scopes after row locks. Run the same command/harness; rollback: kernel/helpers/tests only.
+- [x] 13b.1 RED (PR4a0a3a.1): in `backend/internal/sync/postgres_integration_test.go`, fail for opposite/same-scope moves until `prepareScopeKeys`, scope locks, locked revalidation, retryable drift refusal, and no-post-row-lock scope acquisition exist; assert zero resource/order/event/cursor writes. Run `cd backend && go test ./internal/sync`; use deterministic PostgreSQL `postgres:5432`; rollback: kernel RED tests only.
+- [x] 13b.2 GREEN (PR4a0a3a.1): in `backend/internal/sync/postgres.go`, add sorted/deduplicated scope advisory locking before target/sibling `FOR UPDATE`, locked scope rederivation, and bounded whole-tx retryable drift refusal; never acquire scopes after row locks. Run the same command/harness; rollback: kernel/helpers/tests only.
 - [ ] 13b.3 RED (PR4a0a3a.2): in `backend/internal/bookmarks/service_integration_test.go`, fail external-`pgx.Tx` `PrepareFolderPatchTx`/`PrepareBookmarkPatchTx` for immutable full-shape `PreparedPatch`, auth/containment/ancestry, trim/validate/clamp, fingerprint, canonical no-op, and legacy `Update*`. Run `cd backend && go test ./internal/bookmarks ./internal/sync`; PostgreSQL `postgres:5432` adapter harness; do not repeat kernel concurrency proof; rollback: adapter RED tests only.
 - [ ] 13b.4 GREEN (PR4a0a3a.2): in `backend/internal/bookmarks/service.go` and `backend/internal/sync/{types.go,service.go,postgres.go}`, add immutable `PreparedPatch` and external-tx folder/bookmark prepare adapters using PR4a0a3a.1; preserve read-only preparation, zero writes, and legacy `Update*`. Run the same command/harness; rollback: adapters/tests only.
 

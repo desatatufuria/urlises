@@ -10,7 +10,7 @@
 |---|---|---|
 | One prepare slice | At least 403 authored lines | Reject: exceeds the non-exception cap. |
 | Separate folder/bookmark locking | Duplicates a concurrency invariant | Reject: drift risks divergent lock order. |
-| Shared `bookmarks` kernel, then adapters | First slice is intentionally inert | Choose: both existing `Update*Tx` paths already live in `bookmarks.Service`; one owner preserves one ordering rule. |
+| Shared `sync` kernel, then adapters | First slice is intentionally inert | Choose: `.1` owns the shared `sync` kernel in `backend/internal/sync/postgres.go`, with its proof in `backend/internal/sync/postgres_integration_test.go`; one owner preserves one ordering rule. |
 | Workspace-wide lock / target-first lock | Over-serialization / proven opposite-move cycle | Reject. |
 
 ## Data Flow
@@ -27,12 +27,12 @@ read-only target -> source/destination ScopeKey -> sorted, deduped advisory lock
 
 | Slice | Start -> end / exact dependency | Interfaces and candidate files | Owned RED/GREEN proof; estimate + reserve | Rollback / exclusions |
 |---|---|---|---|---|
-| **PR4a0a3a.1 kernel** | PR4a0a2 -> inert, reusable PostgreSQL scope-lock/revalidation kernel. Depends only on PR4a0a2. | Internal `ScopeKey`, sorted/deduped `lockScopesTx`, `PrepareScopeDriftError`, `IsRetryablePrepareError`, and snapshot/revalidation seam in `backend/internal/bookmarks/service.go`; tests in `backend/internal/bookmarks/service_integration_test.go`. | RED/GREEN: deterministic opposite moves sharing scopes block/release without `40P01`; same scope locks once; target/source/destination drift is typed retryable and rolls back; no post-row-lock scope acquisition; no writes. **220 + 150 = 370**. | Revert kernel/tests only. Excludes `PreparedPatch`, normalization, auth/containment/ancestry, fingerprint, sync store, routes, events/cursors, and apply. |
+| **PR4a0a3a.1 kernel** | PR4a0a2 -> inert, reusable PostgreSQL scope-lock/revalidation kernel. Depends only on PR4a0a2. | Internal `ScopeKey`, sorted/deduped `lockScopesTx`, `PrepareScopeDriftError`, `IsRetryablePrepareError`, and snapshot/revalidation seam in `backend/internal/sync/postgres.go`; tests in `backend/internal/sync/postgres_integration_test.go`. | RED/GREEN: deterministic opposite moves sharing scopes block/release without `40P01`; same scope locks once; target/source/destination drift is typed retryable and rolls back; no post-row-lock scope acquisition; no writes. **220 + 150 = 370**. | Revert kernel/tests only. Excludes `PreparedPatch`, normalization, auth/containment/ancestry, fingerprint, sync store, routes, events/cursors, and apply. |
 | **PR4a0a3a.2 adapters** | Kernel -> immutable folder and bookmark prepared adapters; depends exactly on merged PR4a0a3a.1. | `PrepareFolderPatchTx` / `PrepareBookmarkPatchTx` consume the kernel in `bookmarks/service.go`; canonical `PreparedPatch` and store-facing adapters in `sync/{types.go,service.go,postgres.go}`; integration tests in both package test files. | RED/GREEN: external `pgx.Tx`; locked auth, containment, ancestry; trim/URL/position normalization; complete final shape, stable fingerprint, and no-op; legacy `Update*` compatibility; prepare zero resource/order/event/cursor writes. Kernel concurrency tests are not duplicated. **240 + 140 = 380**. | Revert adapters/tests only; kernel remains inert and safe. Excludes apply, `ExecutePrepared` route wiring, publisher invocation, HTTP idempotency, migrations, extension. |
 
 ## Interfaces / Contracts
 
-The kernel is internal to `bookmarks`; adapters must not reimplement scope ordering. `Prepare*PatchTx(ctx, tx pgx.Tx, ...)` retains caller transaction ownership and returns immutable state only after locked revalidation. Its retryable drift classification is private to prepare/executor integration. `ApplyPrepared*PatchTx`, route adaptation, event/cursor creation, and publishing remain PR4a0a3b/PR4a0b work.
+The kernel is internal to `sync`; adapters must not reimplement scope ordering. `Prepare*PatchTx(ctx, tx pgx.Tx, ...)` retains caller transaction ownership and returns immutable state only after locked revalidation. Its retryable drift classification is private to prepare/executor integration. `ApplyPrepared*PatchTx`, route adaptation, event/cursor creation, and publishing remain PR4a0a3b/PR4a0b work.
 
 ## Testing Strategy
 
@@ -42,8 +42,8 @@ Use the existing isolated-schema PostgreSQL integration harness with `BOOKMARKS_
 
 | File | Action | Description |
 |---|---|---|
-| `backend/internal/bookmarks/service.go` | Modify | Kernel, then prepared adapters. |
-| `backend/internal/bookmarks/service_integration_test.go` | Modify | Kernel and folder proof. |
+| `backend/internal/sync/postgres.go` | Modify | .1 scope-lock/revalidation kernel. |
+| `backend/internal/sync/postgres_integration_test.go` | Modify | .1 kernel proof. |
 | `backend/internal/sync/{types.go,service.go,postgres.go}` | Modify | .2 canonical adapter types only. |
 | `backend/internal/sync/postgres_integration_test.go` | Modify | .2 bookmark/store proof. |
 
@@ -57,4 +57,4 @@ No migration required. Each inert sub-slice is independently reversible.
 
 ## Open Questions
 
-None. `sdd-tasks` must replace 13b.1/13b.2 with these two slices and retain all later phases unchanged.
+None. `sdd-apply` must execute PR4a0a3a.2 canonical folder/bookmark adapters; retain all later phases unchanged.

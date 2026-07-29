@@ -2,6 +2,7 @@ package syncapi
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -14,6 +15,122 @@ import (
 	"github.com/furia/shared-bookmark-sync/backend/internal/database"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+func TestPrepareScopesTxSerializesAndRefusesDrift(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping PostgreSQL integration test in short mode")
+	}
+	ctx, pool := openSyncTestPool(t)
+	keys := []siblingScopeKey{
+		{kind: "bookmark", workspaceID: "workspace", parentID: "destination"},
+		{kind: "bookmark", workspaceID: "workspace", parentID: "source"},
+	}
+	before := syncWriteCounts(t, ctx, pool)
+
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := prepareScopesTx(ctx, tx, keys, func() error { _, err := tx.Exec(ctx, `SELECT 1 FROM schema_migrations LIMIT 1 FOR UPDATE`); return err }, func() ([]siblingScopeKey, error) { return keys, nil }); err != nil {
+		t.Fatal(err)
+	}
+	blocked := make(chan error, 1)
+	go func() {
+		other, err := pool.Begin(ctx)
+		if err != nil {
+			blocked <- err
+			return
+		}
+		defer other.Rollback(ctx)
+		blocked <- prepareScopesTx(ctx, other, []siblingScopeKey{keys[1], keys[0], keys[0]}, func() error {
+			_, err := other.Exec(ctx, `SELECT 1 FROM schema_migrations LIMIT 1 FOR UPDATE`)
+			return err
+		}, func() ([]siblingScopeKey, error) { return keys, nil })
+	}()
+	select {
+	case err := <-blocked:
+		t.Fatalf("same/opposite scopes did not block: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-blocked:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("scope lock did not release")
+	}
+
+	tx, err = pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = prepareScopesTx(ctx, tx, keys, func() error { _, err := tx.Exec(ctx, `SELECT 1 FROM schema_migrations LIMIT 1 FOR UPDATE`); return err }, func() ([]siblingScopeKey, error) {
+		return []siblingScopeKey{{kind: "bookmark", workspaceID: "workspace", parentID: "changed"}}, nil
+	})
+	if !IsRetryablePrepareError(err) {
+		t.Fatalf("drift error = %v, want retryable", err)
+	}
+	var drift *PrepareScopeDriftError
+	if !errors.As(err, &drift) {
+		t.Fatalf("drift error type = %T", err)
+	}
+	if err := tx.Rollback(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if after := syncWriteCounts(t, ctx, pool); after != before {
+		t.Fatalf("prepare writes = %v, want %v", after, before)
+	}
+}
+
+func openSyncTestPool(t *testing.T) (context.Context, *pgxpool.Pool) {
+	t.Helper()
+	databaseURL := strings.TrimSpace(os.Getenv("SYNC_TEST_DATABASE_URL"))
+	if databaseURL == "" {
+		databaseURL = strings.TrimSpace(os.Getenv("DATABASE_URL"))
+	}
+	if databaseURL == "" {
+		t.Skip("set SYNC_TEST_DATABASE_URL or DATABASE_URL to run PostgreSQL integration tests")
+	}
+	ctx := context.Background()
+	admin, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	schema := fmt.Sprintf("sync_scope_test_%d", time.Now().UnixNano())
+	if _, err := admin.Exec(ctx, fmt.Sprintf("CREATE SCHEMA %s", schema)); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _ = admin.Exec(ctx, fmt.Sprintf("DROP SCHEMA %s CASCADE", schema)); admin.Close() })
+	config, err := pgxpool.ParseConfig(databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	config.ConnConfig.RuntimeParams["search_path"] = schema
+	pool, err := pgxpool.NewWithConfig(ctx, config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	if err := database.Migrate(ctx, pool, filepath.Clean(filepath.Join("..", "..", "migrations"))); err != nil {
+		t.Fatal(err)
+	}
+	return ctx, pool
+}
+
+func syncWriteCounts(t *testing.T, ctx context.Context, pool *pgxpool.Pool) [4]int {
+	t.Helper()
+	var counts [4]int
+	for i, table := range []string{"folders", "bookmarks", "sync_events", "workspace_cursors"} {
+		if err := pool.QueryRow(ctx, "SELECT COUNT(*) FROM "+table).Scan(&counts[i]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return counts
+}
 
 func TestCreateFolderCreatesCursorAndSyncEventWhenWorkspaceCursorRowDoesNotExist(t *testing.T) {
 	if testing.Short() {
