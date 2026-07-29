@@ -2,52 +2,59 @@
 
 ## Technical Approach
 
-Keep PR4a0a (`0a9bf44`) and PR4a0a2 (`d9c63b6`) unchanged. PR4a0a3a remains prepare-only and PR4a0a3b apply-only; PR4a0b remains the first route boundary. Correct PR4a0a3a by discovering tentative sibling scopes without locks, acquiring those scopes before every row lock, then refusing/retrying scope drift after locked revalidation. This removes the proven target-first opposite-move cycle while retaining complete-shape preparation.
+**Split decision:** under `auto-chain` / stacked-to-main, replace PR4a0a3a with **PR4a0a3a.1 scope-lock kernel** then **PR4a0a3a.2 canonical prepared adapters**. The 267-line discarded candidate plus the 136-line proof lower bound makes one <=400-line slice impossible. Keep PR4a0a/PR4a0a2, PR4a0a3b apply, PR4a0b routes, and extension phases unchanged. Capture apply-progress SHA-256 `c3e23f05ba8f71e1b800c3508232ff3f25ad1dfae23a6f3c53b840c5c745ee79`; this phase must not alter it.
 
 ## Architecture Decisions
 
 | Option | Tradeoff | Decision / rationale |
 |---|---|---|
-| Target row before advisory scopes | Proven opposite moves cycle | Reject. A target holder can wait for the common scope while its peer holds it and waits on the other target/siblings. |
-| Workspace-wide advisory lock | Safe but serializes unrelated sibling moves | Reject. It broadens contention beyond the affected collections. |
-| Optimistic scope discovery, sorted locks, locked revalidation | A concurrent move can retry | Choose. It locks only affected scopes and never uses a stale target as authority. |
-| Re-lock changed scopes after target lock | Reintroduces lock-order inversion | Reject. Scope drift aborts the transaction; the executor retries from discovery. |
+| One prepare slice | At least 403 authored lines | Reject: exceeds the non-exception cap. |
+| Separate folder/bookmark locking | Duplicates a concurrency invariant | Reject: drift risks divergent lock order. |
+| Shared `bookmarks` kernel, then adapters | First slice is intentionally inert | Choose: both existing `Update*Tx` paths already live in `bookmarks.Service`; one owner preserves one ordering rule. |
+| Workspace-wide lock / target-first lock | Over-serialization / proven opposite-move cycle | Reject. |
 
-## Lock and Data Flow
+## Data Flow
 
 ```text
-snapshot target (read only) -> derive source + destination scope keys
-  -> advisory keys sorted, deduplicated -> target row FOR UPDATE
-  -> rederive/compare keys -> sibling rows FOR UPDATE ORDER BY position,id
-  -> authorize/contain/ancestry -> canonical final shape -> PreparedPatch
+read-only target -> source/destination ScopeKey -> sorted, deduped advisory locks
+-> target FOR UPDATE -> locked scope comparison -> sibling rows (position,id)
+-> adapter validation/canonical shape/fingerprint -> immutable PreparedPatch
 ```
 
-For a folder, a scope key is `(folder, workspaceID, parentID-or-root)`; for a bookmark it is `(bookmark, workspaceID, folderID)`. The read-only snapshot supplies the source; the requested parent/folder (or unchanged source) supplies destination. Reject absent/invalid target input before locking. Sort the two keys lexically by `(kind, workspaceID, parent-or-folder)` and acquire each transaction advisory lock once when equal.
+`ScopeKey` is `(kind, workspaceID, parentID-or-root/folderID)`. Drift returns a typed retryable error, rolls back the whole prepared transaction, and retries from discovery; no scope is acquired after a row lock. This preserves scope-first semantics without resource/order/event/cursor writes.
 
-After scopes, lock the target with `FOR UPDATE`, then lock the union of source/destination sibling rows in deterministic scope order and `ORDER BY position,id` within each scope. Thus every prepare has one order: advisory scopes, target, sibling rows; shared scopes serialize opposite targets before either target row is held. The locked target is the authority: rederive source and destination keys from it and the request. If either key differs from discovery, return a private retryable `prepare scope drift` error, roll back, and restart the whole `ExecutePrepared` transaction; do not acquire another lock in that transaction. Revalidate workspace write authorization, destination containment, and folder non-descendancy from locked rows before trim/validate/clamp/full-shape normalization and fingerprinting. Prepare writes no resource, ordering, event, or cursor data.
+## Sub-slices
+
+| Slice | Start -> end / exact dependency | Interfaces and candidate files | Owned RED/GREEN proof; estimate + reserve | Rollback / exclusions |
+|---|---|---|---|---|
+| **PR4a0a3a.1 kernel** | PR4a0a2 -> inert, reusable PostgreSQL scope-lock/revalidation kernel. Depends only on PR4a0a2. | Internal `ScopeKey`, sorted/deduped `lockScopesTx`, `PrepareScopeDriftError`, `IsRetryablePrepareError`, and snapshot/revalidation seam in `backend/internal/bookmarks/service.go`; tests in `backend/internal/bookmarks/service_integration_test.go`. | RED/GREEN: deterministic opposite moves sharing scopes block/release without `40P01`; same scope locks once; target/source/destination drift is typed retryable and rolls back; no post-row-lock scope acquisition; no writes. **220 + 150 = 370**. | Revert kernel/tests only. Excludes `PreparedPatch`, normalization, auth/containment/ancestry, fingerprint, sync store, routes, events/cursors, and apply. |
+| **PR4a0a3a.2 adapters** | Kernel -> immutable folder and bookmark prepared adapters; depends exactly on merged PR4a0a3a.1. | `PrepareFolderPatchTx` / `PrepareBookmarkPatchTx` consume the kernel in `bookmarks/service.go`; canonical `PreparedPatch` and store-facing adapters in `sync/{types.go,service.go,postgres.go}`; integration tests in both package test files. | RED/GREEN: external `pgx.Tx`; locked auth, containment, ancestry; trim/URL/position normalization; complete final shape, stable fingerprint, and no-op; legacy `Update*` compatibility; prepare zero resource/order/event/cursor writes. Kernel concurrency tests are not duplicated. **240 + 140 = 380**. | Revert adapters/tests only; kernel remains inert and safe. Excludes apply, `ExecutePrepared` route wiring, publisher invocation, HTTP idempotency, migrations, extension. |
 
 ## Interfaces / Contracts
 
-`PrepareFolderPatchTx` and `PrepareBookmarkPatchTx` retain caller `pgx.Tx` ownership and return immutable `PreparedPatch` only after locked canonicalization. `ApplyPrepared*PatchTx` consumes that exact state in the same transaction and adds no prepare/lock path. Legacy `Update*` remains compatible; PR4a0b alone adapts `ExecutePrepared` and invokes returned publishing after commit.
+The kernel is internal to `bookmarks`; adapters must not reimplement scope ordering. `Prepare*PatchTx(ctx, tx pgx.Tx, ...)` retains caller transaction ownership and returns immutable state only after locked revalidation. Its retryable drift classification is private to prepare/executor integration. `ApplyPrepared*PatchTx`, route adaptation, event/cursor creation, and publishing remain PR4a0a3b/PR4a0b work.
 
-## File Changes and Tests
+## Testing Strategy
 
-| Slice | Candidate files | PostgreSQL RED coverage |
+Use the existing isolated-schema PostgreSQL integration harness with `BOOKMARKS_TEST_DATABASE_URL`, `SYNC_TEST_DATABASE_URL`, and `DATABASE_URL` at `postgres:5432`; use separate transactions, release channels, bounded contexts, and `testing.Short()` skips. Run `cd backend && go test ./internal/bookmarks ./internal/sync`. Slice .1 owns deadlock/drift/no-write proof; .2 owns canonical domain proof.
+
+## File Changes
+
+| File | Action | Description |
 |---|---|---|
-| PR4a0a3a | `backend/internal/bookmarks/{service.go,service_integration_test.go}`; `backend/internal/sync/{types.go,service.go,postgres.go,postgres_integration_test.go}` | Two opposite moves sharing both scopes: one blocks at first sorted advisory lock, both complete after release, no `40P01`. Same-scope move locks once and blocks. Concurrent target/source or destination-scope drift yields retryable error, rollback, then a clean retry; no stale shape. Assert prepare has zero resource/order/event/cursor writes. |
-| PR4a0a3b | Same service/store tests | Same-tx prepared apply, exact mutation/one event-cursor or no-op zero writes, rollback, returned-not-invoked publisher, legacy compatibility. |
-| PR4a0b | `backend/internal/sync/{bookmark_routes.go,bookmark_routes_test.go,headers.go,postgres_integration_test.go}` | Existing adapter/replay/conflict/post-commit-publisher coverage only; no lock-algorithm change. |
-
-Use separate PostgreSQL transactions, start/release channels, and bounded contexts; assert the blocked goroutine does not finish before release and both finish afterward. Run `cd backend && go test ./internal/bookmarks ./internal/sync` when database URLs are available.
-
-## Migration / Rollout
-
-No migration. PR4a0a3a and PR4a0a3b remain inert and independently reversible; no spec amendment is required.
+| `backend/internal/bookmarks/service.go` | Modify | Kernel, then prepared adapters. |
+| `backend/internal/bookmarks/service_integration_test.go` | Modify | Kernel and folder proof. |
+| `backend/internal/sync/{types.go,service.go,postgres.go}` | Modify | .2 canonical adapter types only. |
+| `backend/internal/sync/postgres_integration_test.go` | Modify | .2 bookmark/store proof. |
 
 ## Threat Matrix
 
 N/A — no routing, shell, subprocess, VCS/PR automation, executable-file classification, or process-integration boundary changes.
 
+## Migration / Rollout
+
+No migration required. Each inert sub-slice is independently reversible.
+
 ## Open Questions
 
-None. `sdd-tasks` MUST amend 13b.1/13b.2 wording before apply to replace target-before-scope with discovery, sorted scopes, locked revalidation, and retry-on-drift.
+None. `sdd-tasks` must replace 13b.1/13b.2 with these two slices and retain all later phases unchanged.
