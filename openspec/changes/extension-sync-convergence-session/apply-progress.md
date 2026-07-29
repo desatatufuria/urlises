@@ -1,60 +1,28 @@
 # Apply Progress: Extension Sync Convergence Session
 
 ## Cumulative Status
+32/46 semantic tasks complete; native checkbox progress is 15/29. Delivery is `auto-chain`, stacked-to-`develop`, with no `size:exception`.
 
-32/44 semantic tasks complete; native checkbox progress is 15/27. Legacy PR1a–PR3, PR4h/PR4h2, create/delete ownership, PR4a0a, and PR4a0a2 are complete. Delivery remains stacked-to-`develop`, no `size:exception`.
+## Completed Foundations
+- [x] 7.1–7.2: dormant journal/planner.
+- [x] 8.1–8.2 and 9.1–9.2: deterministic Chrome harness and fidelity hardening.
+- [x] 10.1–10.2 and 11.1–11.2: durable create/delete ownership.
+- [x] 12.1 RED: PostgreSQL receipt tests first failed because `SafeResult` lacked semantic headers and a fixed acknowledgement cursor.
+- [x] 12.2 GREEN: generic 200/201 receipt replay ledger; no PATCH route, event, cursor, or extension change.
+- [x] 13a.1 RED: prepared-executor API contracts first failed because `IdempotencyScope`, `Prepared`, `PostCommit`, and `ExecutePrepared` were undefined.
+- [x] 13a.2 GREEN: `ExecutePrepared` owns one transaction, receipt primitives, rollback, and returned-only post-commit hooks; legacy `Execute` remains compatible.
 
-## PR4a0a Generic Receipt Ledger
-
-- [x] 12.1 RED: PostgreSQL receipt tests first failed to compile because `SafeResult` could not carry semantic headers or a fixed acknowledgement cursor.
-- [x] 12.2 GREEN: migration `000008` permits completed 200/201 receipts and nullable semantic headers/cursor; the executor persists/replays them under the existing lock, conflict, rollback, and 24-hour cleanup behavior. No PATCH route, event, cursor mutation, or extension code changed.
-
-## PR4a0a2 Prepared Executor Foundation
-
-- [x] 13a.1 RED: PostgreSQL prepared-executor contracts first failed to compile because `IdempotencyScope`, `Prepared`, `PostCommit`, and `ExecutePrepared` did not exist.
-- [x] 13a.2 GREEN: `ExecutePrepared` now owns one transaction, scope lock, prepare-before-receipt sequencing, shared receipt claim/completion, atomic rollback, and returned-only post-commit hooks. Legacy `Execute` adapts through the same receipt primitives without changing create behavior.
-
-## PR3 Dormant Journal
-
-- [x] 7.1 RED: `convergence.test.mjs` first failed because the pure module did not exist; it now proves planner, queue, cap, migration, and restart ambiguity.
-- [x] 7.2: Added a version-1 per-projection journal and normalization while leaving the engine dormant.
-
-## PR4h and PR4h2 Deterministic Chrome Harness
-
-- [x] 8.1 RED: `timeout 15s node --test tests/chrome-harness.test.mjs` first failed with `ERR_MODULE_NOT_FOUND` for the helper.
-- [x] 8.2 GREEN: added neutral fake Chrome bookmarks/storage/runtime, deterministic mutator scheduling, persisted revival, fetch recording, and explicit teardown self-tests.
-- [x] 9.1–9.2: hardened the fake Chrome lifecycle, delayed queues, cloning, listener removal, and teardown proof.
-
-## PR4a1a Create Ownership
-
-- [x] 10.1–10.2: durable `started` create ownership, callback correlation, final-shape verification, bounded completed ownership, and create regression evidence are complete.
-
-## PR4a1a Delete Ownership
-
-- [x] 11.1 RED: `tests/delete-ownership.test.mjs` first failed with no delete operation; it covers folder/bookmark `started` persistence, early/delayed/duplicate/reordered/restart callbacks, absence plus mapping/type cleanup, cascade descendants, ambiguity, isolation, unmatched local deletes, and capacity.
-- [x] 11.2 GREEN: persisted bounded delete ownership before `remove`/`removeTree`; listener ownership is checked before transient suppression; finalization requires node absence and cleanup proof, otherwise pauses `ambiguous-operation`.
+## PR4a0a3a Prepare Foundation — Blocked
+- [ ] 13b.1 RED: not re-authored after the maintainer-authorized scope-first design reset. The historical undefined-API RED does not prove the amended locking contract.
+- [ ] 13b.2 GREEN: no production or test code was added. The required PostgreSQL lock/deadlock/drift proof remains unavailable to the Go runner.
 
 ## Work Unit Evidence
-
 | Evidence | Exact result |
 |---|---|
-| PR3 RED/GREEN | `npm run build && node --test tests/convergence.test.mjs`: missing-module RED, then PASS 4/4. |
-| PR3 storage/projection | `node --test tests/convergence.test.mjs tests/storage-serialization.test.mjs tests/projection-behavior.test.mjs`: PASS 40/40. |
-| Focused GREEN | `timeout 15s node --test tests/chrome-harness.test.mjs`: PASS, 7/7; 0 skipped, 0 open handles. |
-| Full extension | `timeout 30s npm run test:projection`: PASS, 62/62; 0 skipped. |
-| Typecheck/build | `npm run typecheck && npm run build`: PASS. |
-| Runtime/manual | N/A — deterministic Node harness is the runtime boundary; Chromium is not applicable. |
-| Rollback | Remove `extension/tests/helpers/fake-chrome.mjs`, `extension/tests/chrome-harness.test.mjs`, and this progress entry; no production path changed. |
-| PR4a1a-delete RED/GREEN | `npm run build && node --test tests/delete-ownership.test.mjs`: RED (4 failing assertions before implementation), then PASS 9/9. |
-| PR4a1a-delete regressions | `node --test tests/create-ownership.test.mjs tests/convergence.test.mjs tests/projection-behavior.test.mjs`: PASS 54/54; `npm run typecheck && npm run test:projection`: PASS 90/90. |
-| PR4a1a-delete runtime/rollback | Deterministic fake-Chrome callbacks/restart are the runtime boundary; rollback `projection.ts`, `types.ts`, `delete-ownership.test.mjs`, and these task/progress entries. |
-| PR4a0a RED | `cd backend && go test ./internal/httpapi`: FAIL before implementation (`SafeResult.Headers` and `AckCursor` undefined). |
-| PR4a0a focused/runtime GREEN | PostgreSQL harness: `go test ./internal/httpapi ./internal/sync`: PASS; covers 200 body/header/cursor replay, conflict, concurrent lock/in-progress, rollback/retry, 24-hour cleanup, and retained 201 creation. |
-| PR4a0a full/quality/rollback | PostgreSQL-backed `go test ./...`: PASS; `go vet ./...` and `git diff --check`: PASS. Roll back migration/executor/tests together; remove or expire all 200 receipts before restoring the old 201-only constraint. |
-| PR4a0a2 RED | `cd backend && go test ./internal/httpapi`: FAIL before implementation: prepared executor API symbols were undefined. |
-| PR4a0a2 focused/runtime GREEN | PostgreSQL `go test ./internal/httpapi -run '^(TestExecutePreparedPostgresContracts|TestIdempotencyExecutorPostgresContracts|TestIdempotencyExecutorAuthorizesBeforeReplay|TestIdempotencyExecutorReplaysSafe200Receipt|TestIdempotencyExecutorRollsBackIncompleteReceipt|TestIdempotencyExecutorAuthorizesBeforeLedgerLookup|TestIdempotencyRoutesCreateAndReplayAllFive)$' -count=1`: PASS. Covers one `pgx.Tx`, prepare-before-lookup denial, replay/conflict/in-progress command suppression, command/completion rollback and retry, non-invoked returned hook, legacy 201 and PR4a0a 200/headers. |
-| PR4a0a2 full/quality/rollback | PostgreSQL-backed `go test ./...`: PASS; `go vet ./...`, `gofmt`, and `git diff --check`: PASS. Roll back only `httpapi` prepared types/primitives/tests and these entries; PR4a0a ledger plus legacy `Execute` remains. |
+| Historical RED | `cd backend && go test ./internal/bookmarks ./internal/sync`: FAIL before the design reset because `PrepareFolderPatchTx` and `PrepareBookmarkPatchTx` were undefined. |
+| Baseline | `cd backend && DATABASE_URL='postgres://postgres:postgres@localhost:5433/shared_bookmark_sync?sslmode=disable' go test -v -count=1 ./internal/bookmarks ./internal/sync`: unit tests PASS; PostgreSQL cases SKIPPED because port 5433 returned connection refused. |
+| Runtime harness | `docker compose up -d postgres` reported `shared-bookmark-sync-postgres` healthy, but the Go runner could not reach its published port. The container was stopped during cleanup. |
+| Cleanup | No tentative production or test changes exist; 13b task checkboxes remain unchecked; `git diff --check` passes. |
 
 ## Next
-
-PR4a0a3 domain transaction foundation. Follow-up: `create-ownership.test.mjs` has a minor assertion weakness and is intentionally unchanged in this unit.
+Baseline these corrected planning/blocker documents as an autonomous stacked-to-`develop` documentation work unit, then retry PR4a0a3a on that clean baseline after PostgreSQL reachability is fixed. Phase 13c+ remains untouched.

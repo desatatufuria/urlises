@@ -55,7 +55,7 @@ Feature-gate Slice A and Slice B separately. Disable Slice B to retain the prior
 ## Dependencies
 
 - Backend migration deployment and a websocket credential transport that avoids URL bearer tokens.
-- Two reviewable delivery slices under the 800-line auto-forecast budget.
+- Chained reviewable delivery units (`PR4a0a3a`, `PR4a0a3b`, `PR4a0b`, and later) under the cached 800-line session guard.
 
 ## Success Criteria
 

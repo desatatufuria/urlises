@@ -2,62 +2,52 @@
 
 ## Technical Approach
 
-Keep integrated PR4a0a (`0a9bf44`) and PR4a0a2 (`d9c63b6`) unchanged. The reverted 395-production-line PR4a0a3 is split at the prepared-state-machine boundary, not by folder versus bookmark: PR4a0a3a canonically prepares immutable locked state; PR4a0a3b applies only that state. PR4a0b is the first route-visible integration.
+Keep PR4a0a (`0a9bf44`) and PR4a0a2 (`d9c63b6`) unchanged. PR4a0a3a remains prepare-only and PR4a0a3b apply-only; PR4a0b remains the first route boundary. Correct PR4a0a3a by discovering tentative sibling scopes without locks, acquiring those scopes before every row lock, then refusing/retrying scope drift after locked revalidation. This removes the proven target-first opposite-move cycle while retaining complete-shape preparation.
 
 ## Architecture Decisions
 
-| Decision | Alternatives considered | Rationale |
+| Option | Tradeoff | Decision / rationale |
 |---|---|---|
-| Prepare before apply | Combined PR4a0a3 | Measured size left no test/correction reserve. The split preserves one transaction and one lock algorithm. |
-| Split by state-machine boundary | Folder PR then bookmark PR | Both entities share sibling locks and complete-shape normalization; entity splits duplicate and can diverge in those safety rules. |
-| Immutable prepared value | Re-read/re-normalize during apply | Apply must use the exact locked canonical state and cannot introduce a second lock or normalization path. |
+| Target row before advisory scopes | Proven opposite moves cycle | Reject. A target holder can wait for the common scope while its peer holds it and waits on the other target/siblings. |
+| Workspace-wide advisory lock | Safe but serializes unrelated sibling moves | Reject. It broadens contention beyond the affected collections. |
+| Optimistic scope discovery, sorted locks, locked revalidation | A concurrent move can retry | Choose. It locks only affected scopes and never uses a stale target as authority. |
+| Re-lock changed scopes after target lock | Reintroduces lock-order inversion | Reject. Scope drift aborts the transaction; the executor retries from discovery. |
 
-## Delivery Chain and Boundaries
+## Lock and Data Flow
 
-`PR4a0a → PR4a0a2 → PR4a0a3a → PR4a0a3b → PR4a0b → PR4a1 → PR4a2 → PR4a3 → PR4b`
+```text
+snapshot target (read only) -> derive source + destination scope keys
+  -> advisory keys sorted, deduplicated -> target row FOR UPDATE
+  -> rederive/compare keys -> sibling rows FOR UPDATE ORDER BY position,id
+  -> authorize/contain/ancestry -> canonical final shape -> PreparedPatch
+```
 
-| Slice | Estimate / reserve | Includes | Explicitly excludes / independent rollback |
-|---|---:|---|---|
-| PR4a0a2 — executor foundation | 180–240 / >=100 | Integrated generic `ExecutePrepared` transaction owner | Already integrated; unchanged. |
-| PR4a0a3a — prepare canonical state | 280–350 / >=50 | `PreparedPatch`; external-`pgx.Tx` folder/bookmark prepare methods; target/sibling locking and canonical final shape | No resource/order/event/cursor mutation, routes, publisher, HTTP idempotency, migration. Revert only prepare API/tests; legacy `Update*` remains. |
-| PR4a0a3b — apply prepared state | 220–300 / >=100 | Apply the prepared state, event/cursor result and rollback proofs | No prepare/lock algorithm changes, routes, HTTP idempotency, migration, publisher invocation. Revert apply API/tests; PR4a0a3a remains unused. |
-| PR4a0b — route integration | 250–300 / >=100 | Adapt `ExecutePrepared` + prepare + apply; invoke returned publisher after commit | No extension or migration. Restore legacy PATCH routing; both foundations remain unused. |
+For a folder, a scope key is `(folder, workspaceID, parentID-or-root)`; for a bookmark it is `(bookmark, workspaceID, folderID)`. The read-only snapshot supplies the source; the requested parent/folder (or unchanged source) supplies destination. Reject absent/invalid target input before locking. Sort the two keys lexically by `(kind, workspaceID, parent-or-folder)` and acquire each transaction advisory lock once when equal.
+
+After scopes, lock the target with `FOR UPDATE`, then lock the union of source/destination sibling rows in deterministic scope order and `ORDER BY position,id` within each scope. Thus every prepare has one order: advisory scopes, target, sibling rows; shared scopes serialize opposite targets before either target row is held. The locked target is the authority: rederive source and destination keys from it and the request. If either key differs from discovery, return a private retryable `prepare scope drift` error, roll back, and restart the whole `ExecutePrepared` transaction; do not acquire another lock in that transaction. Revalidate workspace write authorization, destination containment, and folder non-descendancy from locked rows before trim/validate/clamp/full-shape normalization and fingerprinting. Prepare writes no resource, ordering, event, or cursor data.
 
 ## Interfaces / Contracts
 
-PR4a0a2 owns receipt locking, begin/rollback/commit, receipt completion, and returned `PostCommit`; `Prepare` never mutates or publishes. PR4a0a3a adds a sync-domain immutable `PreparedPatch` containing the canonical fingerprint, target identity/kind, locked transaction identity as feasible, complete final resource shape, deterministic sibling ordering/positions, no-op status, and data required to construct later event/cursor/publisher output.
-
-`PrepareFolderPatchTx` and `PrepareBookmarkPatchTx` accept the caller's `pgx.Tx`, principal, target, and update input and return `PreparedPatch`; they never begin/commit a transaction. `ApplyPreparedFolderPatchTx` and `ApplyPreparedBookmarkPatchTx` accept that same `pgx.Tx` and prepared value, validate transaction/locked target identity as feasible, and return the mutation result plus publisher data without invoking it. Neither layer calls `runMutation` or `PostgresStore.Update*`, which create independent transactions. Legacy `Update*` behavior stays compatible.
-
-## Data Flow
-
-```text
-PR4a0b -> ExecutePrepared (one tx / receipt lock)
-  -> Prepare*PatchTx: target FOR UPDATE -> workspace/auth/containment/ancestry
-  -> sorted sibling-scope advisory locks -> sibling rows FOR UPDATE ORDER BY position,id
-  -> trim, validate, clamp, normalize full shape -> fingerprint -> PreparedPatch
-  -> ApplyPrepared*PatchTx: no-op OR exact resource/order + one event/cursor
-  -> receipt completion -> commit -> route invokes returned publisher
-```
-
-The lock sequence remains exact: receipt scope; target `FOR UPDATE`; workspace/write authorization; parent/folder containment and folder ancestry; affected source/destination sibling-scope advisory locks sorted by `(kind, workspaceID, parentID-or-root)` (once when equal); then sibling rows `FOR UPDATE ORDER BY position,id`. Prepare trims and validates names/URLs, clamps position, and normalizes the full final folder/bookmark shape before fingerprinting. Opposite moves block rather than deadlock.
+`PrepareFolderPatchTx` and `PrepareBookmarkPatchTx` retain caller `pgx.Tx` ownership and return immutable `PreparedPatch` only after locked canonicalization. `ApplyPrepared*PatchTx` consumes that exact state in the same transaction and adds no prepare/lock path. Legacy `Update*` remains compatible; PR4a0b alone adapts `ExecutePrepared` and invokes returned publishing after commit.
 
 ## File Changes and Tests
 
 | Slice | Candidate files | PostgreSQL RED coverage |
 |---|---|---|
-| PR4a0a3a | `backend/internal/bookmarks/service.go`; `backend/internal/bookmarks/service_integration_test.go`; `backend/internal/sync/types.go`; `backend/internal/sync/service.go`; `backend/internal/sync/postgres.go`; `backend/internal/sync/postgres_integration_test.go` | External tx prepare, target/sibling `FOR UPDATE`, authorization/containment/ancestry, sorted scopes, lock blocking/opposite moves, normalization/fingerprint, and no mutation of resource/order/event/cursor. |
-| PR4a0a3b | Same service/postgres files and focused integration tests | Same-tx/locked-identity validation as feasible; no-op writes zero resource/order/event/cursor rows; mutation writes exact prepared state and exactly one event/cursor; rollback removes all; legacy `Update*` compatibility; publisher data returned, never invoked. |
-| PR4a0b | `backend/internal/sync/bookmark_routes.go`; `backend/internal/sync/bookmark_routes_test.go`; `backend/internal/sync/headers.go`; `backend/internal/sync/postgres_integration_test.go` | Adapter, stable acknowledgement/replay/conflict, and post-commit publisher invocation only for created mutation. |
+| PR4a0a3a | `backend/internal/bookmarks/{service.go,service_integration_test.go}`; `backend/internal/sync/{types.go,service.go,postgres.go,postgres_integration_test.go}` | Two opposite moves sharing both scopes: one blocks at first sorted advisory lock, both complete after release, no `40P01`. Same-scope move locks once and blocks. Concurrent target/source or destination-scope drift yields retryable error, rollback, then a clean retry; no stale shape. Assert prepare has zero resource/order/event/cursor writes. |
+| PR4a0a3b | Same service/store tests | Same-tx prepared apply, exact mutation/one event-cursor or no-op zero writes, rollback, returned-not-invoked publisher, legacy compatibility. |
+| PR4a0b | `backend/internal/sync/{bookmark_routes.go,bookmark_routes_test.go,headers.go,postgres_integration_test.go}` | Existing adapter/replay/conflict/post-commit-publisher coverage only; no lock-algorithm change. |
+
+Use separate PostgreSQL transactions, start/release channels, and bounded contexts; assert the blocked goroutine does not finish before release and both finish afterward. Run `cd backend && go test ./internal/bookmarks ./internal/sync` when database URLs are available.
 
 ## Migration / Rollout
 
-No migration. PR4a0a3a and PR4a0a3b are inert, independently reversible foundations; PR4a0b exposes behavior. No spec amendment is required.
+No migration. PR4a0a3a and PR4a0a3b remain inert and independently reversible; no spec amendment is required.
 
 ## Threat Matrix
 
-N/A — no shell, subprocess, VCS/PR automation, executable-file classification, or process-integration boundary.
+N/A — no routing, shell, subprocess, VCS/PR automation, executable-file classification, or process-integration boundary changes.
 
 ## Open Questions
 
-None. Next phase: sdd-tasks updates delivery work units only.
+None. `sdd-tasks` MUST amend 13b.1/13b.2 wording before apply to replace target-before-scope with discovery, sorted scopes, locked revalidation, and retry-on-drift.
