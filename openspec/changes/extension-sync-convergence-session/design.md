@@ -2,63 +2,62 @@
 
 ## Technical Approach
 
-**Amendment:** the maintainer authorized resolution of the `.2` package-boundary blocker. `syncapi` imports `bookmarks` (`PostgresStore.bookmarks` and `types.go`), so `bookmarks` cannot import the private `syncapi.prepareScopesTx` without a cycle. Move the proven kernel to the mutation-owning `bookmarks` package, then keep prepared patches there. `syncapi` remains a future consumer, not a dependency. This preserves `.1` scope-first locking and caller-owned external `pgx.Tx`; it changes no apply, route, event, cursor, publisher, HTTP-idempotency, migration, or extension behavior.
+**Amendment:** replace the infeasible one-step `.2a` relocation with exactly two stacked, autonomous copy-then-remove slices. The measured relocation is 75D/81A kernel plus 116D/114A PostgreSQL proof: 386 code/test lines, or at least 402 with four task and twelve progress lines. First copy an equivalent, private, inert kernel and its full PostgreSQL proof into `bookmarks`; then remove the proven `syncapi` duplicate. This gives `bookmarks` private ownership without a `bookmarks -> syncapi` import, while preserving `.1` scope-first locking and caller-owned `pgx.Tx`.
 
 ## Architecture Decisions
 
 | Option | Tradeoff | Decision / rationale |
 |---|---|---|
-| Let `bookmarks` import `syncapi` | Creates `syncapi -> bookmarks -> syncapi` | Reject: Go import cycle. |
-| Export/inject the `syncapi` kernel | Reverses the current dependency and makes a sync concern a bookmarks dependency | Reject. |
-| Neutral package | A third ownership boundary and proof migration | Reject: unnecessary while only bookmark mutations consume it. |
-| Relocate kernel to `bookmarks` | `.1` implementation/proof moves package | Choose: `bookmarks` owns one private scope-order rule beside its mutation invariants; `syncapi` already depends on it. |
-| One `.2` slice | Kernel relocation plus both adapter proof sets exceeds 400 lines | Reject: use three stacked autonomous slices. |
-| Workspace-wide lock / target-first lock | Over-serialization / proven opposite-move cycle | Reject. |
+| One-step relocation | Measured minimum is 402 lines including artifacts | Reject: exceeds the 400-line autonomous cap. |
+| Copy then remove | Temporary duplicate exists for one slice | **Choose:** each change is independently testable/reversible and below cap. |
+| `bookmarks` imports/exports from `syncapi` | `syncapi -> bookmarks -> syncapi` cycle or inverted ownership | Reject. |
+| Neutral package | New boundary and additional proof migration | Reject: unnecessary for bookmark-only consumers. |
+| Target-first/workspace-wide lock | Proven opposite-move deadlock/over-serialization | Reject. |
 
 ## Data Flow
 
 ```text
-read-only discovery -> source/destination scope keys -> sorted, deduped advisory locks
--> target/siblings FOR UPDATE -> locked rederivation -> bookmarks domain validation
--> normalized complete shape -> immutable patch/fingerprint/no-op
+discover scopes -> sort/dedupe advisory locks -> target/siblings FOR UPDATE
+-> locked rederivation -> retryable drift or domain validation -> prepared patch
 ```
 
-`scopeKey` is `(kind, workspaceID, parentID-or-root/folderID)`. A typed retryable drift error rolls back the caller's whole transaction for retry from discovery; no scope is acquired after a row lock. Preparation only reads/locks: it performs zero resource, ordering, event, cursor, or publisher writes.
+`scopeKey` remains `(kind, workspaceID, parentID-or-root/folderID)`. No scope is acquired after a row lock. Preparation has zero resource, ordering, event, cursor, or publisher writes. In `.2a.1`, the copied bookmarks kernel is unexported and has no production caller; `syncapi` remains the sole reachable implementation. The copied proof establishes behavior equivalence. In `.2a.2`, deletion makes the proved bookmarks copy the sole implementation. No adapter or route reaches either copy in these slices, preventing drift from becoming production-reachable.
 
 ## Sub-slices
 
-| Slice | Start -> end / exact dependency | Interfaces and candidate files | Owned RED/GREEN proof; estimate + reserve | Rollback / exclusions |
-|---|---|---|---|---|
-| **PR4a0a3a.2a kernel relocation** | `08ffff8` -> private bookmarks kernel; depends on `.1`. | Move `siblingScopeKey`, `prepareScopesTx`, sorting/locking, drift type/classifier from `backend/internal/sync/postgres.go` to `backend/internal/bookmarks/prepare.go`; relocate the isolated-schema proof from `sync/postgres_integration_test.go` to `bookmarks/service_integration_test.go`. | Preserve RED/GREEN: opposite/same-scope blocking without `40P01`, dedupe, locked drift, no post-row-lock scope acquisition, zero writes. **150 add + 145 delete + 20 artifact = 315**. | Revert relocation only; `.1` behavior is restored. No prepared patch. |
-| **PR4a0a3a.2b folder preparation** | `.2a` -> immutable folder patch; depends exactly on `.2a`. | `backend/internal/bookmarks/{prepare.go,service.go,service_integration_test.go}` adds private planning helpers and exported `PrepareFolderPatchTx`. | RED then GREEN: caller `pgx.Tx`, locked role/parent/ancestry, trim and clamped position, full final `Folder`, stable fingerprint, canonical no-op, zero writes, `UpdateFolderTx` unchanged. **190 add + 15 delete + 25 artifact = 230**. | Revert folder API/tests; kernel remains. |
-| **PR4a0a3a.2c bookmark preparation** | `.2b` -> immutable bookmark patch; depends on `.2a` only but is stacked after `.2b`. | Same bookmarks files add `PrepareBookmarkPatchTx` and shared patch contracts. | RED then GREEN: caller `pgx.Tx`, locked role/folder containment, title/URL trim-validation, clamped position, full final `Bookmark`, fingerprint/no-op, zero writes, `UpdateBookmarkTx` unchanged. **205 add + 15 delete + 25 artifact = 245**. | Revert bookmark API/tests; prior slices remain. |
+| Slice | Exact start -> end / dependency | Files, proof, and conservative lines | Rollback / exclusions |
+|---|---|---|---|
+| **PR4a0a3a.2a.1 copy + proof** | `.1` (`08ffff8`) -> inert equivalent bookmarks kernel; depends exactly on `.1`. | Create `backend/internal/bookmarks/prepare.go` (+81) and add the full isolated-schema proof to `backend/internal/bookmarks/service_integration_test.go` (+114). Retain `backend/internal/sync/{postgres.go,postgres_integration_test.go}`. PostgreSQL proves opposite/same-scope blocking without `40P01`, dedupe, locked drift, no late lock, zero writes. **195 code/test + 4 task + 16 progress/design reserve = 215 <=400.** | Revert only added bookmarks kernel/proof. Exclude patches, apply, routes, events, cursors, publisher, idempotency, migrations, extension. |
+| **PR4a0a3a.2a.2 removal** | `.2a.1` -> one private bookmarks kernel; depends exactly on `.2a.1`. | Delete the duplicate kernel from `backend/internal/sync/postgres.go` (-75) and its proof from `backend/internal/sync/postgres_integration_test.go` (-116); retain/re-run bookmarks proof. **191 code/test + 4 task + 16 progress/design reserve = 211 <=400.** | Revert deletion only; `.2a.1` restores the inert duplicate. Same exclusions. |
+| **PR4a0a3a.2b folder preparation** | `.2a.2` -> immutable folder patch; depends exactly on `.2a.2`. | `backend/internal/bookmarks/{prepare.go,service.go,service_integration_test.go}` adds `PrepareFolderPatchTx`; existing 230 forecast remains. PostgreSQL proves tx, locks, normalization, full shape/fingerprint/no-op, zero writes, legacy update. | Revert folder API/proof; kernel remains. |
+| **PR4a0a3a.2c bookmark preparation** | `.2a.2` -> immutable bookmark patch; stacked after `.2b`, semantically depends exactly on `.2a.2`. | Same files add `PrepareBookmarkPatchTx`; existing 245 forecast remains with equivalent PostgreSQL proof. | Revert bookmark API/proof; prior slices remain. |
 
 ## Interfaces / Contracts
 
-`bookmarks` exports only `PrepareFolderPatchTx(ctx, tx pgx.Tx, userID, folderID string, input UpdateFolderInput) (PreparedFolderPatch, error)` and `PrepareBookmarkPatchTx(ctx, tx pgx.Tx, userID, bookmarkID string, input UpdateBookmarkInput) (PreparedBookmarkPatch, error)`. Patches contain immutable original/final full shapes, normalized position, stable fingerprint, and `NoOp`; their fields have no mutation capability. Kernel keys, locks, and drift classifier remain private to `bookmarks`. `syncapi` changes no `Store`/`Service`/`PostgresStore` interface in `.2`; `.3` consumes bookmark patches through its existing one-way import. `ApplyPrepared*`, route adaptation, event/cursor creation, and publishing remain later work.
+Kernel keys, locking, and drift classification are private to `bookmarks`. `.2a.1/.2a.2` add no exported interface and no `syncapi` import. Later `.2b/.2c` retain only `PrepareFolderPatchTx(ctx, tx pgx.Tx, userID, folderID string, input UpdateFolderInput) (PreparedFolderPatch, error)` and `PrepareBookmarkPatchTx(ctx, tx pgx.Tx, userID, bookmarkID string, input UpdateBookmarkInput) (PreparedBookmarkPatch, error)`. Patches are immutable original/final full shapes, normalized position, fingerprint, and `NoOp`. `PR4a0a3b` depends on `.2c`; `PR4a0b` depends on `PR4a0a2 + .2c + PR4a0a3b`.
 
 ## Testing Strategy
 
-Use the existing isolated-schema PostgreSQL harness at `postgres:5432`, separate transactions/release channels/bounded contexts, and `testing.Short()` skips. Run `cd backend && go test ./internal/bookmarks ./internal/sync`. `.2a` owns the moved concurrency/drift/no-write proof; `.2b/.2c` own their domain RED/GREEN proofs. No runtime attempt is active in this amendment.
+Use isolated-schema PostgreSQL at `postgres:5432`, separate transactions/release channels/bounded contexts, and `testing.Short()` skips. Each relocation slice runs `cd backend && go test ./internal/bookmarks -run '^TestPrepareScopesTxSerializesAndRefusesDrift$' -count=1`; `.2a.2` additionally runs `go test ./internal/sync` to prove deletion compiles. No Go/test change was made here; 13b.3a/13b.3b remain unchecked.
 
 ## File Changes
 
 | File | Action | Description |
 |---|---|---|
-| `backend/internal/bookmarks/prepare.go` | Create | Private scope kernel, planning helpers, immutable patches. |
-| `backend/internal/bookmarks/service.go` | Modify | External-tx prepared folder/bookmark entry points; preserve legacy updates. |
-| `backend/internal/bookmarks/service_integration_test.go` | Modify | Relocated kernel plus folder/bookmark RED/GREEN proof. |
-| `backend/internal/sync/{postgres.go,postgres_integration_test.go}` | Modify | Remove relocated kernel and its proof only. |
-| `openspec/changes/extension-sync-convergence-session/design.md` | Modify | This boundary amendment; task recalculation is next. |
+| `backend/internal/bookmarks/prepare.go` | Create in `.2a.1` | Inert private copied kernel; later planning helpers. |
+| `backend/internal/bookmarks/service_integration_test.go` | Modify in `.2a.1` | Equivalent PostgreSQL proof. |
+| `backend/internal/sync/postgres.go` | Modify in `.2a.2` | Remove duplicate kernel. |
+| `backend/internal/sync/postgres_integration_test.go` | Modify in `.2a.2` | Remove duplicate proof. |
+| `openspec/changes/extension-sync-convergence-session/design.md` | Modify | This amendment only. |
 
 ## Threat Matrix
 
-N/A — no routing, shell, subprocess, VCS/PR automation, executable-file classification, or process-integration boundary changes.
+N/A — no routing, shell, subprocess, VCS/PR automation, executable-file classification, or process-integration boundary.
 
 ## Migration / Rollout
 
-No migration required. Each inert sub-slice is independently reversible.
+No migration required. Each inert slice is reversible.
 
 ## Open Questions
 
-None. Recalculate task definitions before apply; `sdd-tasks` is next.
+None. Recalculate tasks before apply; next recommended: `sdd-tasks`.

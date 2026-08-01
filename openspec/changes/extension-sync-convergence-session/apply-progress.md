@@ -1,7 +1,7 @@
 # Apply Progress: Extension Sync Convergence Session
 
 ## Cumulative Status
-34/48 semantic tasks complete; native checkbox progress is 17/31. Delivery is `auto-chain`, stacked-to-`main`, with no `size:exception`.
+36/53 semantic tasks complete; native checkbox progress is 19/36. Delivery is `auto-chain`, stacked-to-`main`, with no `size:exception`.
 
 ## Completed Foundations
 - [x] 7.1–7.2: dormant journal/planner.
@@ -36,9 +36,39 @@
 ## Next
 Run `sdd-apply` for PR4a0a3a.2 only. Phase 13b.3+ remains untouched.
 
+## PR4a0a3a.2a — Blocked Before RED by Slice Cap
+- Complete relocation forecast: 386 authored code/test lines (75 delete + 81 add for the kernel; 116 delete + 114 add for the isolated PostgreSQL proof), plus 4 task-checkbox lines and at least 12 merged apply-progress/evidence lines = **402 minimum**.
+- This exceeds the autonomous 400-line cap before formatter/import-normalizer churn; no code or test file was edited, 13b.3a/13b.3b remain unchecked, and PostgreSQL was not touched.
+- Required unblock: split the documented proof/harness relocation from the kernel move or authorize a different bounded task plan; no size exception is authorized.
+- Deterministic evidence revision: `sha256:f0f8c34d3c98d4137110bd5ef15a14ce1c558e999e68dca098fe2cb540cd5bba` for the complete forecast tuple and blocked-before-RED decision.
+
 ## Generation 4, Ordinal 9 — Blocked Before RED
 - Deterministic evidence revision: `sha256:0fb50ac74785fe544922c01f6f161d30b3c2009e6b9fb30f11a028ce9442d84b` for canonical tuple `ordinal=9`, `base=08ffff8`, `code_test_changes=0`, blocker identity, and tasks `13b.3,13b.4`.
 - The required PR4a0a3a.2 contract cannot be completed within the autonomous <=400 authored-line slice: `bookmarks` already imports no `sync` code, while `sync` imports `bookmarks`; the only scope-lock/revalidation kernel is the unexported `syncapi.prepareScopesTx`.
 - Therefore `bookmarks.Service.PrepareFolderPatchTx` / `PrepareBookmarkPatchTx` cannot consume that kernel without either exporting/inverting the package boundary or extracting a neutral package. Either route changes the approved kernel contract and requires new cross-package proof beyond the 380-line adapter estimate.
 - No production or test file changed, no RED test was added, no task checkbox changed, and no runtime test was run. The working tree started clean at `08ffff8`; user-managed PostgreSQL was not touched.
 - Required unblock: revise the design/package ownership and recalculate a complete code, PostgreSQL-proof, and artifact forecast before another apply attempt. This is the final allowed native attempt for the current objective.
+
+## PR4a0a3a.2a.1 Copy + Proof — Complete
+- [x] 13b.3a RED: the isolated-schema bookmarks PostgreSQL proof failed first with private kernel symbols undefined.
+- [x] 13b.3b GREEN: added the production-unreachable private bookmarks copy with sorted/deduplicated advisory locks, locked rederivation, typed retryable drift, and zero-write behavior. The sync kernel and proof remain byte-for-byte unchanged.
+
+| Evidence | Exact result |
+|---|---|
+| RED | `docker exec bookmarks ... go test ./internal/bookmarks -run '^TestPrepareScopesTxSerializesAndRefusesDrift$' -count=1`: FAIL, undefined `siblingScopeKey`, `prepareScopesTx`, `IsRetryablePrepareError`, and `PrepareScopeDriftError`. |
+| GREEN / runtime harness | With existing PostgreSQL configuration resolved inside the `bookmarks` container, focused command: PASS (0.889s, isolated schema). |
+| Full PostgreSQL proof | `go test ./internal/bookmarks ./internal/sync`: PASS (bookmarks 3.013s; sync 1.645s). |
+| Rollback / cleanup | Revert only `backend/internal/bookmarks/prepare.go`, bookmarks proof, and these two task/progress marks. PostgreSQL remains running; no adapters, callers, routes, events, cursors, publishers, idempotency, migrations, or extension files changed. |
+
+Evidence revision: `sha256:bf438fa8c311796e0164bcafbc9b20ea2c154dcdec22fd15be7c6b20fe50de3f`.
+
+## Gate Correction — Private Bookmarks Symbols
+- Preserved the historical `.2a.1` RED/GREEN evidence above unchanged, including its exported undefined names and timings.
+- The bounded rerun renamed the bookmarks-only symbols to `prepareScopeDriftError` and `isRetryablePrepareError`; behavior is unchanged.
+- Focused PostgreSQL proof: PASS (0.749s). Full PostgreSQL proof: bookmarks PASS (2.785s); sync PASS (cached).
+- Synchronized the `.2a.2` route below without changing task counts or prior evidence.
+
+## Next
+Run `.2a.2` only, remove the duplicate sync kernel/proof, and rerun bookmarks plus sync PostgreSQL proof.
+
+Gate correction evidence revision: `sha256:cb544e036b37eb39e1deec0d82e07a99fd3c2467cb8603d3608a97364d6d0d37`.
