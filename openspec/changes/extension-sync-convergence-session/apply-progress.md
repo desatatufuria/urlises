@@ -1,7 +1,7 @@
 # Apply Progress: Extension Sync Convergence Session
 
 ## Cumulative Status
-36/53 semantic tasks complete; native checkbox progress is 19/36. Delivery is `auto-chain`, stacked-to-`main`, with no `size:exception`.
+37/53 semantic tasks complete; native checkbox progress is 20/36. Delivery is `auto-chain`, stacked-to-`main`, with no `size:exception`.
 
 ## Completed Foundations
 - [x] 7.1–7.2: dormant journal/planner.
@@ -72,3 +72,19 @@ Evidence revision: `sha256:bf438fa8c311796e0164bcafbc9b20ea2c154dcdec22fd15be7c6
 Run `.2a.2` only, remove the duplicate sync kernel/proof, and rerun bookmarks plus sync PostgreSQL proof.
 
 Gate correction evidence revision: `sha256:cb544e036b37eb39e1deec0d82e07a99fd3c2467cb8603d3608a97364d6d0d37`.
+
+## PR4a0a3a.2a.2 Duplicate Removal — Complete
+- [x] 13b.3c NATIVE CLOSE: deleted only the duplicate private scope-lock/revalidation kernel from `backend/internal/sync/postgres.go` and its duplicate PostgreSQL proof from `backend/internal/sync/postgres_integration_test.go`.
+- No artificial RED was added: this is a close/removal slice whose behavior remains covered by the retained `.2a.1` bookmarks PostgreSQL proof.
+
+| Evidence | Exact result |
+|---|---|
+| Focused PostgreSQL proof | With the existing healthy `postgres:5432` service, `cd backend && go test ./internal/bookmarks -run '^TestPrepareScopesTxSerializesAndRefusesDrift$' -count=1`: PASS (1.654s, isolated schema). |
+| Full PostgreSQL proof | `cd backend && go test ./internal/bookmarks ./internal/sync`: PASS (bookmarks 8.868s; sync 2.855s). |
+| Caller/import proof | CodeGraph reports no remaining `syncapi` kernel symbols; the sole `prepareScopesTx` has one caller in `backend/internal/bookmarks/service_integration_test.go`. `bookmarks` imports no `syncapi`. |
+| Retained proof identity | `backend/internal/bookmarks/prepare.go` is `3b6b4e0788bb5c5d6a73fc63f0906d0ddf2c71af`; `backend/internal/bookmarks/service_integration_test.go` is `841b86e12e6cd076da9ee72776612a37267b8a56`; both equal `HEAD` with no diff. |
+| Rollback | Revert only the sync deletions in `backend/internal/sync/postgres.go` and `backend/internal/sync/postgres_integration_test.go`, plus this task/progress mark; no adapters, callers, routes, events, cursors, publishers, idempotency, migrations, or extension files change. |
+
+Deletion: 145 lines total (74 from `postgres.go`, 71 from `postgres_integration_test.go`). `gofmt` and `git diff --check` pass. PostgreSQL remains running.
+
+Evidence revision: `sha256:6c1fdfa67f39aa5950f984cc90b46a86d5199f259dc43e8a0c6e2c8a1fa15638`.
