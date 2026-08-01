@@ -35,3 +35,10 @@
 
 ## Next
 Run `sdd-apply` for PR4a0a3a.2 only. Phase 13b.3+ remains untouched.
+
+## Generation 4, Ordinal 9 — Blocked Before RED
+- Deterministic evidence revision: `sha256:0fb50ac74785fe544922c01f6f161d30b3c2009e6b9fb30f11a028ce9442d84b` for canonical tuple `ordinal=9`, `base=08ffff8`, `code_test_changes=0`, blocker identity, and tasks `13b.3,13b.4`.
+- The required PR4a0a3a.2 contract cannot be completed within the autonomous <=400 authored-line slice: `bookmarks` already imports no `sync` code, while `sync` imports `bookmarks`; the only scope-lock/revalidation kernel is the unexported `syncapi.prepareScopesTx`.
+- Therefore `bookmarks.Service.PrepareFolderPatchTx` / `PrepareBookmarkPatchTx` cannot consume that kernel without either exporting/inverting the package boundary or extracting a neutral package. Either route changes the approved kernel contract and requires new cross-package proof beyond the 380-line adapter estimate.
+- No production or test file changed, no RED test was added, no task checkbox changed, and no runtime test was run. The working tree started clean at `08ffff8`; user-managed PostgreSQL was not touched.
+- Required unblock: revise the design/package ownership and recalculate a complete code, PostgreSQL-proof, and artifact forecast before another apply attempt. This is the final allowed native attempt for the current objective.
