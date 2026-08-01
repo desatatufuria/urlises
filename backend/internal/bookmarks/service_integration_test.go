@@ -199,6 +199,131 @@ func TestPrepareFolderPatchTx(t *testing.T) {
 	}
 }
 
+func TestPrepareBookmarkPatchTx(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping PostgreSQL integration test in short mode")
+	}
+	ctx, pool := openBookmarksScopeTestPool(t)
+	userID := insertTestUser(t, ctx, pool)
+	viewerID := insertTestUser(t, ctx, pool)
+	_, workspaceID := insertTestWorkspace(t, ctx, pool)
+	insertWorkspaceUserAccess(t, ctx, pool, workspaceID, userID, "editor")
+	sourceID := insertTestFolder(t, ctx, pool, workspaceID, nil, "Source", 0)
+	targetID := insertTestFolder(t, ctx, pool, workspaceID, nil, "Target", 1)
+	bookmarkID := insertTestBookmark(t, ctx, pool, workspaceID, sourceID, "Original", "https://example.com/original", 0)
+	insertTestBookmark(t, ctx, pool, workspaceID, targetID, "Existing", "https://example.com/existing", 0)
+	_, otherWorkspaceID := insertTestWorkspace(t, ctx, pool)
+	foreignFolderID := insertTestFolder(t, ctx, pool, otherWorkspaceID, nil, "Foreign", 0)
+
+	service := NewService(pool, nil)
+	before := bookmarksScopeWriteCounts(t, ctx, pool)
+	title := "  Renamed  "
+	rawURL := "  https://example.com/renamed  "
+	position := 99
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	patch, err := service.PrepareBookmarkPatchTx(ctx, tx, userID, bookmarkID, UpdateBookmarkInput{
+		FolderID: OptionalString{Set: true, Value: &targetID},
+		Title:    &title,
+		URL:      &rawURL,
+		Position: OptionalInt{Set: true, Value: position},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if patch.Original.ID != bookmarkID || patch.Original.FolderID != sourceID || patch.Original.CreatedAt == "" || patch.Original.UpdatedAt == "" {
+		t.Fatalf("original = %+v, want complete canonical source shape", patch.Original)
+	}
+	if patch.Final.FolderID != targetID || patch.Final.Title != "Renamed" || patch.Final.URL != "https://example.com/renamed" || patch.Final.Position != 1 || patch.NoOp || patch.Fingerprint == "" {
+		t.Fatalf("final patch = %+v, want trimmed target shape at clamped position", patch)
+	}
+	if _, err := tx.Exec(ctx, `SELECT 1`); err != nil {
+		t.Fatalf("caller transaction is not usable after preparation: %v", err)
+	}
+	if err := tx.Rollback(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if after := bookmarksScopeWriteCounts(t, ctx, pool); after != before {
+		t.Fatalf("prepare writes = %v, want %v", after, before)
+	}
+
+	tx, err = pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	noOp, err := service.PrepareBookmarkPatchTx(ctx, tx, userID, bookmarkID, UpdateBookmarkInput{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !noOp.NoOp || noOp.Fingerprint == "" || !bookmarksEqual(noOp.Original, noOp.Final) {
+		t.Fatalf("no-op patch = %+v, want canonical unchanged shape", noOp)
+	}
+	repeatedNoOp, err := service.PrepareBookmarkPatchTx(ctx, tx, userID, bookmarkID, UpdateBookmarkInput{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if repeatedNoOp.Fingerprint != noOp.Fingerprint {
+		t.Fatalf("no-op fingerprint = %q, want stable %q", repeatedNoOp.Fingerprint, noOp.Fingerprint)
+	}
+	if err := tx.Rollback(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	tx, err = pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = service.PrepareBookmarkPatchTx(ctx, tx, viewerID, bookmarkID, UpdateBookmarkInput{})
+	if !errors.Is(err, ErrForbidden) {
+		t.Fatalf("unauthorized prepare error = %v, want %v", err, ErrForbidden)
+	}
+	if err := tx.Rollback(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	tx, err = pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = service.PrepareBookmarkPatchTx(ctx, tx, userID, bookmarkID, UpdateBookmarkInput{FolderID: OptionalString{Set: true, Value: &foreignFolderID}})
+	if !errors.Is(err, ErrNotFound) {
+		t.Fatalf("foreign folder error = %v, want %v", err, ErrNotFound)
+	}
+	if err := tx.Rollback(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	invalidURL := "ftp://example.com/file"
+	tx, err = pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = service.PrepareBookmarkPatchTx(ctx, tx, userID, bookmarkID, UpdateBookmarkInput{URL: &invalidURL})
+	if err == nil || !strings.Contains(err.Error(), "only http and https") {
+		t.Fatalf("invalid URL error = %v, want http(s) validation", err)
+	}
+	if err := tx.Rollback(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	tx, err = pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	updated, err := service.UpdateBookmarkTx(ctx, tx, userID, bookmarkID, UpdateBookmarkInput{Title: &title})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.Title != "Renamed" {
+		t.Fatalf("legacy UpdateBookmarkTx title = %q, want Renamed", updated.Title)
+	}
+	if err := tx.Rollback(ctx); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func openBookmarksScopeTestPool(t *testing.T) (context.Context, *pgxpool.Pool) {
 	t.Helper()
 	databaseURL := strings.TrimSpace(os.Getenv("BOOKMARKS_TEST_DATABASE_URL"))

@@ -1,7 +1,7 @@
 # Apply Progress: Extension Sync Convergence Session
 
 ## Cumulative Status
-39/53 semantic tasks complete; native checkbox progress is 22/36. Delivery is `auto-chain`, stacked-to-`main`, with no `size:exception`.
+41/53 semantic tasks complete; native checkbox progress is 24/36. Delivery is `auto-chain`, stacked-to-`main`, with no `size:exception`.
 
 ## Completed Foundations
 - [x] 7.1–7.2: dormant journal/planner.
@@ -106,3 +106,21 @@ Evidence revision: `sha256:6c1fdfa67f39aa5950f984cc90b46a86d5199f259dc43e8a0c6e2
 | Cleanup | `gofmt` and `git diff --check` pass. PostgreSQL remains running. |
 
 Evidence revision: `sha256:5c3d340b20c6af3bb1ef07c117e0f862883ffe80132a67d5a1ba9b448269215b`.
+
+## PR4a0a3a.2c Bookmark Preparation — Complete
+- [x] 13b.3f RED: `TestPrepareBookmarkPatchTx` was written first and failed because `PrepareBookmarkPatchTx` and bookmark patch helpers were undefined.
+- [x] 13b.3g GREEN: preparation uses the private bookmarks scope-lock/revalidation kernel, locks the bookmark/target folder/siblings, authenticates through the caller-owned transaction, validates target-folder containment, and only reads/normalizes immutable complete original/final shapes.
+
+## Work Unit Evidence
+| Evidence | Exact result |
+|---|---|
+| RED | `cd backend && go test ./internal/bookmarks -run '^TestPrepareBookmarkPatchTx$' -count=1`: FAIL (undefined `(*Service).PrepareBookmarkPatchTx` and `bookmarksEqual`). |
+| Focused GREEN / runtime harness | With the existing PostgreSQL configuration resolved inside a temporary build-stage test container on the compose network, without recording credentials: `go test ./internal/bookmarks -run '^TestPrepareBookmarkPatchTx$' -count=1 -v`: PASS (0.711s, isolated schema). Caller transaction ownership, role/folder-containment rejection, title/URL trim and HTTP(S) validation, clamp `99 -> 1`, complete shapes, stable no-op fingerprint, zero writes, and legacy compatibility proved. |
+| Folder regression | `go test ./internal/bookmarks -run '^TestPrepareFolderPatchTx$' -count=1 -v`: PASS (0.713s, isolated schema). |
+| Full PostgreSQL proof | `cd backend && go test ./internal/bookmarks ./internal/sync -count=1`: PASS (`bookmarks` 4.181s; `sync` 0.744s). |
+| API / boundary proof | CodeGraph maps the preparation contract to `backend/internal/bookmarks/prepare.go`; the kernel remains private and `bookmarks` imports no `syncapi`. No folder, apply, route, event, cursor, publisher, HTTP idempotency, migration, or extension path changed. |
+| Counts / parity | 285 implementation/test additions; 311 complete work-unit additions/deletions, below the 400-line cap. Tasks advance 39/53 -> 41/53 semantic and 22/36 -> 24/36 native; OpenSpec and Engram records are exact synchronized. |
+| Rollback | Revert only bookmark additions in `backend/internal/bookmarks/prepare.go`, `backend/internal/bookmarks/service_integration_test.go`, and 13b.3f/g task/progress marks; folder preparation and the private kernel remain. |
+| Cleanup | `gofmt` and `git diff --check` pass. PostgreSQL remains running. |
+
+Evidence revision: `sha256:ea08aef1994cc2389a0056ec1ab65cebff0fd75f81a372510696e9315691ddfb`.

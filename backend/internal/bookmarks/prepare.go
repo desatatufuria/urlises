@@ -22,6 +22,14 @@ type PreparedFolderPatch struct {
 	NoOp        bool
 }
 
+// PreparedBookmarkPatch is the immutable, normalized result of bookmark update preparation.
+type PreparedBookmarkPatch struct {
+	Original    Bookmark
+	Final       Bookmark
+	Fingerprint string
+	NoOp        bool
+}
+
 type siblingScopeKey struct {
 	kind        string
 	workspaceID string
@@ -256,6 +264,158 @@ func folderPatchFingerprint(folder Folder) string {
 		CreatedAt   string  `json:"createdAt"`
 		UpdatedAt   string  `json:"updatedAt"`
 	}{folder.ID, folder.WorkspaceID, folder.ParentID, folder.Name, folder.Position, folder.CreatedAt, folder.UpdatedAt})
+	sum := sha256.Sum256(canonical)
+	return fmt.Sprintf("%x", sum)
+}
+
+// PrepareBookmarkPatchTx authenticates, locks, and normalizes a bookmark update
+// in the caller-owned transaction. It never changes resource, ordering, event, or cursor state.
+func (s *Service) PrepareBookmarkPatchTx(ctx context.Context, tx pgx.Tx, userID, bookmarkID string, input UpdateBookmarkInput) (PreparedBookmarkPatch, error) {
+	discovered, err := loadBookmarkForPrepare(ctx, tx, bookmarkID, false)
+	if err != nil {
+		return PreparedBookmarkPatch{}, err
+	}
+	targetFolderID := discovered.FolderID
+	if input.FolderID.Set && input.FolderID.Value != nil {
+		targetFolderID = *input.FolderID.Value
+	}
+
+	var locked Bookmark
+	var siblingCount int
+	err = prepareScopesTx(ctx, tx, bookmarkPatchScopes(discovered.WorkspaceID, discovered.FolderID, targetFolderID), func() error {
+		locked, err = loadBookmarkForPrepare(ctx, tx, bookmarkID, true)
+		if err != nil {
+			return err
+		}
+		if err := s.requireMutatingRole(ctx, tx, userID, locked.WorkspaceID); err != nil {
+			return err
+		}
+		if err := lockBookmarkFolderForPrepare(ctx, tx, locked.WorkspaceID, targetFolderID); err != nil {
+			return err
+		}
+		siblingCount, err = lockBookmarkSiblingsForPrepare(ctx, tx, locked.WorkspaceID, targetFolderID, locked.ID)
+		return err
+	}, func() ([]siblingScopeKey, error) {
+		current, err := loadBookmarkForPrepare(ctx, tx, bookmarkID, false)
+		if err != nil {
+			return nil, err
+		}
+		folderID := current.FolderID
+		if input.FolderID.Set && input.FolderID.Value != nil {
+			folderID = *input.FolderID.Value
+		}
+		return bookmarkPatchScopes(current.WorkspaceID, current.FolderID, folderID), nil
+	})
+	if err != nil {
+		return PreparedBookmarkPatch{}, err
+	}
+
+	title := locked.Title
+	if input.Title != nil {
+		title = strings.TrimSpace(*input.Title)
+		if title == "" {
+			return PreparedBookmarkPatch{}, fmt.Errorf("bookmark title is required")
+		}
+	}
+	rawURL := locked.URL
+	if input.URL != nil {
+		rawURL = strings.TrimSpace(*input.URL)
+		if err := validateURL(rawURL); err != nil {
+			return PreparedBookmarkPatch{}, err
+		}
+	}
+	position := locked.Position
+	if input.Position.Set {
+		position = input.Position.Value
+	} else if locked.FolderID != targetFolderID {
+		position = siblingCount
+	}
+	if position < 0 {
+		position = 0
+	}
+	if position > siblingCount {
+		position = siblingCount
+	}
+
+	original := cloneBookmark(locked)
+	final := cloneBookmark(locked)
+	final.FolderID = targetFolderID
+	final.Title = title
+	final.URL = rawURL
+	final.Position = position
+	return PreparedBookmarkPatch{Original: original, Final: final, Fingerprint: bookmarkPatchFingerprint(final), NoOp: bookmarksEqual(original, final)}, nil
+}
+
+func bookmarkPatchScopes(workspaceID, originalFolderID, targetFolderID string) []siblingScopeKey {
+	return []siblingScopeKey{{kind: "bookmark", workspaceID: workspaceID, parentID: originalFolderID}, {kind: "bookmark", workspaceID: workspaceID, parentID: targetFolderID}}
+}
+
+func loadBookmarkForPrepare(ctx context.Context, tx pgx.Tx, bookmarkID string, lock bool) (Bookmark, error) {
+	query := `SELECT id, workspace_id, folder_id, title, url, position, created_at, updated_at FROM bookmarks WHERE id = $1 AND deleted_at IS NULL`
+	if lock {
+		query += ` FOR UPDATE`
+	}
+	var bookmark Bookmark
+	var createdAt, updatedAt time.Time
+	err := tx.QueryRow(ctx, query, bookmarkID).Scan(&bookmark.ID, &bookmark.WorkspaceID, &bookmark.FolderID, &bookmark.Title, &bookmark.URL, &bookmark.Position, &createdAt, &updatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Bookmark{}, ErrNotFound
+	}
+	if err != nil {
+		return Bookmark{}, fmt.Errorf("load bookmark for preparation: %w", err)
+	}
+	bookmark.CreatedAt = createdAt.UTC().Format(time.RFC3339)
+	bookmark.UpdatedAt = updatedAt.UTC().Format(time.RFC3339)
+	return bookmark, nil
+}
+
+func lockBookmarkFolderForPrepare(ctx context.Context, tx pgx.Tx, workspaceID, folderID string) error {
+	var id string
+	err := tx.QueryRow(ctx, `SELECT id FROM folders WHERE id = $1 AND workspace_id = $2 AND deleted_at IS NULL FOR UPDATE`, folderID, workspaceID).Scan(&id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrNotFound
+	}
+	if err != nil {
+		return fmt.Errorf("lock bookmark folder for preparation: %w", err)
+	}
+	return nil
+}
+
+func lockBookmarkSiblingsForPrepare(ctx context.Context, tx pgx.Tx, workspaceID, folderID, bookmarkID string) (int, error) {
+	rows, err := tx.Query(ctx, `SELECT id FROM bookmarks WHERE workspace_id = $1 AND folder_id = $2 AND deleted_at IS NULL AND id <> $3::uuid ORDER BY position, id FOR UPDATE`, workspaceID, folderID, bookmarkID)
+	if err != nil {
+		return 0, fmt.Errorf("lock bookmark siblings for preparation: %w", err)
+	}
+	defer rows.Close()
+	count := 0
+	for rows.Next() {
+		count++
+	}
+	if err := rows.Err(); err != nil {
+		return 0, fmt.Errorf("iterate locked bookmark siblings: %w", err)
+	}
+	return count, nil
+}
+
+func cloneBookmark(bookmark Bookmark) Bookmark {
+	return bookmark
+}
+
+func bookmarksEqual(left, right Bookmark) bool {
+	return left.ID == right.ID && left.WorkspaceID == right.WorkspaceID && left.FolderID == right.FolderID && left.Title == right.Title && left.URL == right.URL && left.Position == right.Position && left.CreatedAt == right.CreatedAt && left.UpdatedAt == right.UpdatedAt
+}
+
+func bookmarkPatchFingerprint(bookmark Bookmark) string {
+	canonical, _ := json.Marshal(struct {
+		ID          string `json:"id"`
+		WorkspaceID string `json:"workspaceId"`
+		FolderID    string `json:"folderId"`
+		Title       string `json:"title"`
+		URL         string `json:"url"`
+		Position    int    `json:"position"`
+		CreatedAt   string `json:"createdAt"`
+		UpdatedAt   string `json:"updatedAt"`
+	}{bookmark.ID, bookmark.WorkspaceID, bookmark.FolderID, bookmark.Title, bookmark.URL, bookmark.Position, bookmark.CreatedAt, bookmark.UpdatedAt})
 	sum := sha256.Sum256(canonical)
 	return fmt.Sprintf("%x", sum)
 }
