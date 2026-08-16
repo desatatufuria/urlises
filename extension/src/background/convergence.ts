@@ -1,9 +1,11 @@
-import type { ConvergenceJournal, ConvergenceOperation } from "../shared/types.js";
+import type { ConvergenceJournal, ConvergenceOperation, ReceiptNodeShape, RemoteReceipt } from "../shared/types.js";
 
 export type DesiredNode = { backendId: string; parentId?: string; type: "folder" | "bookmark"; title?: string; url?: string; position: number };
 export type InventoryNode = { chromeId: string; parentChromeId?: string; type: "folder" | "bookmark"; title?: string; url?: string; position: number; managed: boolean };
 type Input = { epoch: number; snapshotId: string; cursor: number; managedRootChromeId: string; desired: DesiredNode[]; inventory: InventoryNode[]; mappings: { backendToChrome?: Record<string, string>; chromeToBackend?: Record<string, string> } };
 export type LocalIntentInput = { workspaceId: string; backendId: string; chromeId: string; type: "folder" | "bookmark"; kind: string; node: { parentId?: string; index?: number; title: string; url?: string } };
+export type RemoteReceiptInput = Omit<RemoteReceipt, "version" | "expectedSignatures" | "status">;
+export type RemoteCallback = { kind: "changed" | "moved"; workspaceId: string; backendId: string; chromeId: string; type: "folder" | "bookmark"; node: ReceiptNodeShape; move?: RemoteReceipt["move"] };
 
 export function emptyJournal(): ConvergenceJournal {
   return { version: 1, phase: "plan", operations: [], localIntents: [], attempts: 0 };
@@ -12,8 +14,18 @@ export function emptyJournal(): ConvergenceJournal {
 export function normalizeJournal(value: Partial<ConvergenceJournal> | undefined): ConvergenceJournal {
   const journal = { ...emptyJournal(), ...value, operations: value?.operations ?? [], localIntents: value?.localIntents ?? [] } as ConvergenceJournal;
   if (journal.operations.length > 500) return pause(journal, "operation-overflow");
+  const receipts = pruneReceipts(value?.receipts ?? []);
+  if (receipts.length) journal.receipts = receipts;
+  if (receipts.length > 100) return pause(journal, "receipt-overflow");
   if (journal.localIntents.length > 100) return pause(journal, "intent-overflow");
-  return journal.operations.some((operation) => operation.status === "started") ? pause(journal, "ambiguous-operation") : journal;
+  return journal.operations.some((operation) => operation.status === "started") || receipts.some((receipt) => !validReceipt(receipt)) ? pause(journal, "ambiguous-operation") : journal;
+}
+
+export function createRemoteReceipt(input: RemoteReceiptInput): RemoteReceipt { return { ...input, version: 1, expectedSignatures: [shapeSignature(input.before), shapeSignature(input.expectedAfter)], status: "pending" }; }
+export function reduceRemoteCallback(journal: ConvergenceJournal, callback: RemoteCallback): { journal: ConvergenceJournal; disposition: "consumed" | "intent" } {
+  const receipts = journal.receipts ?? [], match = receipts.find((receipt) => receipt.status === "pending" && exactIdentity(receipt, callback));
+  if (match && callbackMatches(match, callback)) return { disposition: "consumed", journal: { ...journal, receipts: receipts.map((receipt) => receipt === match ? { ...receipt, status: "consumed" } : receipt) } };
+  return { disposition: "intent", journal: captureLocalIntent({ ...journal, receipts }, callback) };
 }
 
 export function captureLocalIntent(journal: ConvergenceJournal, input: LocalIntentInput): ConvergenceJournal {
@@ -84,6 +96,11 @@ function operation(epoch: number, node: DesiredNode, kind: "create" | "adopt" | 
   const fingerprint = JSON.stringify([node.type, node.parentId ?? null, node.position, node.title ?? null, node.url ?? null]);
   return { id: `${epoch}:${node.backendId}:${kind}:${fingerprint}`, kind, backendId: node.backendId, chromeId, fingerprint, status: "planned" };
 }
+function shapeSignature(shape: ReceiptNodeShape): string { return JSON.stringify([shape.parentId ?? null, shape.index ?? null, shape.title, shape.url ?? null]); }
+function exactIdentity(receipt: RemoteReceipt, callback: RemoteCallback): boolean { return receipt.workspaceId === callback.workspaceId && receipt.backendId === callback.backendId && receipt.chromeId === callback.chromeId && receipt.type === callback.type; }
+function callbackMatches(receipt: RemoteReceipt, callback: RemoteCallback): boolean { return validReceipt(receipt) && shapeSignature(callback.node) === receipt.expectedSignatures[1] && (callback.kind === "changed" ? receipt.move === undefined : receipt.move !== undefined && callback.move !== undefined && JSON.stringify(receipt.move) === JSON.stringify(callback.move)); }
+function validReceipt(receipt: RemoteReceipt): boolean { return receipt.version === 1 && (receipt.status === "pending" || receipt.status === "consumed") && receipt.expectedSignatures?.[0] === shapeSignature(receipt.before) && receipt.expectedSignatures?.[1] === shapeSignature(receipt.expectedAfter); }
+function pruneReceipts(receipts: RemoteReceipt[]): RemoteReceipt[] { const consumed = receipts.filter((receipt) => receipt.status === "consumed"); return receipts.filter((receipt) => receipt.status !== "consumed" || !consumed.slice(0, -20).includes(receipt)); }
 function sameNode(actual: InventoryNode, desired: DesiredNode): boolean { return actual.type === desired.type && actual.position === desired.position && actual.title === desired.title && actual.url === desired.url; }
 function isBijection(forward: Record<string, string>, inverse: Record<string, string>): boolean { return Object.entries(forward).every(([backendId, chromeId]) => inverse[chromeId] === backendId) && Object.entries(inverse).every(([chromeId, backendId]) => forward[backendId] === chromeId); }
 function pause(journal: ConvergenceJournal, pauseReason: NonNullable<ConvergenceJournal["pauseReason"]>): ConvergenceJournal { return { ...journal, phase: "paused", pauseReason }; }

@@ -17,7 +17,7 @@ Chain strategy: stacked-to-main
 
 The maintainer approved the `.2` aggregate reviewer-budget increase from 800 to 901 lines; this is not a `size:exception`; every slice remains <=400; delivery remains auto-chain/stacked-to-main.
 
-Progress: 47/53 semantic tasks complete. Native checklist progress is 30/36. PR4a1 intent foundation is complete.
+Progress: 49/53 semantic tasks complete. Native checklist progress is 32/36. PR4a2 receipt foundation is complete.
 
 | Unit (estimate / reserve) | Start → end; exclusions | Candidate files; evidence | Rollback boundary |
 |---|---|---|---|
@@ -78,8 +78,8 @@ Progress: 47/53 semantic tasks complete. Native checklist progress is 30/36. PR4
 - [x] 15.2 GREEN: bounded restart-safe outbox; remote update/move stays disabled.
 
 ## Phase 16: Receipt foundation — PR4a2
-- [ ] 16.1 RED: receipt shape, hidden mismatch, duplicates, and restart intent.
-- [ ] 16.2 GREEN: dormant versioned reducer and complete-node proof gate.
+- [x] 16.1 RED: receipt shape, hidden mismatch, duplicates, and restart intent.
+- [x] 16.2 GREEN: dormant versioned reducer and complete-node proof gate.
 
 ## Phase 17: Remote update/move — PR4a3
 - [ ] 17.1 RED: complete proof/move tuple and ordering/restart/local-action cases.

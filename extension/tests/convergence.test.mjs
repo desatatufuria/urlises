@@ -85,3 +85,31 @@ test("intent capture uses a stable contained identity and never prunes queued in
   assert.equal(full.pauseReason, "intent-overflow");
   assert.equal(full.localIntents.length, 101);
 });
+
+test("receipt reduction requires complete matching shapes and queues hidden-field mismatches", () => {
+  const receipt = convergence.createRemoteReceipt({ workspaceId: "workspace-a", backendId: "bookmark-a", chromeId: "chrome-a", type: "bookmark", before: { parentId: "folder-a", index: 2, title: "Before", url: "https://example.com/before" }, expectedAfter: { parentId: "folder-a", index: 2, title: "After", url: "https://example.com/after" }, eventId: "event-9", cursor: 9 });
+  const result = convergence.reduceRemoteCallback({ ...convergence.emptyJournal(), receipts: [receipt] }, { kind: "changed", workspaceId: "workspace-a", backendId: "bookmark-a", chromeId: "chrome-a", type: "bookmark", node: { parentId: "folder-a", index: 2, title: "After", url: "https://example.com/hidden" } });
+  assert.equal(result.disposition, "intent");
+  assert.equal(result.journal.receipts[0].status, "pending");
+  assert.equal(result.journal.localIntents.length, 1);
+});
+
+test("only one exact pending receipt consumes; duplicate callbacks stay intent-driven", () => {
+  const receipt = convergence.createRemoteReceipt({ workspaceId: "workspace-a", backendId: "bookmark-a", chromeId: "chrome-a", type: "bookmark", before: { parentId: "folder-a", index: 2, title: "Before", url: "https://example.com/before" }, expectedAfter: { parentId: "folder-b", index: 3, title: "After", url: "https://example.com/after" }, eventId: "event-10", cursor: 10, move: { oldParentId: "folder-a", oldIndex: 2, parentId: "folder-b", index: 3 } });
+  const callback = { kind: "moved", workspaceId: "workspace-a", backendId: "bookmark-a", chromeId: "chrome-a", type: "bookmark", node: { parentId: "folder-b", index: 3, title: "After", url: "https://example.com/after" }, move: { oldParentId: "folder-a", oldIndex: 2, parentId: "folder-b", index: 3 } };
+  const consumed = convergence.reduceRemoteCallback({ ...convergence.emptyJournal(), receipts: [receipt] }, callback);
+  const duplicate = convergence.reduceRemoteCallback(consumed.journal, callback);
+  assert.equal(consumed.disposition, "consumed");
+  assert.equal(consumed.journal.receipts[0].status, "consumed");
+  assert.equal(duplicate.disposition, "intent");
+  assert.equal(duplicate.journal.localIntents.length, 1);
+});
+
+test("restart retains pending receipt and intent without enabling remote application", () => {
+  const receipt = convergence.createRemoteReceipt({ workspaceId: "workspace-a", backendId: "folder-a", chromeId: "chrome-a", type: "folder", before: { parentId: "root", index: 0, title: "Before" }, expectedAfter: { parentId: "root", index: 1, title: "After" }, eventId: "event-11", cursor: 11 });
+  const journal = convergence.captureLocalIntent({ ...convergence.emptyJournal(), receipts: [receipt] }, { workspaceId: "workspace-a", backendId: "folder-a", chromeId: "chrome-a", type: "folder", kind: "changed", node: { parentId: "root", index: 0, title: "Local" } });
+  const restored = convergence.normalizeJournal(JSON.parse(JSON.stringify(journal)));
+  assert.equal(restored.receipts[0].status, "pending");
+  assert.equal(restored.localIntents.length, 1);
+  assert.notEqual(restored.phase, "apply");
+});

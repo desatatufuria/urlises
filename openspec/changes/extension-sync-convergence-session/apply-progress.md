@@ -1,7 +1,7 @@
 # Apply Progress: Extension Sync Convergence Session
 
 ## Cumulative Status
-47/53 semantic tasks complete; native checkbox progress is 30/36. Delivery is `auto-chain`, stacked-to-`main`, with no `size:exception`.
+49/53 semantic tasks complete; native checkbox progress is 32/36. Delivery is `auto-chain`, stacked-to-`main`, with no `size:exception`.
 
 ## Completed Foundations
 - [x] 7.1–7.2: dormant journal/planner.
@@ -186,3 +186,18 @@ Final slice accounting relative to `b04d5ac`: 169 additions + 6 deletions = 175 
 | Rollback | Revert only `extension/src/background/{convergence.ts,projection.ts}`, `extension/src/shared/types.ts`, `extension/tests/{convergence.test.mjs,projection-behavior.test.mjs}`, and these 15.1–15.2 artifact marks. Create/delete/session behavior and remote update/move activation remain outside this unit. |
 
 Settlement evidence: active native token `sha256:79a779a7a9dd5c62fcdc22243432ffd90410dd88e976b8d076cd438266c1d9f3`, generation 21, ordinal 27 was not acquired, settled, reset, or otherwise mutated by this executor.
+
+## PR4a2 Receipt Foundation — Complete
+- [x] 16.1 RED: receipt-shape, hidden URL mismatch, duplicate callback, and persisted-restart tests first failed because `createRemoteReceipt` was undefined.
+- [x] 16.2 GREEN: added a dormant, versioned receipt reducer with workspace/backend/Chrome/type identity, durable before/after shape signatures, event/cursor, pending/consumed state, exact move tuple proof, bounded terminal retention, and intent fallback. It is not wired to remote update/move application, checkpoints, suppression replacement, or repair.
+
+## Work Unit Evidence
+| Evidence | Exact result |
+|---|---|
+| Forecast / RED | Forecast before source edits: 83 additions+deletions (60 code/test + 23 artifacts), under 400. `cd extension && npm run build && node --test tests/convergence.test.mjs`: FAIL (6 pass, 3 fail; `createRemoteReceipt is not a function`). |
+| Focused GREEN | `cd extension && npm run build && node --test tests/convergence.test.mjs`: PASS (9/9). It proves hidden URL mismatch queues intent without consumption, one exact pending move receipt consumes once, duplicate callback queues intent, and persisted restart retains receipt and intent. |
+| Runtime harness | `cd extension && npm run test:projection`: PASS (build plus 97/97 deterministic repository-native tests). `npm run typecheck`: PASS. |
+| Rollback / cleanup | Revert only `extension/src/background/convergence.ts`, `extension/src/shared/types.ts`, `extension/tests/convergence.test.mjs`, and these 16.1–16.2 artifact marks. `git diff --check`: PASS; build left no generated output. Pre-existing `.docmanager/` and `SHA256SUMS.txt` remain unmodified. |
+| Settlement | Token `sha256:6902ac215da66db0f4c15facb5d017d5b32f2d6b52a4af7cf197cbe0244c483c` was supplied already acquired; no acquire, settle, reset, or ledger mutation was performed. |
+
+Final accounting relative to `b2cfbb4`: 76 additions + 7 deletions = 83 changed lines. OpenSpec tasks are 32/36 native and 49/53 semantic; PR4a3 and later remain unchecked.

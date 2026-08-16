@@ -154,15 +154,24 @@ export interface ConvergenceOperation {
   ownership?: { workspaceId: string; effect?: "create" | "delete"; type: "folder" | "bookmark"; parentChromeId?: string; title?: string; url?: string; index?: number; chromeId?: string; mappedChromeIds?: string[] };
 }
 
+export interface ReceiptNodeShape { parentId?: string; index?: number; title: string; url?: string; }
+export interface RemoteReceipt {
+  version: 1; workspaceId: string; backendId: string; chromeId: string; type: "folder" | "bookmark";
+  before: ReceiptNodeShape; expectedAfter: ReceiptNodeShape; eventId: string; cursor: number;
+  expectedSignatures: string[]; status: "pending" | "consumed";
+  move?: { oldParentId: string; oldIndex: number; parentId: string; index: number };
+}
+
 export interface ConvergenceJournal {
   version: 1;
   epoch?: number;
   desired?: { snapshotId: string; cursor: number };
   phase: ConvergencePhase;
   operations: ConvergenceOperation[];
+  receipts?: RemoteReceipt[];
   localIntents: { eventId: string; kind: string; payload: { workspaceId: string; backendId: string; chromeId: string; type: "folder" | "bookmark"; kind: string; node: { id: string; parentId?: string; index?: number; title: string; url?: string } }; status: "queued" | "sent" | "acked" }[];
   attempts: number;
-  pauseReason?: "ambiguous-operation" | "identity-ambiguous" | "mapping-not-bijective" | "managed-root-missing" | "stale-mapping" | "operation-overflow" | "intent-overflow" | "cursor-zero-read-failed";
+  pauseReason?: "ambiguous-operation" | "identity-ambiguous" | "mapping-not-bijective" | "managed-root-missing" | "stale-mapping" | "operation-overflow" | "intent-overflow" | "cursor-zero-read-failed" | "receipt-overflow";
   queuedEpoch?: number;
 }
 
