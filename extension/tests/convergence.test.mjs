@@ -61,3 +61,27 @@ test("caps, legacy migration, and started restart ambiguity pause safely", () =>
   assert.deepEqual(convergence.normalizeJournal(undefined), convergence.emptyJournal());
   assert.equal(convergence.normalizeJournal({ version: 1, operations: [{ status: "started" }] }).pauseReason, "ambiguous-operation");
 });
+
+test("intent capture uses a stable contained identity and never prunes queued intent", () => {
+  const journal = convergence.captureLocalIntent(convergence.emptyJournal(), {
+    workspaceId: "workspace-a", backendId: "bookmark-a", chromeId: "chrome-a", type: "bookmark", kind: "changed",
+    node: { parentId: "folder-a", index: 2, title: "Renamed", url: "https://example.com/renamed" },
+  });
+  const repeated = convergence.captureLocalIntent(journal, {
+    workspaceId: "workspace-a", backendId: "bookmark-a", chromeId: "chrome-a", type: "bookmark", kind: "changed",
+    node: { parentId: "folder-a", index: 2, title: "Renamed", url: "https://example.com/renamed" },
+  });
+  assert.equal(journal.localIntents.length, 1);
+  assert.equal(repeated.localIntents.length, 1);
+  assert.equal(repeated.localIntents[0].eventId, journal.localIntents[0].eventId);
+  assert.deepEqual(journal.localIntents[0].payload, {
+    workspaceId: "workspace-a", backendId: "bookmark-a", chromeId: "chrome-a", type: "bookmark", kind: "changed",
+    node: { id: "chrome-a", parentId: "folder-a", index: 2, title: "Renamed", url: "https://example.com/renamed" },
+  });
+  const full = convergence.captureLocalIntent({ ...convergence.emptyJournal(), localIntents: Array.from({ length: 100 }, (_, index) => ({ eventId: `old-${index}`, kind: "changed", payload: {}, status: "queued" })) }, {
+    workspaceId: "workspace-a", backendId: "bookmark-b", chromeId: "chrome-b", type: "bookmark", kind: "moved",
+    node: { parentId: "folder-a", index: 3, title: "Second", url: "https://example.com/second" },
+  });
+  assert.equal(full.pauseReason, "intent-overflow");
+  assert.equal(full.localIntents.length, 101);
+});

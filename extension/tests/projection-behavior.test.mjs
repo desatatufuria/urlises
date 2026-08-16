@@ -1446,7 +1446,49 @@ test("remote bookmark update and move consume suppression independently", async 
   assert.equal(bookmarkNodes.get("bookmark-node")?.title, "Remote Bookmark");
 });
 
-test("handleBookmarkChanged stops retrying repeated rejected local updates after recovery starts", async () => {
+test("local update and move are captured as durable intent without remote mutation", async () => {
+  bookmarkNodes.set("workspace-node", createBookmarkNode({ id: "workspace-node", parentId: "1", title: "Workspace", index: 0 }));
+  bookmarkNodes.set("folder-a", createBookmarkNode({ id: "folder-a", parentId: "workspace-node", title: "Docs", index: 0 }));
+  bookmarkNodes.set("folder-b", createBookmarkNode({ id: "folder-b", parentId: "workspace-node", title: "Links", index: 1 }));
+  bookmarkNodes.set("bookmark-node", createBookmarkNode({ id: "bookmark-node", parentId: "folder-a", title: "Renamed", url: "https://example.com/renamed", index: 0 }));
+  rebuildBookmarkChildren();
+  await setState({ ...createRuntimeState({ lastCursor: 7 }), projectionsByWorkspaceId: { "workspace-1": createEditorProjection({
+    workspaceChromeId: "workspace-node",
+    chromeIdByBackendId: { "folder-a": "folder-a", "folder-b": "folder-b", "bookmark-1": "bookmark-node" },
+    backendIdByChromeId: { "folder-a": "folder-a", "folder-b": "folder-b", "bookmark-node": "bookmark-1" },
+    entityTypeByBackendId: { "folder-a": "folder", "folder-b": "folder", "bookmark-1": "bookmark" },
+  }) } });
+
+  await handleBookmarkChanged("bookmark-node", { title: "Renamed" });
+  bookmarkNodes.set("bookmark-node", createBookmarkNode({ id: "bookmark-node", parentId: "folder-b", title: "Renamed", url: "https://example.com/renamed", index: 0 }));
+  rebuildBookmarkChildren();
+  await handleBookmarkMoved("bookmark-node", { parentId: "folder-b", oldParentId: "folder-a", index: 0, oldIndex: 0 });
+
+  const journal = (await getState()).projectionsByWorkspaceId["workspace-1"].convergenceJournal;
+  assert.equal(fetchLog.length, 0);
+  assert.deepEqual(journal.localIntents.map((intent) => [intent.kind, intent.payload.workspaceId, intent.payload.backendId, intent.payload.chromeId, intent.payload.type, intent.payload.node]), [
+    ["changed", "workspace-1", "bookmark-1", "bookmark-node", "bookmark", { id: "bookmark-node", parentId: "folder-a", index: 0, title: "Renamed", url: "https://example.com/renamed" }],
+    ["moved", "workspace-1", "bookmark-1", "bookmark-node", "bookmark", { id: "bookmark-node", parentId: "folder-b", index: 0, title: "Renamed", url: "https://example.com/renamed" }],
+  ]);
+});
+
+test("missing cursor-zero node pauses intent capture without advancing or mutating remotely", async () => {
+  await setState({ ...createRuntimeState({ lastCursor: 0 }), projectionsByWorkspaceId: { "workspace-1": createEditorProjection({
+    workspaceChromeId: "workspace-node", chromeIdByBackendId: { "bookmark-1": "missing-node" },
+    backendIdByChromeId: { "missing-node": "bookmark-1" }, entityTypeByBackendId: { "bookmark-1": "bookmark" },
+  }) } });
+
+  await handleBookmarkChanged("missing-node", { title: "Lost" });
+
+  const projection = (await getState()).projectionsByWorkspaceId["workspace-1"];
+  assert.equal(fetchLog.length, 0);
+  assert.equal(projection.lastCursor, 0);
+  assert.equal(projection.convergenceJournal.phase, "paused");
+  assert.equal(projection.convergenceJournal.pauseReason, "cursor-zero-read-failed");
+  assert.deepEqual(projection.convergenceJournal.localIntents, []);
+});
+
+test("handleBookmarkChanged retains one stable local intent without backend recovery", async () => {
   bookmarkNodes.set("workspace-node", createBookmarkNode({ id: "workspace-node", parentId: "1", title: "Workspace", index: 0 }));
   bookmarkNodes.set("folder-node", createBookmarkNode({ id: "folder-node", parentId: "workspace-node", title: "Docs", index: 0 }));
   bookmarkNodes.set("bookmark-node", createBookmarkNode({ id: "bookmark-node", parentId: "folder-node", title: "Bookmark", url: "https://example.com/bookmark", index: 0 }));
@@ -1490,6 +1532,8 @@ test("handleBookmarkChanged stops retrying repeated rejected local updates after
     },
   ];
 
+  bookmarkNodes.set("bookmark-node", createBookmarkNode({ id: "bookmark-node", parentId: "folder-node", title: "Renamed Bookmark", url: "https://example.com/bookmark", index: 0 }));
+  rebuildBookmarkChildren();
   await handleBookmarkChanged("bookmark-node", {
     title: "Renamed Bookmark",
     url: "https://example.com/bookmark",
@@ -1502,10 +1546,9 @@ test("handleBookmarkChanged stops retrying repeated rejected local updates after
 
   const state = await getState();
   const projection = state.projectionsByWorkspaceId["workspace-1"];
-  const diagnostics = state.diagnostics.map((entry) => entry.message);
-  assert.equal(fetchLog.filter((url) => url.endsWith("/workspaces/workspace-1/tree")).length, 1);
-  assert.equal(diagnostics.filter((entry) => entry.includes("local change rejected by backend")).length, 1);
-  assert.equal(projection.chromeIdByBackendId["bookmark-1"], undefined);
+  assert.equal(fetchLog.length, 0);
+  assert.equal(projection.convergenceJournal.localIntents.length, 1);
+  assert.equal(projection.convergenceJournal.localIntents[0].payload.node.title, "Renamed Bookmark");
 });
 
 test("handleBookmarkRemoved stops retrying a rejected local delete after bounded recovery starts", async () => {
@@ -1568,7 +1611,7 @@ test("handleBookmarkRemoved stops retrying a rejected local delete after bounded
   assert.equal(projection.chromeIdByBackendId["folder-1"], undefined);
 });
 
-test("handleBookmarkMoved stops retrying a rejected local move after bounded recovery starts", async () => {
+test("handleBookmarkMoved retains one stable local intent without backend recovery", async () => {
   bookmarkNodes.set("workspace-node", createBookmarkNode({ id: "workspace-node", parentId: "1", title: "Workspace", index: 0 }));
   bookmarkNodes.set("folder-node", createBookmarkNode({ id: "folder-node", parentId: "workspace-node", title: "Docs", index: 0 }));
   rebuildBookmarkChildren();
@@ -1625,10 +1668,9 @@ test("handleBookmarkMoved stops retrying a rejected local move after bounded rec
 
   const state = await getState();
   const projection = state.projectionsByWorkspaceId["workspace-1"];
-  const diagnostics = state.diagnostics.map((entry) => entry.message);
-  assert.equal(fetchLog.filter((url) => url.endsWith("/workspaces/workspace-1/tree")).length, 1);
-  assert.equal(diagnostics.filter((entry) => entry.includes("local move rejected by backend")).length, 1);
-  assert.equal(projection.chromeIdByBackendId["folder-1"], undefined);
+  assert.equal(fetchLog.length, 0);
+  assert.equal(projection.convergenceJournal.localIntents.length, 1);
+  assert.equal(projection.convergenceJournal.localIntents[0].payload.node.parentId, "workspace-node");
 });
 
 test("connectWorkspace falls back from subtree recovery to workspace resync before degrading", async () => {

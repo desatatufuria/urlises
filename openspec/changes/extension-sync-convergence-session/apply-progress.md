@@ -1,7 +1,7 @@
 # Apply Progress: Extension Sync Convergence Session
 
 ## Cumulative Status
-45/53 semantic tasks complete; native checkbox progress is 28/36. Delivery is `auto-chain`, stacked-to-`main`, with no `size:exception`.
+47/53 semantic tasks complete; native checkbox progress is 30/36. Delivery is `auto-chain`, stacked-to-`main`, with no `size:exception`.
 
 ## Completed Foundations
 - [x] 7.1–7.2: dormant journal/planner.
@@ -171,3 +171,18 @@ Evidence revision: `sha256:818b2236bf8c805d7cd8dcbbaffeef2da9852815c1b1bb644df1c
 | Cleanup / rollback | PostgreSQL catalog count for `sync_scope_test_%`: `0` before and after all runtime tests. Revert only `backend/internal/sync/{types.go,service.go,postgres.go,bookmark_routes.go,bookmark_routes_test.go,handler_test.go,postgres_integration_test.go}` and these 14.2 artifact marks; folder PATCH remains correct. |
 
 Final slice accounting relative to `b04d5ac`: 169 additions + 6 deletions = 175 changed lines; `gofmt` and `git diff --check` pass. Native attempt token `sha256:72929f3bd45880a4adda31a7a372961f07f7ed638c349809195835df7224ece8` was not mutated.
+
+## PR4a1 Intent Foundation — Complete
+- [x] 15.1 RED: corrected the recovered RED tests to use the persisted `eventId` contract, capture complete node shape, assert the actual post-move node, and retain the 101st unacknowledged intent while paused.
+- [x] 15.2 GREEN: local update/move callbacks now retain complete, contained, deterministic stable-ID intent without backend mutation; bounded retention prunes only acknowledged entries, cursor-zero node-read failure pauses explicitly, and remote update/move activation remains deferred to PR4a2+.
+
+## Work Unit Evidence
+| Evidence | Exact result |
+|---|---|
+| RED | `cd extension && node --test tests/convergence.test.mjs`: FAIL (5 pass, 1 fail; `captureLocalIntent is not a function`). `cd extension && node --test tests/projection-behavior.test.mjs`: FAIL (33 pass, 2 fail; callbacks still emitted backend requests). |
+| Focused GREEN | `cd extension && npm run build && node --test tests/convergence.test.mjs && node --test tests/projection-behavior.test.mjs`: PASS (TypeScript build; convergence 6/6; projection behavior 35/35). |
+| Runtime harness | `cd extension && npm run test:projection`: PASS (build plus 94/94 deterministic extension runtime/projection tests). `npm run typecheck`: PASS. |
+| Cleanup / budget | `git diff --check`: PASS. Relative to `be5a3ab`, code/test changes are 166 additions + 75 deletions = 241; including task/progress artifacts, authored changes are 185 additions + 79 deletions = 264, below 400. `npm run build` left no generated tracked or untracked output; pre-existing untracked `.docmanager/` and `SHA256SUMS.txt` were not modified. |
+| Rollback | Revert only `extension/src/background/{convergence.ts,projection.ts}`, `extension/src/shared/types.ts`, `extension/tests/{convergence.test.mjs,projection-behavior.test.mjs}`, and these 15.1–15.2 artifact marks. Create/delete/session behavior and remote update/move activation remain outside this unit. |
+
+Settlement evidence: active native token `sha256:79a779a7a9dd5c62fcdc22243432ffd90410dd88e976b8d076cd438266c1d9f3`, generation 21, ordinal 27 was not acquired, settled, reset, or otherwise mutated by this executor.

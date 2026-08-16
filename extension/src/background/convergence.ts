@@ -3,6 +3,7 @@ import type { ConvergenceJournal, ConvergenceOperation } from "../shared/types.j
 export type DesiredNode = { backendId: string; parentId?: string; type: "folder" | "bookmark"; title?: string; url?: string; position: number };
 export type InventoryNode = { chromeId: string; parentChromeId?: string; type: "folder" | "bookmark"; title?: string; url?: string; position: number; managed: boolean };
 type Input = { epoch: number; snapshotId: string; cursor: number; managedRootChromeId: string; desired: DesiredNode[]; inventory: InventoryNode[]; mappings: { backendToChrome?: Record<string, string>; chromeToBackend?: Record<string, string> } };
+export type LocalIntentInput = { workspaceId: string; backendId: string; chromeId: string; type: "folder" | "bookmark"; kind: string; node: { parentId?: string; index?: number; title: string; url?: string } };
 
 export function emptyJournal(): ConvergenceJournal {
   return { version: 1, phase: "plan", operations: [], localIntents: [], attempts: 0 };
@@ -13,6 +14,27 @@ export function normalizeJournal(value: Partial<ConvergenceJournal> | undefined)
   if (journal.operations.length > 500) return pause(journal, "operation-overflow");
   if (journal.localIntents.length > 100) return pause(journal, "intent-overflow");
   return journal.operations.some((operation) => operation.status === "started") ? pause(journal, "ambiguous-operation") : journal;
+}
+
+export function captureLocalIntent(journal: ConvergenceJournal, input: LocalIntentInput): ConvergenceJournal {
+  const payload = {
+    workspaceId: input.workspaceId,
+    backendId: input.backendId,
+    chromeId: input.chromeId,
+    type: input.type,
+    kind: input.kind,
+    node: { id: input.chromeId, parentId: input.node.parentId, index: input.node.index, title: input.node.title, url: input.node.url },
+  };
+  const eventId = `local-intent-v1:${JSON.stringify([payload.workspaceId, payload.backendId, payload.chromeId, payload.type, payload.kind, payload.node.parentId ?? null, payload.node.index ?? null, payload.node.title, payload.node.url ?? null])}`;
+  if (journal.localIntents.some((intent) => intent.eventId === eventId)) return journal;
+  const localIntents = [...journal.localIntents];
+  while (localIntents.length >= 100) {
+    const acknowledged = localIntents.findIndex((intent) => intent.status === "acked");
+    if (acknowledged < 0) break;
+    localIntents.splice(acknowledged, 1);
+  }
+  localIntents.push({ eventId, kind: input.kind, payload, status: "queued" });
+  return localIntents.length > 100 ? pause({ ...journal, localIntents }, "intent-overflow") : { ...journal, localIntents };
 }
 
 export function plan(input: Input): ConvergenceJournal {

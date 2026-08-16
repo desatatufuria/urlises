@@ -60,6 +60,7 @@ import {
 } from "./chrome-bookmarks.js";
 import { connectWorkspaceSocket } from "../shared/websocket.js";
 import type { BookmarkChangeInfo, BookmarkMoveInfo, BookmarkRemoveInfo } from "./bookmark-listeners.js";
+import { captureLocalIntent, emptyJournal } from "./convergence.js";
 
 const socketClosers = new Map<string, () => void>();
 const socketTokens = new Map<string, symbol>();
@@ -228,6 +229,57 @@ export async function resyncAll(): Promise<UiState> {
   return getUiState();
 }
 
+type LocalIntentContext = {
+  projection: ProjectionState;
+  workspaceId: string;
+  backendId: string;
+  entityType: "folder" | "bookmark";
+};
+
+async function captureLocalUpdateOrMove(context: LocalIntentContext, chromeId: string, kind: "changed" | "moved"): Promise<void> {
+  const node = await getNode(chromeId);
+  if (!node) {
+    await updateProjectionState(context.workspaceId, (projection) => {
+      const journal = projection.convergenceJournal ?? emptyJournal();
+      journal.phase = "paused";
+      journal.pauseReason = projection.lastCursor === 0 ? "cursor-zero-read-failed" : "ambiguous-operation";
+      projection.convergenceJournal = journal;
+    });
+    return;
+  }
+  if (!await isWithinWorkspace(node, context.projection.workspaceChromeId)) {
+    await updateProjectionState(context.workspaceId, (projection) => {
+      const journal = projection.convergenceJournal ?? emptyJournal();
+      journal.phase = "paused";
+      journal.pauseReason = "stale-mapping";
+      projection.convergenceJournal = journal;
+    });
+    return;
+  }
+  await updateProjectionState(context.workspaceId, (projection) => {
+    projection.convergenceJournal = captureLocalIntent(projection.convergenceJournal ?? emptyJournal(), {
+      workspaceId: context.workspaceId,
+      backendId: context.backendId,
+      chromeId,
+      type: context.entityType,
+      kind,
+      node: { parentId: node.parentId, index: node.index, title: node.title, url: node.url },
+    });
+  });
+}
+
+async function isWithinWorkspace(node: chrome.bookmarks.BookmarkTreeNode, workspaceChromeId: string | undefined): Promise<boolean> {
+  if (!workspaceChromeId) return false;
+  const visited = new Set<string>();
+  let parentId = node.parentId;
+  while (parentId && !visited.has(parentId)) {
+    if (parentId === workspaceChromeId) return true;
+    visited.add(parentId);
+    parentId = (await getNode(parentId))?.parentId;
+  }
+  return false;
+}
+
 export async function handleBookmarkCreated(id: string, node: chrome.bookmarks.BookmarkTreeNode): Promise<void> {
   if (await ownsRemoteCreate(id, node)) return;
   if (isSuppressed(node.id) || isSuppressed(node.parentId)) {
@@ -288,7 +340,7 @@ export async function handleBookmarkChanged(id: string, changeInfo: BookmarkChan
     return;
   }
   const context = await resolveContext(id);
-  if (!context?.backendId) {
+  if (!context?.backendId || !context.entityType) {
     return;
   }
   if (isMutationAbandoned(context.workspaceId, context.backendId, id)) {
@@ -298,33 +350,12 @@ export async function handleBookmarkChanged(id: string, changeInfo: BookmarkChan
     await resyncWorkspace(context.workspaceId, "viewer local change rejected");
     return;
   }
-  try {
-    if (context.entityType === "folder") {
-      await apiUpdateFolder(context.state.settings.backendUrl, context.state.session!, context.backendId, {
-        name: changeInfo.title,
-      }, context.projection.lastCursor);
-    } else {
-      await apiUpdateBookmark(context.state.settings.backendUrl, context.state.session!, context.backendId, {
-        title: changeInfo.title,
-        url: changeInfo.url,
-      }, context.projection.lastCursor);
-    }
-  } catch (error) {
-    await logRejectedMutation(
-      context.workspaceId,
-      "local change rejected by backend",
-      error,
-      createRecoveryScope({
-        workspaceId: context.workspaceId,
-        entityType: context.entityType,
-        entityBackendId: context.backendId,
-        mappedChromeId: id,
-        reason: "local-404",
-      }),
-    );
-    return;
-  }
-  await resyncWorkspace(context.workspaceId, "local update accepted");
+  await captureLocalUpdateOrMove({
+    projection: context.projection,
+    workspaceId: context.workspaceId,
+    backendId: context.backendId,
+    entityType: context.entityType,
+  }, id, "changed");
 }
 
 export async function handleBookmarkMoved(id: string, moveInfo: BookmarkMoveInfo): Promise<void> {
@@ -336,7 +367,7 @@ export async function handleBookmarkMoved(id: string, moveInfo: BookmarkMoveInfo
     return;
   }
   const context = await resolveContext(id);
-  if (!context?.backendId) {
+  if (!context?.backendId || !context.entityType) {
     return;
   }
   if (isMutationAbandoned(context.workspaceId, context.backendId, id)) {
@@ -347,40 +378,12 @@ export async function handleBookmarkMoved(id: string, moveInfo: BookmarkMoveInfo
     return;
   }
 
-  const parentBackendId = resolveParentBackendId(context.projection, moveInfo.parentId);
-  try {
-    if (context.entityType === "folder") {
-      await apiUpdateFolder(context.state.settings.backendUrl, context.state.session!, context.backendId, {
-        parentId: parentBackendId,
-        position: moveInfo.index,
-      }, context.projection.lastCursor);
-    } else {
-      if (!parentBackendId) {
-        await resyncWorkspace(context.workspaceId, "bookmark cannot move to synthetic workspace root");
-        return;
-      }
-      await apiUpdateBookmark(context.state.settings.backendUrl, context.state.session!, context.backendId, {
-        folderId: parentBackendId,
-        position: moveInfo.index,
-      }, context.projection.lastCursor);
-    }
-  } catch (error) {
-    await logRejectedMutation(
-      context.workspaceId,
-      "local move rejected by backend",
-      error,
-      createRecoveryScope({
-        workspaceId: context.workspaceId,
-        entityType: context.entityType,
-        entityBackendId: context.backendId,
-        parentBackendId: parentBackendId ?? undefined,
-        mappedChromeId: id,
-        reason: "local-404",
-      }),
-    );
-    return;
-  }
-  await resyncWorkspace(context.workspaceId, "local move accepted");
+  await captureLocalUpdateOrMove({
+    projection: context.projection,
+    workspaceId: context.workspaceId,
+    backendId: context.backendId,
+    entityType: context.entityType,
+  }, id, "moved");
 }
 
 export async function handleBookmarkRemoved(id: string, removeInfo: BookmarkRemoveInfo): Promise<void> {

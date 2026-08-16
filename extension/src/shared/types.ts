@@ -160,9 +160,9 @@ export interface ConvergenceJournal {
   desired?: { snapshotId: string; cursor: number };
   phase: ConvergencePhase;
   operations: ConvergenceOperation[];
-  localIntents: { eventId: string; kind: string; payload: unknown; status: "queued" | "sent" | "acked" }[];
+  localIntents: { eventId: string; kind: string; payload: { workspaceId: string; backendId: string; chromeId: string; type: "folder" | "bookmark"; kind: string; node: { id: string; parentId?: string; index?: number; title: string; url?: string } }; status: "queued" | "sent" | "acked" }[];
   attempts: number;
-  pauseReason?: "ambiguous-operation" | "identity-ambiguous" | "mapping-not-bijective" | "managed-root-missing" | "stale-mapping" | "operation-overflow" | "intent-overflow";
+  pauseReason?: "ambiguous-operation" | "identity-ambiguous" | "mapping-not-bijective" | "managed-root-missing" | "stale-mapping" | "operation-overflow" | "intent-overflow" | "cursor-zero-read-failed";
   queuedEpoch?: number;
 }
 
