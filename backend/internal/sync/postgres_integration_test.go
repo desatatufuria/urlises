@@ -158,6 +158,132 @@ func TestCreateFolderCreatesCursorAndSyncEventWhenWorkspaceCursorRowDoesNotExist
 	}
 }
 
+func TestApplyPreparedPatchesTxRecordsOnlyMutationsAndReturnsPostCommit(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping PostgreSQL integration test in short mode")
+	}
+	ctx, pool := openSyncTestPool(t)
+	userID := insertSyncTestUser(t, ctx, pool)
+	workspaceID := insertSyncTestWorkspace(t, ctx, pool)
+	insertSyncWorkspaceAccess(t, ctx, pool, workspaceID, userID, "editor")
+	bookmarkService := bookmarks.NewService(pool, access.NewService(pool))
+	source, err := bookmarkService.CreateFolder(ctx, userID, workspaceID, bookmarks.CreateFolderInput{Name: "Source"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	target, err := bookmarkService.CreateFolder(ctx, userID, workspaceID, bookmarks.CreateFolderInput{Name: "Target"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	folder, err := bookmarkService.CreateFolder(ctx, userID, workspaceID, bookmarks.CreateFolderInput{Name: "Original", ParentID: &source.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	bookmark, err := bookmarkService.CreateBookmark(ctx, userID, workspaceID, bookmarks.CreateBookmarkInput{FolderID: source.ID, Title: "Original", URL: "https://example.com/original"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	publisher := &recordingPublisher{}
+	store := NewPostgresStore(pool, bookmarkService, nil, publisher)
+
+	before := syncWriteCounts(t, ctx, pool)
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	noOp, err := bookmarkService.PrepareFolderPatchTx(ctx, tx, userID, folder.ID, bookmarks.UpdateFolderInput{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	noOpResult, err := store.ApplyPreparedFolderPatchTx(ctx, tx, userID, noOp, Metadata{EventID: "event-no-op", OriginClientID: "client-a"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if noOpResult.Event != nil || noOpResult.PostCommit != nil || noOpResult.Resource.ID != noOp.Final.ID || noOpResult.Resource.Name != noOp.Final.Name || noOpResult.Resource.Position != noOp.Final.Position {
+		t.Fatalf("no-op result = %+v, want prepared resource without event or post-commit work", noOpResult)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if after := syncWriteCounts(t, ctx, pool); after != before {
+		t.Fatalf("no-op writes = %v, want %v", after, before)
+	}
+
+	tx, err = pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	position := 0
+	title := "Renamed"
+	patch, err := bookmarkService.PrepareBookmarkPatchTx(ctx, tx, userID, bookmark.ID, bookmarks.UpdateBookmarkInput{
+		FolderID: bookmarks.OptionalString{Set: true, Value: &target.ID},
+		Title:    &title,
+		Position: bookmarks.OptionalInt{Set: true, Value: position},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := store.ApplyPreparedBookmarkPatchTx(ctx, tx, userID, patch, Metadata{EventID: "event-bookmark", OriginClientID: "client-a"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Resource.ID != patch.Final.ID || result.Resource.FolderID != patch.Final.FolderID || result.Resource.Title != patch.Final.Title || result.Resource.URL != patch.Final.URL || result.Resource.Position != patch.Final.Position || result.Event == nil || result.Event.EventID != "event-bookmark" || result.Event.Cursor != 1 {
+		t.Fatalf("mutation result = %+v, want exact prepared resource and event cursor 1", result)
+	}
+	if result.PostCommit == nil || result.PostCommit.Event.EventID != result.Event.EventID || result.PostCommit.Event.Cursor != result.Event.Cursor || result.PostCommit.Publisher != publisher || publisher.calls != 0 {
+		t.Fatalf("post-commit result = %+v, publisher calls = %d, want returned-only publisher data", result.PostCommit, publisher.calls)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if after := syncWriteCounts(t, ctx, pool); after != [4]int{before[0], before[1], before[2] + 1, before[3] + 1} {
+		t.Fatalf("mutation writes = %v, want one event and cursor", after)
+	}
+
+	tx, err = pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rollbackTitle := "Rolled back"
+	rollbackPatch, err := bookmarkService.PrepareBookmarkPatchTx(ctx, tx, userID, bookmark.ID, bookmarks.UpdateBookmarkInput{Title: &rollbackTitle})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.ApplyPreparedBookmarkPatchTx(ctx, tx, userID, rollbackPatch, Metadata{EventID: "event-rollback", OriginClientID: "client-a"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Rollback(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if after := syncWriteCounts(t, ctx, pool); after != [4]int{before[0], before[1], before[2] + 1, before[3] + 1} {
+		t.Fatalf("rollback writes = %v, want committed mutation only", after)
+	}
+
+	tx, err = pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacy, err := bookmarkService.UpdateFolderTx(ctx, tx, userID, folder.ID, bookmarks.UpdateFolderInput{Name: &title})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if legacy.Name != title {
+		t.Fatalf("legacy UpdateFolderTx name = %q, want %q", legacy.Name, title)
+	}
+	if err := tx.Rollback(ctx); err != nil {
+		t.Fatal(err)
+	}
+}
+
+type recordingPublisher struct {
+	calls int
+}
+
+func (p *recordingPublisher) Publish(context.Context, Envelope) error {
+	p.calls++
+	return nil
+}
+
 type syncEventRecord struct {
 	EventID        string
 	OrganizationID string

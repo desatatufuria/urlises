@@ -10,6 +10,7 @@ import (
 	"github.com/furia/shared-bookmark-sync/backend/internal/auth"
 	"github.com/furia/shared-bookmark-sync/backend/internal/bookmarks"
 	"github.com/furia/shared-bookmark-sync/backend/internal/workspaces"
+	"github.com/jackc/pgx/v5"
 )
 
 type replayStore struct {
@@ -40,6 +41,14 @@ func (f *replayStore) CreateBookmark(context.Context, string, string, bookmarks.
 
 func (f *replayStore) UpdateBookmark(context.Context, string, string, bookmarks.UpdateBookmarkInput, Metadata) (MutationResult[bookmarks.Bookmark], error) {
 	return MutationResult[bookmarks.Bookmark]{}, nil
+}
+
+func (f *replayStore) ApplyPreparedFolderPatchTx(context.Context, pgx.Tx, string, bookmarks.PreparedFolderPatch, Metadata) (PreparedMutationResult[bookmarks.Folder], error) {
+	return PreparedMutationResult[bookmarks.Folder]{}, nil
+}
+
+func (f *replayStore) ApplyPreparedBookmarkPatchTx(context.Context, pgx.Tx, string, bookmarks.PreparedBookmarkPatch, Metadata) (PreparedMutationResult[bookmarks.Bookmark], error) {
+	return PreparedMutationResult[bookmarks.Bookmark]{}, nil
 }
 
 func (f *replayStore) DeleteBookmark(context.Context, string, string, Metadata) (DeleteResult, error) {
@@ -73,7 +82,7 @@ func TestRegisterRoutesReplayResponses(t *testing.T) {
 			url:  "/sync/events?workspaceId=workspace-1&afterCursor=12",
 			store: &replayStore{replayResult: ReplayResult{
 				CurrentCursor: 14,
-				Events: []Envelope{{Cursor: 13, EventID: "evt-13"}, {Cursor: 14, EventID: "evt-14"}},
+				Events:        []Envelope{{Cursor: 13, EventID: "evt-13"}, {Cursor: 14, EventID: "evt-14"}},
 			}},
 			wantStatus: http.StatusOK,
 			wantCall:   true,

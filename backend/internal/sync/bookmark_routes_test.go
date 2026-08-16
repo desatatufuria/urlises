@@ -11,6 +11,7 @@ import (
 
 	"github.com/furia/shared-bookmark-sync/backend/internal/auth"
 	"github.com/furia/shared-bookmark-sync/backend/internal/bookmarks"
+	"github.com/jackc/pgx/v5"
 )
 
 type fakeStore struct {
@@ -67,6 +68,12 @@ func (f *fakeStore) CreateBookmark(_ context.Context, userID, workspaceID string
 }
 func (f *fakeStore) UpdateBookmark(context.Context, string, string, bookmarks.UpdateBookmarkInput, Metadata) (MutationResult[bookmarks.Bookmark], error) {
 	return MutationResult[bookmarks.Bookmark]{}, nil
+}
+func (f *fakeStore) ApplyPreparedFolderPatchTx(context.Context, pgx.Tx, string, bookmarks.PreparedFolderPatch, Metadata) (PreparedMutationResult[bookmarks.Folder], error) {
+	return PreparedMutationResult[bookmarks.Folder]{}, nil
+}
+func (f *fakeStore) ApplyPreparedBookmarkPatchTx(context.Context, pgx.Tx, string, bookmarks.PreparedBookmarkPatch, Metadata) (PreparedMutationResult[bookmarks.Bookmark], error) {
+	return PreparedMutationResult[bookmarks.Bookmark]{}, nil
 }
 func (f *fakeStore) DeleteBookmark(context.Context, string, string, Metadata) (DeleteResult, error) {
 	return DeleteResult{}, nil

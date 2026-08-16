@@ -1,7 +1,7 @@
 # Apply Progress: Extension Sync Convergence Session
 
 ## Cumulative Status
-41/53 semantic tasks complete; native checkbox progress is 24/36. Delivery is `auto-chain`, stacked-to-`main`, with no `size:exception`.
+43/53 semantic tasks complete; native checkbox progress is 26/36. Delivery is `auto-chain`, stacked-to-`main`, with no `size:exception`.
 
 ## Completed Foundations
 - [x] 7.1–7.2: dormant journal/planner.
@@ -124,3 +124,24 @@ Evidence revision: `sha256:5c3d340b20c6af3bb1ef07c117e0f862883ffe80132a67d5a1ba9
 | Cleanup | `gofmt` and `git diff --check` pass. PostgreSQL remains running. |
 
 Evidence revision: `sha256:ea08aef1994cc2389a0056ec1ab65cebff0fd75f81a372510696e9315691ddfb`.
+
+## PR4a0a3b Prepared Apply Foundation — Complete
+- [x] 13c.1 RED: same-transaction prepared-apply integration contracts were written first. The focused package command failed at compile time because the bookmarks and sync prepared-apply APIs did not exist.
+- [x] 13c.2 GREEN: added caller-owned transaction APIs that consume the prepared final shapes, produce no write/event/cursor for no-op patches, record exactly one event/cursor for mutations, and return uninvoked `PostCommit` publisher data. Preparation/locking and legacy `Update*` remain unchanged.
+
+## Work Unit Evidence
+| Evidence | Exact result |
+|---|---|
+| RED | `cd backend && go test ./internal/bookmarks ./internal/sync -count=1`: FAIL before production changes; undefined `ApplyPreparedFolderPatchTx` / `ApplyPreparedBookmarkPatchTx` in both packages. |
+| Focused GREEN / runtime harness | `docker exec -e GOMODCACHE=/tmp/gomodcache -e DATABASE_URL=<redacted> -w /workspace/backend bookmarks go test ./internal/bookmarks -run '^TestApplyPreparedPatchesTxUsesPreparedFinalShapes$' -count=1 -v`: PASS (0.680s); `... go test ./internal/sync -run '^TestApplyPreparedPatchesTxRecordsOnlyMutationsAndReturnsPostCommit$' -count=1 -v`: PASS (0.738s). Both tests ran against real isolated-schema PostgreSQL at the healthy `postgres:5432` service. |
+| Full PostgreSQL proof | `docker exec -e GOMODCACHE=/tmp/gomodcache -e DATABASE_URL=<redacted> -w /workspace/backend bookmarks go test ./internal/bookmarks ./internal/sync -count=1`: PASS (`bookmarks` 5.116s; `sync` 1.549s). |
+| Contract proof | No-op returns the prepared resource without writes, event, cursor, or post-commit data. Mutation persists the prepared resource/order, produces one `bookmark.updated` event/cursor, returns publisher/event data without calling the publisher, and rollback removes resource/event/cursor changes. Both legacy `UpdateFolderTx` and `UpdateBookmarkTx` remain compatible. |
+| Rollback | Revert only `backend/internal/bookmarks/service.go`, `backend/internal/bookmarks/service_integration_test.go`, `backend/internal/sync/{types.go,service.go,postgres.go,postgres_integration_test.go,bookmark_routes_test.go,handler_test.go}`, and the 13c task/progress marks. Preparation/locking, routes, HTTP idempotency, migrations, publisher invocation, and extension behavior remain untouched. |
+| Cleanup / budget | `gofmt` and `git diff --check` pass. Code/test delta: 327 authored additions/deletions; complete slice including these artifacts is 356, within the 400-line cap. PostgreSQL was not stopped or restarted. |
+| API / path evidence | CodeGraph resolves bookmarks apply APIs at `backend/internal/bookmarks/service.go:271` and `:517`, and sync `Store` APIs at `backend/internal/sync/types.go:79–80`, forwarded by `service.go` and covered by the PostgreSQL integration test. `bookmark_routes_test.go` and `handler_test.go` contain only compile-only no-op methods required because their `fakeStore` / `replayStore` implement the expanded `Store` interface; no route or handler production code changed. |
+| Deterministic count | Exact `git diff --numstat` accounting: `44+62+7+(10+1)+(44+4)+126+9+20+(22+1)+(3+3) = 356` additions plus deletions. |
+
+Evidence revision: `sha256:358d0f30edb6d401d52204ed172c7a68d3f0ac55ec624a74c7e50bfef4596a26`.
+
+## Next
+Run `sdd-apply` for PR4a0b only.

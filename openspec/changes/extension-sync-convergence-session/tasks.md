@@ -17,7 +17,7 @@ Chain strategy: stacked-to-main
 
 The maintainer approved the `.2` aggregate reviewer-budget increase from 800 to 901 lines; this is not a `size:exception`; every slice remains <=400; delivery remains auto-chain/stacked-to-main.
 
-Progress: 41/53 semantic tasks complete. Native checklist progress is 24/36. PR4a0a3a.2c bookmark preparation is complete.
+Progress: 43/53 semantic tasks complete. Native checklist progress is 26/36. PR4a0a3b prepared apply foundation is complete.
 
 | Unit (estimate / reserve) | Start → end; exclusions | Candidate files; evidence | Rollback boundary |
 |---|---|---|---|
@@ -65,8 +65,8 @@ Progress: 41/53 semantic tasks complete. Native checklist progress is 24/36. PR4
 - [x] 13b.3g GREEN (PR4a0a3a.2c, native; after `.2a.2`): `backend/internal/bookmarks/{prepare.go,service_integration_test.go}` add immutable `PreparedBookmarkPatch` and read-only `PrepareBookmarkPatchTx`; focused and full real-PostgreSQL proof pass with zero writes. No `syncapi` import or folder/apply/routes/events/cursors/publisher/HTTP/migration/extension changes; rollback is bookmark API/helpers/tests only.
 
 ## Phase 13c: Apply foundation — PR4a0a3b (after PR4a0a3a.2c)
-- [ ] 13c.1 RED: in `backend/internal/{bookmarks/service_integration_test.go,sync/postgres_integration_test.go}`, prove same-tx prepared apply: no-op has zero writes; mutation writes exact prepared resource/order and one event/cursor; publisher data is returned, not invoked; rollback removes all; legacy `Update*` remains compatible. Run `cd backend && go test ./internal/bookmarks ./internal/sync`; rollback: remove only these RED tests.
-- [ ] 13c.2 GREEN: in `backend/internal/bookmarks/service.go` and `backend/internal/sync/{types.go,service.go,postgres.go}`, add `ApplyPreparedFolderPatchTx`/`ApplyPreparedBookmarkPatchTx` consuming the same prepared state/tx and returning uninvoked publisher data; make no prepare/lock changes and add no routes, HTTP idempotency, or migration. Run the same command; rollback: remove only apply API/tests, retaining prepare and legacy `Update*`.
+- [x] 13c.1 RED: in `backend/internal/{bookmarks/service_integration_test.go,sync/postgres_integration_test.go}`, prove same-tx prepared apply: no-op has zero writes; mutation writes exact prepared resource/order and one event/cursor; publisher data is returned, not invoked; rollback removes all; legacy `Update*` remains compatible. Run `cd backend && go test ./internal/bookmarks ./internal/sync`; rollback: remove only these RED tests.
+- [x] 13c.2 GREEN: in `backend/internal/bookmarks/service.go` and `backend/internal/sync/{types.go,service.go,postgres.go}`, add `ApplyPreparedFolderPatchTx`/`ApplyPreparedBookmarkPatchTx` consuming the same prepared state/tx and returning uninvoked publisher data; make no prepare/lock changes and add no routes, HTTP idempotency, or migration. Run the same command; rollback: remove only apply API/tests, retaining prepare and legacy `Update*`.
 
 ## Phase 14: Complete-shape integration — PR4a0b
 - [ ] 14.1 RED: after PR4a0a2 + PR4a0a3a.2c + PR4a0a3b, prove partial shape, replay/conflict, stable ack, no advance, and real mutation regression.

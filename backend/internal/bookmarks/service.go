@@ -265,6 +265,28 @@ func (s *Service) UpdateFolderTx(ctx context.Context, tx pgx.Tx, userID, folderI
 	return folder, nil
 }
 
+// ApplyPreparedFolderPatchTx applies the exact normalized final state from a
+// patch prepared in this caller-owned transaction. It performs no validation or
+// locking because preparation already retained the required row and scope locks.
+func (s *Service) ApplyPreparedFolderPatchTx(ctx context.Context, tx pgx.Tx, patch PreparedFolderPatch) (Folder, error) {
+	if patch.NoOp {
+		return cloneFolder(patch.Final), nil
+	}
+
+	if _, err := tx.Exec(ctx, `UPDATE folders SET parent_id = $2, name = $3 WHERE id = $1`, patch.Final.ID, patch.Final.ParentID, patch.Final.Name); err != nil {
+		return Folder{}, fmt.Errorf("apply prepared folder patch: %w", err)
+	}
+	if !sameOptionalString(patch.Original.ParentID, patch.Final.ParentID) {
+		if err := s.reorderFolderSiblings(ctx, tx, patch.Original.WorkspaceID, patch.Original.ParentID, "", nil); err != nil {
+			return Folder{}, err
+		}
+	}
+	if err := s.reorderFolderSiblings(ctx, tx, patch.Final.WorkspaceID, patch.Final.ParentID, patch.Final.ID, &patch.Final.Position); err != nil {
+		return Folder{}, err
+	}
+	return cloneFolder(patch.Final), nil
+}
+
 func (s *Service) DeleteFolder(ctx context.Context, userID, folderID string) error {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -487,6 +509,28 @@ func (s *Service) UpdateBookmarkTx(ctx context.Context, tx pgx.Tx, userID, bookm
 	bookmark.UpdatedAt = updatedAt.UTC().Format(time.RFC3339)
 
 	return bookmark, nil
+}
+
+// ApplyPreparedBookmarkPatchTx applies the exact normalized final state from a
+// patch prepared in this caller-owned transaction. It performs no validation or
+// locking because preparation already retained the required row and scope locks.
+func (s *Service) ApplyPreparedBookmarkPatchTx(ctx context.Context, tx pgx.Tx, patch PreparedBookmarkPatch) (Bookmark, error) {
+	if patch.NoOp {
+		return cloneBookmark(patch.Final), nil
+	}
+
+	if _, err := tx.Exec(ctx, `UPDATE bookmarks SET folder_id = $2, title = $3, url = $4 WHERE id = $1`, patch.Final.ID, patch.Final.FolderID, patch.Final.Title, patch.Final.URL); err != nil {
+		return Bookmark{}, fmt.Errorf("apply prepared bookmark patch: %w", err)
+	}
+	if patch.Original.FolderID != patch.Final.FolderID {
+		if err := s.reorderBookmarkSiblings(ctx, tx, patch.Original.WorkspaceID, patch.Original.FolderID, "", nil); err != nil {
+			return Bookmark{}, err
+		}
+	}
+	if err := s.reorderBookmarkSiblings(ctx, tx, patch.Final.WorkspaceID, patch.Final.FolderID, patch.Final.ID, &patch.Final.Position); err != nil {
+		return Bookmark{}, err
+	}
+	return cloneBookmark(patch.Final), nil
 }
 
 func (s *Service) DeleteBookmark(ctx context.Context, userID, bookmarkID string) error {

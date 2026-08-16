@@ -16,10 +16,6 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-type Publisher interface {
-	Publish(context.Context, Envelope) error
-}
-
 type workspaceAccessChecker interface {
 	GetAccessibleWorkspace(ctx context.Context, userID, workspaceID string) (workspaces.WorkspaceAccess, error)
 }
@@ -131,6 +127,50 @@ func (s *PostgresStore) UpdateBookmark(ctx context.Context, userID, bookmarkID s
 
 		return MutationResult[bookmarks.Bookmark]{Resource: bookmark, Event: result}, nil
 	})
+}
+
+// ApplyPreparedFolderPatchTx applies a prepared patch and records its event in
+// the caller-owned transaction. Publishing is returned as post-commit data and
+// is never invoked here.
+func (s *PostgresStore) ApplyPreparedFolderPatchTx(ctx context.Context, tx pgx.Tx, userID string, patch bookmarks.PreparedFolderPatch, metadata Metadata) (PreparedMutationResult[bookmarks.Folder], error) {
+	if patch.NoOp {
+		return PreparedMutationResult[bookmarks.Folder]{Resource: patch.Final}, nil
+	}
+	eventID, err := ensureEventID(metadata.EventID)
+	if err != nil {
+		return PreparedMutationResult[bookmarks.Folder]{}, err
+	}
+	folder, err := s.bookmarks.ApplyPreparedFolderPatchTx(ctx, tx, patch)
+	if err != nil {
+		return PreparedMutationResult[bookmarks.Folder]{}, err
+	}
+	event, err := s.recordEvent(ctx, tx, userID, folder.WorkspaceID, eventID, metadata.OriginClientID, "folder.updated", "folder", folder.ID, folder)
+	if err != nil {
+		return PreparedMutationResult[bookmarks.Folder]{}, err
+	}
+	return PreparedMutationResult[bookmarks.Folder]{Resource: folder, Event: &event, PostCommit: &PostCommit{Publisher: s.publisher, Event: event}}, nil
+}
+
+// ApplyPreparedBookmarkPatchTx applies a prepared patch and records its event
+// in the caller-owned transaction. Publishing is returned as post-commit data
+// and is never invoked here.
+func (s *PostgresStore) ApplyPreparedBookmarkPatchTx(ctx context.Context, tx pgx.Tx, userID string, patch bookmarks.PreparedBookmarkPatch, metadata Metadata) (PreparedMutationResult[bookmarks.Bookmark], error) {
+	if patch.NoOp {
+		return PreparedMutationResult[bookmarks.Bookmark]{Resource: patch.Final}, nil
+	}
+	eventID, err := ensureEventID(metadata.EventID)
+	if err != nil {
+		return PreparedMutationResult[bookmarks.Bookmark]{}, err
+	}
+	bookmark, err := s.bookmarks.ApplyPreparedBookmarkPatchTx(ctx, tx, patch)
+	if err != nil {
+		return PreparedMutationResult[bookmarks.Bookmark]{}, err
+	}
+	event, err := s.recordEvent(ctx, tx, userID, bookmark.WorkspaceID, eventID, metadata.OriginClientID, "bookmark.updated", "bookmark", bookmark.ID, bookmark)
+	if err != nil {
+		return PreparedMutationResult[bookmarks.Bookmark]{}, err
+	}
+	return PreparedMutationResult[bookmarks.Bookmark]{Resource: bookmark, Event: &event, PostCommit: &PostCommit{Publisher: s.publisher, Event: event}}, nil
 }
 
 func (s *PostgresStore) DeleteBookmark(ctx context.Context, userID, bookmarkID string, metadata Metadata) (DeleteResult, error) {

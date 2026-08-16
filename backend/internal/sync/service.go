@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/furia/shared-bookmark-sync/backend/internal/bookmarks"
+	"github.com/jackc/pgx/v5"
 )
 
 type Service struct {
@@ -32,6 +33,14 @@ func (s *Service) CreateBookmark(ctx context.Context, userID, workspaceID string
 
 func (s *Service) UpdateBookmark(ctx context.Context, userID, bookmarkID string, input bookmarks.UpdateBookmarkInput, metadata Metadata) (MutationResult[bookmarks.Bookmark], error) {
 	return s.store.UpdateBookmark(ctx, userID, bookmarkID, input, metadata)
+}
+
+func (s *Service) ApplyPreparedFolderPatchTx(ctx context.Context, tx pgx.Tx, userID string, patch bookmarks.PreparedFolderPatch, metadata Metadata) (PreparedMutationResult[bookmarks.Folder], error) {
+	return s.store.ApplyPreparedFolderPatchTx(ctx, tx, userID, patch, metadata)
+}
+
+func (s *Service) ApplyPreparedBookmarkPatchTx(ctx context.Context, tx pgx.Tx, userID string, patch bookmarks.PreparedBookmarkPatch, metadata Metadata) (PreparedMutationResult[bookmarks.Bookmark], error) {
+	return s.store.ApplyPreparedBookmarkPatchTx(ctx, tx, userID, patch, metadata)
 }
 
 func (s *Service) DeleteBookmark(ctx context.Context, userID, bookmarkID string, metadata Metadata) (DeleteResult, error) {

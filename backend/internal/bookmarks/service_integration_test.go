@@ -324,6 +324,68 @@ func TestPrepareBookmarkPatchTx(t *testing.T) {
 	}
 }
 
+func TestApplyPreparedPatchesTxUsesPreparedFinalShapes(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping PostgreSQL integration test in short mode")
+	}
+	ctx, pool := openBookmarksScopeTestPool(t)
+	userID := insertTestUser(t, ctx, pool)
+	_, workspaceID := insertTestWorkspace(t, ctx, pool)
+	insertWorkspaceUserAccess(t, ctx, pool, workspaceID, userID, "editor")
+	sourceID := insertTestFolder(t, ctx, pool, workspaceID, nil, "Source", 0)
+	targetID := insertTestFolder(t, ctx, pool, workspaceID, nil, "Target", 1)
+	folderID := insertTestFolder(t, ctx, pool, workspaceID, &sourceID, "Original", 0)
+	bookmarkID := insertTestBookmark(t, ctx, pool, workspaceID, sourceID, "Original", "https://example.com/original", 0)
+
+	service := NewService(pool, nil)
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	folderPatch, err := service.PrepareFolderPatchTx(ctx, tx, userID, folderID, UpdateFolderInput{ParentID: OptionalString{Set: true, Value: &targetID}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	appliedFolder, err := service.ApplyPreparedFolderPatchTx(ctx, tx, folderPatch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !foldersEqual(appliedFolder, folderPatch.Final) {
+		t.Fatalf("applied folder = %+v, want prepared final %+v", appliedFolder, folderPatch.Final)
+	}
+
+	title := "Renamed"
+	bookmarkPatch, err := service.PrepareBookmarkPatchTx(ctx, tx, userID, bookmarkID, UpdateBookmarkInput{Title: &title})
+	if err != nil {
+		t.Fatal(err)
+	}
+	appliedBookmark, err := service.ApplyPreparedBookmarkPatchTx(ctx, tx, bookmarkPatch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bookmarksEqual(appliedBookmark, bookmarkPatch.Final) {
+		t.Fatalf("applied bookmark = %+v, want prepared final %+v", appliedBookmark, bookmarkPatch.Final)
+	}
+	if err := tx.Rollback(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	tx, err = pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	updated, err := service.UpdateBookmarkTx(ctx, tx, userID, bookmarkID, UpdateBookmarkInput{Title: &title})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.Title != title {
+		t.Fatalf("legacy UpdateBookmarkTx title = %q, want %q", updated.Title, title)
+	}
+	if err := tx.Rollback(ctx); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func openBookmarksScopeTestPool(t *testing.T) (context.Context, *pgxpool.Pool) {
 	t.Helper()
 	databaseURL := strings.TrimSpace(os.Getenv("BOOKMARKS_TEST_DATABASE_URL"))
