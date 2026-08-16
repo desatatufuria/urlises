@@ -1,7 +1,7 @@
 # Apply Progress: Extension Sync Convergence Session
 
 ## Cumulative Status
-44/53 semantic tasks complete; native checkbox progress is 27/36. Delivery is `auto-chain`, stacked-to-`main`, with no `size:exception`.
+45/53 semantic tasks complete; native checkbox progress is 28/36. Delivery is `auto-chain`, stacked-to-`main`, with no `size:exception`.
 
 ## Completed Foundations
 - [x] 7.1–7.2: dormant journal/planner.
@@ -158,3 +158,16 @@ Run `sdd-apply` for PR4a0b only.
 | Cleanup / rollback | PostgreSQL catalog count for `sync_scope_test_%`: `0` before and after the focused harness. Revert only `backend/cmd/api/main.go`, `backend/internal/sync/{types.go,service.go,postgres.go,headers.go,bookmark_routes.go,bookmark_routes_test.go,handler_test.go,postgres_integration_test.go}`, and these 14.1 marks; bookmark PATCH remains unchanged. |
 
 Evidence revision: `sha256:818b2236bf8c805d7cd8dcbbaffeef2da9852815c1b1bb644df1c997e3705b72`; settlement must remediate `sha256:fc06f6bd1aebf353e40755e3f07acb97dc7f0b99134693c22e2d99e6977ffabc` exactly once.
+
+## PR4a0b.2 Bookmark PATCH Vertical — Complete
+- [x] 14.2 routes only `PATCH /bookmarks/{bookmarkId}` through `ExecutePrepared`, the prepared bookmark bridge, receipt replay/conflict handling, stored acknowledgement headers, and post-commit publication. Folder PATCH remains unchanged.
+
+## Work Unit Evidence
+| Evidence | Exact result |
+|---|---|
+| Focused HTTP / PostgreSQL runtime harness | `docker exec -e GOMODCACHE=/tmp/gomodcache -e DATABASE_URL=<redacted> -w /workspace/backend bookmarks go test ./internal/sync -run '^TestBookmarkPatchRouteExecutesPreparedTransaction$' -count=1 -v`: PASS (0.66s, no skip, isolated schema). It proves normalized title/URL full shape, stable replay body/headers/ack, conflict, no-op zero writes/publication, foreign-folder containment, forbidden/base-cursor mapping, one event/cursor, and post-commit event visibility. |
+| Folder regression | `docker exec -e GOMODCACHE=/tmp/gomodcache -e DATABASE_URL=<redacted> -w /workspace/backend bookmarks go test ./internal/sync -run '^TestFolderPatchRouteExecutesPreparedTransaction$' -count=1 -v`: PASS (0.60s, no skip, isolated schema). |
+| Regression | `docker exec -e GOMODCACHE=/tmp/gomodcache -e DATABASE_URL=<redacted> -w /workspace/backend bookmarks go test ./internal/bookmarks ./internal/sync -count=1 -v`: PASS (`bookmarks` 4.820s; `sync` 2.804s). `go test ./cmd/api -run '^$' -count=1`: PASS. |
+| Cleanup / rollback | PostgreSQL catalog count for `sync_scope_test_%`: `0` before and after all runtime tests. Revert only `backend/internal/sync/{types.go,service.go,postgres.go,bookmark_routes.go,bookmark_routes_test.go,handler_test.go,postgres_integration_test.go}` and these 14.2 artifact marks; folder PATCH remains correct. |
+
+Final slice accounting relative to `b04d5ac`: 169 additions + 6 deletions = 175 changed lines; `gofmt` and `git diff --check` pass. Native attempt token `sha256:72929f3bd45880a4adda31a7a372961f07f7ed638c349809195835df7224ece8` was not mutated.

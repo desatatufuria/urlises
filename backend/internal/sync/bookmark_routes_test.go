@@ -72,6 +72,9 @@ func (f *fakeStore) UpdateBookmark(context.Context, string, string, bookmarks.Up
 func (f *fakeStore) PrepareFolderPatchTx(context.Context, pgx.Tx, string, string, bookmarks.UpdateFolderInput) (bookmarks.PreparedFolderPatch, error) {
 	return bookmarks.PreparedFolderPatch{}, nil
 }
+func (f *fakeStore) PrepareBookmarkPatchTx(context.Context, pgx.Tx, string, string, bookmarks.UpdateBookmarkInput) (bookmarks.PreparedBookmarkPatch, error) {
+	return bookmarks.PreparedBookmarkPatch{}, nil
+}
 func (f *fakeStore) ApplyPreparedFolderPatchTx(context.Context, pgx.Tx, string, bookmarks.PreparedFolderPatch, Metadata) (PreparedMutationResult[bookmarks.Folder], error) {
 	return PreparedMutationResult[bookmarks.Folder]{}, nil
 }

@@ -2,6 +2,7 @@ package syncapi
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -345,6 +346,97 @@ func TestFolderPatchRouteExecutesPreparedTransaction(t *testing.T) {
 	}, service, httpapi.NewIdempotencyExecutor(pool))
 	forbidden := httptest.NewRequest(http.MethodPatch, "/folders/"+folder.ID, strings.NewReader(`{"name":"Denied"}`))
 	forbidden.Header.Set(HeaderEventID, "folder-forbidden")
+	forbiddenResult := httptest.NewRecorder()
+	forbiddenMux.ServeHTTP(forbiddenResult, forbidden)
+	if forbiddenResult.Code != http.StatusForbidden || syncWriteCounts(t, ctx, pool) != before {
+		t.Fatalf("forbidden rejection = status %d body %s", forbiddenResult.Code, forbiddenResult.Body.String())
+	}
+}
+
+func TestBookmarkPatchRouteExecutesPreparedTransaction(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping PostgreSQL integration test in short mode")
+	}
+	ctx, pool := openSyncTestPool(t)
+	userID := insertSyncTestUser(t, ctx, pool)
+	workspaceID := insertSyncTestWorkspace(t, ctx, pool)
+	insertSyncWorkspaceAccess(t, ctx, pool, workspaceID, userID, "editor")
+	bookmarkService := bookmarks.NewService(pool, access.NewService(pool))
+	folder, err := bookmarkService.CreateFolder(ctx, userID, workspaceID, bookmarks.CreateFolderInput{Name: "Bookmarks"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	bookmark, err := bookmarkService.CreateBookmark(ctx, userID, workspaceID, bookmarks.CreateBookmarkInput{FolderID: folder.ID, Title: "Original", URL: "https://example.com/original"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	foreignWorkspaceID := insertSyncTestWorkspace(t, ctx, pool)
+	insertSyncWorkspaceAccess(t, ctx, pool, foreignWorkspaceID, userID, "editor")
+	foreignFolder, err := bookmarkService.CreateFolder(ctx, userID, foreignWorkspaceID, bookmarks.CreateFolderInput{Name: "Foreign"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	publisher := &recordingPublisher{pool: pool}
+	service := NewService(NewPostgresStore(pool, bookmarkService, nil, publisher))
+	mux := http.NewServeMux()
+	RegisterBookmarkRoutes(mux, func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			next.ServeHTTP(w, r.WithContext(auth.ContextWithPrincipal(r.Context(), auth.Principal{UserID: userID, ClientID: "client-a"})))
+		})
+	}, service, httpapi.NewIdempotencyExecutor(pool))
+	request := func(key, body string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPatch, "/bookmarks/"+bookmark.ID, strings.NewReader(body))
+		req.Header.Set(HeaderEventID, key)
+		res := httptest.NewRecorder()
+		mux.ServeHTTP(res, req)
+		return res
+	}
+
+	first := request("bookmark-change", `{"title":" Renamed ","url":" https://example.com/renamed "}`)
+	if first.Code != http.StatusOK || first.Header().Get(HeaderEventID) != "bookmark-change" || first.Header().Get(HeaderCursor) != "1" || first.Header().Get(HeaderDuplicate) != "false" || publisher.calls != 1 || publisher.eventCount != 1 {
+		t.Fatalf("first response = status %d headers %#v publishes %d event %q count %d", first.Code, first.Header(), publisher.calls, publisher.eventID, publisher.eventCount)
+	}
+	firstBody := first.Body.String()
+	var normalized bookmarks.Bookmark
+	if err := json.NewDecoder(strings.NewReader(firstBody)).Decode(&normalized); err != nil {
+		t.Fatal(err)
+	}
+	if normalized.Title != "Renamed" || normalized.URL != "https://example.com/renamed" {
+		t.Fatalf("normalized bookmark = %+v", normalized)
+	}
+	replay := request("bookmark-change", `{"title":" Renamed ","url":" https://example.com/renamed "}`)
+	if replay.Code != first.Code || replay.Body.String() != firstBody || replay.Header().Get(HeaderEventID) != first.Header().Get(HeaderEventID) || replay.Header().Get(HeaderCursor) != first.Header().Get(HeaderCursor) || replay.Header().Get(HeaderDuplicate) != first.Header().Get(HeaderDuplicate) || publisher.calls != 1 {
+		t.Fatalf("replay did not preserve the stored acknowledgement: %#v", replay)
+	}
+	if conflict := request("bookmark-change", `{"title":"Different"}`); conflict.Code != http.StatusBadRequest || publisher.calls != 1 {
+		t.Fatalf("conflict = status %d publishes %d", conflict.Code, publisher.calls)
+	}
+
+	before := syncWriteCounts(t, ctx, pool)
+	noOp := request("bookmark-no-op", `{}`)
+	noOpReplay := request("bookmark-no-op", `{}`)
+	if noOp.Code != http.StatusOK || noOpReplay.Code != noOp.Code || noOpReplay.Body.String() != noOp.Body.String() || noOpReplay.Header().Get(HeaderCursor) != noOp.Header().Get(HeaderCursor) || syncWriteCounts(t, ctx, pool) != before || publisher.calls != 1 {
+		t.Fatalf("no-op/replay changed state or acknowledgement: no-op=%#v replay=%#v", noOp, noOpReplay)
+	}
+	if rejected := request("bookmark-contained", fmt.Sprintf(`{"folderId":%q}`, foreignFolder.ID)); rejected.Code != http.StatusNotFound || syncWriteCounts(t, ctx, pool) != before {
+		t.Fatalf("containment rejection = status %d", rejected.Code)
+	}
+	badCursor := httptest.NewRequest(http.MethodPatch, "/bookmarks/"+bookmark.ID, strings.NewReader(`{}`))
+	badCursor.Header.Set(HeaderEventID, "bookmark-bad-cursor")
+	badCursor.Header.Set(HeaderBaseCursor, "not-a-cursor")
+	badCursorResult := httptest.NewRecorder()
+	mux.ServeHTTP(badCursorResult, badCursor)
+	if badCursorResult.Code != http.StatusBadRequest || syncWriteCounts(t, ctx, pool) != before {
+		t.Fatalf("base cursor rejection = status %d", badCursorResult.Code)
+	}
+	forbiddenMux := http.NewServeMux()
+	RegisterBookmarkRoutes(forbiddenMux, func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			next.ServeHTTP(w, r.WithContext(auth.ContextWithPrincipal(r.Context(), auth.Principal{UserID: "00000000-0000-0000-0000-000000000000", ClientID: "client-b"})))
+		})
+	}, service, httpapi.NewIdempotencyExecutor(pool))
+	forbidden := httptest.NewRequest(http.MethodPatch, "/bookmarks/"+bookmark.ID, strings.NewReader(`{"title":"Denied"}`))
+	forbidden.Header.Set(HeaderEventID, "bookmark-forbidden")
 	forbiddenResult := httptest.NewRecorder()
 	forbiddenMux.ServeHTTP(forbiddenResult, forbidden)
 	if forbiddenResult.Code != http.StatusForbidden || syncWriteCounts(t, ctx, pool) != before {

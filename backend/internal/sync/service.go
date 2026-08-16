@@ -39,6 +39,10 @@ func (s *Service) PrepareFolderPatchTx(ctx context.Context, tx pgx.Tx, userID, f
 	return s.store.PrepareFolderPatchTx(ctx, tx, userID, folderID, input)
 }
 
+func (s *Service) PrepareBookmarkPatchTx(ctx context.Context, tx pgx.Tx, userID, bookmarkID string, input bookmarks.UpdateBookmarkInput) (bookmarks.PreparedBookmarkPatch, error) {
+	return s.store.PrepareBookmarkPatchTx(ctx, tx, userID, bookmarkID, input)
+}
+
 func (s *Service) ApplyPreparedFolderPatchTx(ctx context.Context, tx pgx.Tx, userID string, patch bookmarks.PreparedFolderPatch, metadata Metadata) (PreparedMutationResult[bookmarks.Folder], error) {
 	return s.store.ApplyPreparedFolderPatchTx(ctx, tx, userID, patch, metadata)
 }

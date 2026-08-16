@@ -17,7 +17,7 @@ Chain strategy: stacked-to-main
 
 The maintainer approved the `.2` aggregate reviewer-budget increase from 800 to 901 lines; this is not a `size:exception`; every slice remains <=400; delivery remains auto-chain/stacked-to-main.
 
-Progress: 44/53 semantic tasks complete. Native checklist progress is 27/36. PR4a0b.1 folder PATCH vertical is complete.
+Progress: 45/53 semantic tasks complete. Native checklist progress is 28/36. PR4a0b.1 folder PATCH vertical is complete.
 
 | Unit (estimate / reserve) | Start → end; exclusions | Candidate files; evidence | Rollback boundary |
 |---|---|---|---|
@@ -71,7 +71,7 @@ Progress: 44/53 semantic tasks complete. Native checklist progress is 27/36. PR4
 
 ## Phase 14: Complete-shape integration — PR4a0b
 - [x] 14.1 PR4a0b.1 folder vertical (base `448eb1f` → `develop`): RED then GREEN only `PATCH /folders/{folderId}` through `ExecutePrepared`, adding its route/bridge/ACK wiring and focused HTTP + isolated-schema real PostgreSQL proof. Preserve HTTP/auth/base-cursor/containment, receipt conflict/idempotency, full-shape/no-op zero event/cursor/publication, mutation one event/cursor and post-commit ordering; same-key replay returns identical status/body/headers/ack. Forecast 94 production + 152 proof + 1 task + 10 progress + 25 reserve = 282; update task/progress artifacts with exact OpenSpec/Engram parity, record passing focused command/harness and rollback, run cleanup/no-skip checks; no bookmark, PR4a1, or extension work.
-- [ ] 14.2 PR4a0b.2 bookmark vertical (after PR4a0b.1 → `develop`): RED then GREEN only `PATCH /bookmarks/{bookmarkId}` through `ExecutePrepared`, adding bookmark-only route/bridge/ACK wiring and focused HTTP + isolated-schema real PostgreSQL proof. Preserve the same HTTP/auth/conflict/idempotency/no-op/transaction/post-commit contracts, plus URL/full-shape normalization and folder containment; forecast 63 production + 132 proof + 1 task + 10 progress + 25 reserve = 231. Update task/progress artifacts with exact OpenSpec/Engram parity, record focused proof/harness, rollback, cleanup/no-skip evidence; no PR4a1 or extension work.
+- [x] 14.2 PR4a0b.2 bookmark vertical (after PR4a0b.1 → `develop`): RED then GREEN only `PATCH /bookmarks/{bookmarkId}` through `ExecutePrepared`, adding bookmark-only route/bridge/ACK wiring and focused HTTP + isolated-schema real PostgreSQL proof. Preserve the same HTTP/auth/conflict/idempotency/no-op/transaction/post-commit contracts, plus URL/full-shape normalization and folder containment; forecast 63 production + 132 proof + 1 task + 10 progress + 25 reserve = 231. Update task/progress artifacts with exact OpenSpec/Engram parity, record focused proof/harness, rollback, cleanup/no-skip evidence; no PR4a1 or extension work.
 
 ## Phase 15: Intent foundation — PR4a1
 - [ ] 15.1 RED: contained stable-ID capture, cursor-0 failure, and unpruned intent.

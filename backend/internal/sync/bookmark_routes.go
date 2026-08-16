@@ -170,14 +170,42 @@ func RegisterBookmarkRoutes(mux *http.ServeMux, authMiddleware func(http.Handler
 			return
 		}
 
-		result, err := service.UpdateBookmark(r.Context(), principal.UserID, r.PathValue("bookmarkId"), input, metadata)
+		result, _, postCommit, err := executor.ExecutePrepared(r.Context(), httpapi.IdempotencyScope{PrincipalID: principal.UserID, Method: r.Method, Route: "PATCH /bookmarks/{bookmarkId}", Key: metadata.EventID}, func(ctx context.Context, tx pgx.Tx) (httpapi.Prepared, error) {
+			patch, err := service.PrepareBookmarkPatchTx(ctx, tx, principal.UserID, r.PathValue("bookmarkId"), input)
+			if err != nil {
+				return httpapi.Prepared{}, err
+			}
+			fingerprint, err := preparedBookmarkFingerprint(patch.Final)
+			if err != nil {
+				return httpapi.Prepared{}, err
+			}
+			return httpapi.Prepared{Fingerprint: fingerprint, Command: func(ctx context.Context, tx pgx.Tx) (httpapi.SafeResult, httpapi.PostCommit, error) {
+				applied, err := service.ApplyPreparedBookmarkPatchTx(ctx, tx, principal.UserID, patch, metadata)
+				if err != nil {
+					return httpapi.SafeResult{}, nil, err
+				}
+				headers := map[string]string{HeaderEventID: metadata.EventID, HeaderDuplicate: "false"}
+				var ackCursor *int64
+				if applied.Event != nil {
+					ackCursor = &applied.Event.Cursor
+					headers[HeaderCursor] = strconv.FormatInt(*ackCursor, 10)
+				}
+				return httpapi.SafeResult{Status: http.StatusOK, Body: safeBookmarkBody(applied.Resource), Headers: headers, AckCursor: ackCursor}, preparedPostCommit(applied.PostCommit), nil
+			}}, nil
+		})
 		if err != nil {
 			writeMutationError(w, err)
 			return
 		}
 
-		ApplyResponseHeaders(w, result.Event, result.Duplicate)
-		httpapi.WriteJSON(w, http.StatusOK, result.Resource)
+		if postCommit != nil {
+			if err := postCommit(r.Context()); err != nil {
+				writeMutationError(w, err)
+				return
+			}
+		}
+		ApplyStoredResponseHeaders(w, result.Headers)
+		httpapi.WriteJSON(w, result.Status, result.Body)
 	})))
 
 	mux.Handle("DELETE /bookmarks/{bookmarkId}", authMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -223,12 +251,26 @@ func safeFolderBody(folder bookmarks.Folder) map[string]any {
 	return body
 }
 
+func safeBookmarkBody(bookmark bookmarks.Bookmark) map[string]any {
+	return map[string]any{"id": bookmark.ID, "workspaceId": bookmark.WorkspaceID, "folderId": bookmark.FolderID, "title": bookmark.Title, "url": bookmark.URL, "position": bookmark.Position, "createdAt": bookmark.CreatedAt, "updatedAt": bookmark.UpdatedAt}
+}
+
 func preparedFolderFingerprint(folder bookmarks.Folder) (string, error) {
 	return httpapi.CanonicalTargetFingerprint("PATCH /folders/{folderId}", []string{folder.ID}, map[string]any{
 		"workspaceId": folder.WorkspaceID,
 		"parentId":    folder.ParentID,
 		"name":        folder.Name,
 		"position":    folder.Position,
+	})
+}
+
+func preparedBookmarkFingerprint(bookmark bookmarks.Bookmark) (string, error) {
+	return httpapi.CanonicalTargetFingerprint("PATCH /bookmarks/{bookmarkId}", []string{bookmark.ID}, map[string]any{
+		"workspaceId": bookmark.WorkspaceID,
+		"folderId":    bookmark.FolderID,
+		"title":       bookmark.Title,
+		"url":         bookmark.URL,
+		"position":    bookmark.Position,
 	})
 }
 
