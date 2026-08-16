@@ -1,7 +1,7 @@
 # Apply Progress: Extension Sync Convergence Session
 
 ## Cumulative Status
-43/53 semantic tasks complete; native checkbox progress is 26/36. Delivery is `auto-chain`, stacked-to-`main`, with no `size:exception`.
+44/53 semantic tasks complete; native checkbox progress is 27/36. Delivery is `auto-chain`, stacked-to-`main`, with no `size:exception`.
 
 ## Completed Foundations
 - [x] 7.1–7.2: dormant journal/planner.
@@ -145,3 +145,16 @@ Evidence revision: `sha256:358d0f30edb6d401d52204ed172c7a68d3f0ac55ec624a74c7e50
 
 ## Next
 Run `sdd-apply` for PR4a0b only.
+
+## PR4a0b.1 Folder PATCH Vertical — Complete
+- [x] 14.1 routes only `PATCH /folders/{folderId}` through `ExecutePrepared`, the prepared folder bridge, receipt replay/conflict handling, stored acknowledgement headers, and post-commit publication. Bookmark PATCH remains on its legacy `UpdateBookmark` route path.
+
+## Work Unit Evidence
+| Evidence | Exact result |
+|---|---|
+| RED | `cd backend && go test ./internal/sync -run '^TestFolderPatchRouteExecutesPreparedTransaction$' -count=1`: FAIL before route work because `RegisterBookmarkRoutes` did not accept the executor. |
+| Focused HTTP / PostgreSQL runtime harness | `docker exec -e GOMODCACHE=/tmp/gomodcache -e DATABASE_URL=<redacted> -w /workspace/backend bookmarks go test ./internal/sync -run '^TestFolderPatchRouteExecutesPreparedTransaction$' -count=1 -v`: PASS (0.626s, no skip, isolated schema). It proves normalized mutation, stable replay body/headers/ack, conflict, no-op zero writes/publication, containment/forbidden/base-cursor error mapping, and publication after committed event visibility. |
+| Regression | `docker exec -e GOMODCACHE=/tmp/gomodcache -e DATABASE_URL=<redacted> -w /workspace/backend bookmarks go test ./internal/bookmarks ./internal/sync -count=1 -v`: PASS (`bookmarks` 4.737s; `sync` 2.011s). `go test ./cmd/api -count=1`: PASS. |
+| Cleanup / rollback | PostgreSQL catalog count for `sync_scope_test_%`: `0` before and after the focused harness. Revert only `backend/cmd/api/main.go`, `backend/internal/sync/{types.go,service.go,postgres.go,headers.go,bookmark_routes.go,bookmark_routes_test.go,handler_test.go,postgres_integration_test.go}`, and these 14.1 marks; bookmark PATCH remains unchanged. |
+
+Evidence revision: `sha256:818b2236bf8c805d7cd8dcbbaffeef2da9852815c1b1bb644df1c997e3705b72`; settlement must remediate `sha256:fc06f6bd1aebf353e40755e3f07acb97dc7f0b99134693c22e2d99e6977ffabc` exactly once.

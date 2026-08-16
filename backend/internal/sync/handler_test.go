@@ -43,6 +43,10 @@ func (f *replayStore) UpdateBookmark(context.Context, string, string, bookmarks.
 	return MutationResult[bookmarks.Bookmark]{}, nil
 }
 
+func (f *replayStore) PrepareFolderPatchTx(context.Context, pgx.Tx, string, string, bookmarks.UpdateFolderInput) (bookmarks.PreparedFolderPatch, error) {
+	return bookmarks.PreparedFolderPatch{}, nil
+}
+
 func (f *replayStore) ApplyPreparedFolderPatchTx(context.Context, pgx.Tx, string, bookmarks.PreparedFolderPatch, Metadata) (PreparedMutationResult[bookmarks.Folder], error) {
 	return PreparedMutationResult[bookmarks.Folder]{}, nil
 }

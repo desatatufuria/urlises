@@ -69,6 +69,9 @@ func (f *fakeStore) CreateBookmark(_ context.Context, userID, workspaceID string
 func (f *fakeStore) UpdateBookmark(context.Context, string, string, bookmarks.UpdateBookmarkInput, Metadata) (MutationResult[bookmarks.Bookmark], error) {
 	return MutationResult[bookmarks.Bookmark]{}, nil
 }
+func (f *fakeStore) PrepareFolderPatchTx(context.Context, pgx.Tx, string, string, bookmarks.UpdateFolderInput) (bookmarks.PreparedFolderPatch, error) {
+	return bookmarks.PreparedFolderPatch{}, nil
+}
 func (f *fakeStore) ApplyPreparedFolderPatchTx(context.Context, pgx.Tx, string, bookmarks.PreparedFolderPatch, Metadata) (PreparedMutationResult[bookmarks.Folder], error) {
 	return PreparedMutationResult[bookmarks.Folder]{}, nil
 }
@@ -101,7 +104,7 @@ func TestRegisterBookmarkRoutesReturnsDuplicateAckHeaders(t *testing.T) {
 			next.ServeHTTP(w, r.WithContext(auth.ContextWithPrincipal(r.Context(), principal)))
 		})
 	}
-	RegisterBookmarkRoutes(mux, authMiddleware, service)
+	RegisterBookmarkRoutes(mux, authMiddleware, service, nil)
 
 	body := strings.NewReader(`{"folderId":"folder-1","title":"Docs","url":"https://example.com"}`)
 	req := httptest.NewRequest(http.MethodPost, "/workspaces/workspace-1/bookmarks", body)
@@ -151,7 +154,7 @@ func TestRegisterBookmarkRoutesReusesStoredMutationForDuplicateEventID(t *testin
 			next.ServeHTTP(w, r.WithContext(auth.ContextWithPrincipal(r.Context(), principal)))
 		})
 	}
-	RegisterBookmarkRoutes(mux, authMiddleware, service)
+	RegisterBookmarkRoutes(mux, authMiddleware, service, nil)
 
 	makeRequest := func() *httptest.ResponseRecorder {
 		body := strings.NewReader(`{"folderId":"folder-1","title":"Docs","url":"https://example.com"}`)

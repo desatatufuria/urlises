@@ -3,6 +3,8 @@ package syncapi
 import (
 	"context"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -10,8 +12,10 @@ import (
 	"time"
 
 	"github.com/furia/shared-bookmark-sync/backend/internal/access"
+	"github.com/furia/shared-bookmark-sync/backend/internal/auth"
 	"github.com/furia/shared-bookmark-sync/backend/internal/bookmarks"
 	"github.com/furia/shared-bookmark-sync/backend/internal/database"
+	"github.com/furia/shared-bookmark-sync/backend/internal/httpapi"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -183,7 +187,7 @@ func TestApplyPreparedPatchesTxRecordsOnlyMutationsAndReturnsPostCommit(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	publisher := &recordingPublisher{}
+	publisher := &recordingPublisher{pool: pool}
 	store := NewPostgresStore(pool, bookmarkService, nil, publisher)
 
 	before := syncWriteCounts(t, ctx, pool)
@@ -275,12 +279,96 @@ func TestApplyPreparedPatchesTxRecordsOnlyMutationsAndReturnsPostCommit(t *testi
 	}
 }
 
-type recordingPublisher struct {
-	calls int
+func TestFolderPatchRouteExecutesPreparedTransaction(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping PostgreSQL integration test in short mode")
+	}
+	ctx, pool := openSyncTestPool(t)
+	userID := insertSyncTestUser(t, ctx, pool)
+	workspaceID := insertSyncTestWorkspace(t, ctx, pool)
+	insertSyncWorkspaceAccess(t, ctx, pool, workspaceID, userID, "editor")
+	bookmarkService := bookmarks.NewService(pool, access.NewService(pool))
+	folder, err := bookmarkService.CreateFolder(ctx, userID, workspaceID, bookmarks.CreateFolderInput{Name: "Original"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	publisher := &recordingPublisher{pool: pool}
+	service := NewService(NewPostgresStore(pool, bookmarkService, nil, publisher))
+	mux := http.NewServeMux()
+	RegisterBookmarkRoutes(mux, func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			next.ServeHTTP(w, r.WithContext(auth.ContextWithPrincipal(r.Context(), auth.Principal{UserID: userID, ClientID: "client-a"})))
+		})
+	}, service, httpapi.NewIdempotencyExecutor(pool))
+	request := func(key, body string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPatch, "/folders/"+folder.ID, strings.NewReader(body))
+		req.Header.Set(HeaderEventID, key)
+		res := httptest.NewRecorder()
+		mux.ServeHTTP(res, req)
+		return res
+	}
+
+	first := request("folder-change", `{"name":" Renamed "}`)
+	if first.Code != http.StatusOK || first.Header().Get(HeaderEventID) != "folder-change" || first.Header().Get(HeaderCursor) != "1" || first.Header().Get(HeaderDuplicate) != "false" || publisher.calls != 1 || publisher.eventCount != 1 {
+		t.Fatalf("first response = status %d headers %#v publishes %d event %q count %d", first.Code, first.Header(), publisher.calls, publisher.eventID, publisher.eventCount)
+	}
+	replay := request("folder-change", `{"name":" Renamed "}`)
+	if replay.Code != first.Code || replay.Body.String() != first.Body.String() || replay.Header().Get(HeaderEventID) != first.Header().Get(HeaderEventID) || replay.Header().Get(HeaderCursor) != first.Header().Get(HeaderCursor) || replay.Header().Get(HeaderDuplicate) != first.Header().Get(HeaderDuplicate) || publisher.calls != 1 {
+		t.Fatalf("replay did not preserve the stored acknowledgement: %#v", replay)
+	}
+	if conflict := request("folder-change", `{"name":"Different"}`); conflict.Code != http.StatusBadRequest || publisher.calls != 1 {
+		t.Fatalf("conflict = status %d publishes %d", conflict.Code, publisher.calls)
+	}
+
+	before := syncWriteCounts(t, ctx, pool)
+	noOp := request("folder-no-op", `{}`)
+	noOpReplay := request("folder-no-op", `{}`)
+	if noOp.Code != http.StatusOK || noOpReplay.Code != noOp.Code || noOpReplay.Body.String() != noOp.Body.String() || noOpReplay.Header().Get(HeaderCursor) != noOp.Header().Get(HeaderCursor) || syncWriteCounts(t, ctx, pool) != before || publisher.calls != 1 {
+		t.Fatalf("no-op/replay changed state or acknowledgement: no-op=%#v replay=%#v", noOp, noOpReplay)
+	}
+	if rejected := request("folder-contained", fmt.Sprintf(`{"parentId":%q}`, folder.ID)); rejected.Code != http.StatusBadRequest || syncWriteCounts(t, ctx, pool) != before {
+		t.Fatalf("containment rejection = status %d", rejected.Code)
+	}
+	badCursor := httptest.NewRequest(http.MethodPatch, "/folders/"+folder.ID, strings.NewReader(`{}`))
+	badCursor.Header.Set(HeaderEventID, "folder-bad-cursor")
+	badCursor.Header.Set(HeaderBaseCursor, "not-a-cursor")
+	badCursorResult := httptest.NewRecorder()
+	mux.ServeHTTP(badCursorResult, badCursor)
+	if badCursorResult.Code != http.StatusBadRequest || syncWriteCounts(t, ctx, pool) != before {
+		t.Fatalf("base cursor rejection = status %d", badCursorResult.Code)
+	}
+	forbiddenMux := http.NewServeMux()
+	RegisterBookmarkRoutes(forbiddenMux, func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			next.ServeHTTP(w, r.WithContext(auth.ContextWithPrincipal(r.Context(), auth.Principal{UserID: "00000000-0000-0000-0000-000000000000", ClientID: "client-b"})))
+		})
+	}, service, httpapi.NewIdempotencyExecutor(pool))
+	forbidden := httptest.NewRequest(http.MethodPatch, "/folders/"+folder.ID, strings.NewReader(`{"name":"Denied"}`))
+	forbidden.Header.Set(HeaderEventID, "folder-forbidden")
+	forbiddenResult := httptest.NewRecorder()
+	forbiddenMux.ServeHTTP(forbiddenResult, forbidden)
+	if forbiddenResult.Code != http.StatusForbidden || syncWriteCounts(t, ctx, pool) != before {
+		t.Fatalf("forbidden rejection = status %d body %s", forbiddenResult.Code, forbiddenResult.Body.String())
+	}
 }
 
-func (p *recordingPublisher) Publish(context.Context, Envelope) error {
+type recordingPublisher struct {
+	calls      int
+	pool       *pgxpool.Pool
+	eventCount int
+	eventID    string
+}
+
+func (p *recordingPublisher) Publish(ctx context.Context, event Envelope) error {
 	p.calls++
+	p.eventID = event.EventID
+	if p.pool != nil {
+		var count int
+		if err := p.pool.QueryRow(ctx, `SELECT COUNT(*) FROM sync_events WHERE event_id = $1`, event.EventID).Scan(&count); err != nil {
+			return err
+		}
+		p.eventCount = count
+	}
 	return nil
 }
 

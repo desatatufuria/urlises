@@ -105,7 +105,7 @@ func main() {
 	organizations.RegisterRoutes(mux, authService.Middleware, organizationsService, idempotencyExecutor)
 	groups.RegisterRoutes(mux, authService.Middleware, groupsService, idempotencyExecutor)
 	workspaces.RegisterRoutes(mux, authService.Middleware, workspacesService, idempotencyExecutor)
-	syncapi.RegisterBookmarkRoutes(mux, authService.Middleware, syncService)
+	syncapi.RegisterBookmarkRoutes(mux, authService.Middleware, syncService, idempotencyExecutor)
 	syncapi.RegisterRoutes(mux, authService.Middleware, syncService)
 	wsapi.RegisterRoutes(mux, authService, workspacesService, syncService, websocketHub)
 

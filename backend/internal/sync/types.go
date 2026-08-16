@@ -76,6 +76,7 @@ type Store interface {
 	DeleteFolder(ctx context.Context, userID, folderID string, metadata Metadata) (DeleteResult, error)
 	CreateBookmark(ctx context.Context, userID, workspaceID string, input bookmarks.CreateBookmarkInput, metadata Metadata) (MutationResult[bookmarks.Bookmark], error)
 	UpdateBookmark(ctx context.Context, userID, bookmarkID string, input bookmarks.UpdateBookmarkInput, metadata Metadata) (MutationResult[bookmarks.Bookmark], error)
+	PrepareFolderPatchTx(ctx context.Context, tx pgx.Tx, userID, folderID string, input bookmarks.UpdateFolderInput) (bookmarks.PreparedFolderPatch, error)
 	ApplyPreparedFolderPatchTx(ctx context.Context, tx pgx.Tx, userID string, patch bookmarks.PreparedFolderPatch, metadata Metadata) (PreparedMutationResult[bookmarks.Folder], error)
 	ApplyPreparedBookmarkPatchTx(ctx context.Context, tx pgx.Tx, userID string, patch bookmarks.PreparedBookmarkPatch, metadata Metadata) (PreparedMutationResult[bookmarks.Bookmark], error)
 	DeleteBookmark(ctx context.Context, userID, bookmarkID string, metadata Metadata) (DeleteResult, error)

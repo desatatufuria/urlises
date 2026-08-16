@@ -4,10 +4,10 @@
 
 | Field | Value |
 |---|---|
-| Remaining authored lines (tests + artifact update included) | 3,081–3,411 |
-| Per-unit budget / correction reserve | 180–200 / 200–220 (PR4a0a, complete); 180–240 / >=100 (PR4a0a2); 220 / 150 (.1); 215 / 185 (.2a.1); 211 / 189 (.2a.2); 230 / 170 (.2b); 245 / 155 (.2c); 220–300 / >=100 (.3b); 250–300 / 100–150 (.0b); 330–380 / 20–70 thereafter |
+| Remaining planned lines (tests + artifacts included) | 3,294–3,674; PR4a0b is 513 (282 + 231) |
+| Per-unit budget / correction reserve | 180–200 / 200–220 (PR4a0a, complete); 180–240 / >=100 (PR4a0a2); 220 / 150 (.1); 215 / 185 (.2a.1); 211 / 189 (.2a.2); 230 / 170 (.2b); 245 / 155 (.2c); 220–300 / >=100 (.3b); 282 / 25 (.0b.1); 231 / 25 (.0b.2); 330–380 / 20–70 thereafter |
 | Delivery / chain | auto-chain / stacked-to-main; target `develop` in order |
-| Suggested chain | PR4a0a → PR4a0a2 → PR4a0a3a.1 → PR4a0a3a.2a.1 → PR4a0a3a.2a.2 → PR4a0a3a.2b → PR4a0a3a.2c → PR4a0a3b → PR4a0b → PR4a1 → PR4a2 → PR4a3 → PR4b |
+| Suggested chain | PR4a0a → PR4a0a2 → PR4a0a3a.1 → PR4a0a3a.2a.1 → PR4a0a3a.2a.2 → PR4a0a3a.2b → PR4a0a3a.2c → PR4a0a3b → PR4a0b.1 → PR4a0b.2 → PR4a1 → PR4a2 → PR4a3 → PR4b |
 | Current `.2` subchain | 901 authored lines (215+211+230+245), 101 above the cached 800-line reviewer budget; each autonomous stacked slice is <=400. |
 
 Decision needed before apply: No
@@ -17,7 +17,7 @@ Chain strategy: stacked-to-main
 
 The maintainer approved the `.2` aggregate reviewer-budget increase from 800 to 901 lines; this is not a `size:exception`; every slice remains <=400; delivery remains auto-chain/stacked-to-main.
 
-Progress: 43/53 semantic tasks complete. Native checklist progress is 26/36. PR4a0a3b prepared apply foundation is complete.
+Progress: 44/53 semantic tasks complete. Native checklist progress is 27/36. PR4a0b.1 folder PATCH vertical is complete.
 
 | Unit (estimate / reserve) | Start → end; exclusions | Candidate files; evidence | Rollback boundary |
 |---|---|---|---|
@@ -29,7 +29,8 @@ Progress: 43/53 semantic tasks complete. Native checklist progress is 26/36. PR4
 | PR4a0a3a.2b folder prepare (230 / 170) | `.2a.2` → `PrepareFolderPatchTx`; exclude bookmark apply/routes/events/cursors/publisher/HTTP/migration | `backend/internal/bookmarks/{prepare.go,service.go,service_integration_test.go}`. RED `cd backend && go test ./internal/bookmarks -run '^TestPrepareFolderPatchTx' -count=1`; real PostgreSQL proves tx, locks, normalized full patch/fingerprint/no-op, zero writes. | Folder API/helpers/tests; kernel remains. |
 | PR4a0a3a.2c bookmark prepare (245 / 155) | `.2a.2`, stacked after `.2b` → `PrepareBookmarkPatchTx`; exclude folder changes/apply/routes/events/cursors/publisher/HTTP/migration | Same files. RED `cd backend && go test ./internal/bookmarks -run '^TestPrepareBookmarkPatchTx' -count=1`; real PostgreSQL proves tx, containment, normalized full patch/fingerprint/no-op, zero writes. | Bookmark API/helpers/tests; prior slices remain. |
 | PR4a0a3b apply foundation (220–300 / >=100) | `.2c` → unused same-tx prepared apply; exclude prepare/lock changes, routes, HTTP, migration, publisher invocation | `backend/internal/bookmarks/{service.go,service_integration_test.go}`, `backend/internal/sync/{types.go,service.go,postgres.go,postgres_integration_test.go}`. RED: no-op, exact mutation/event/cursor, rollback, legacy compatibility. `cd backend && go test ./internal/bookmarks ./internal/sync`; PostgreSQL transaction harness. | Apply API/tests only. |
-| PR4a0b complete-shape integration (250–300 / 100–150) | PR4a0a2 + `.2c` + PR4a0a3b → route wiring; exclude extension | `backend/internal/sync/{types,service,postgres,bookmark_routes,headers}.go`, `backend/internal/sync/{bookmark_routes_test.go,postgres_integration_test.go}`. RED: shape, replay/conflict, stable ack, no advance, mutation. `cd backend && go test ./internal/sync ./internal/bookmarks`; HTTP/PostgreSQL harness. | PATCH wiring/tests only. |
+| PR4a0b.1 folder PATCH vertical (282 / 25) | `448eb1f` → idempotent complete-shape `PATCH /folders/{folderId}`; stacked to `develop`; exclude bookmark route, PR4a1, extension | `backend/cmd/api/main.go`, `backend/internal/sync/{types.go,service.go,postgres.go,bookmark_routes.go,headers.go,bookmark_routes_test.go,postgres_integration_test.go,handler_test.go}`. RED then GREEN: focused HTTP plus isolated-schema real PostgreSQL proves full-shape normalization, auth/base-cursor/containment, replay/conflict/stable ACK, no-op zero event/cursor/publication, mutation one event/cursor then post-commit. | Revert this folder bridge/route/tests/evidence only; legacy folder route returns. |
+| PR4a0b.2 bookmark PATCH vertical (231 / 25) | PR4a0b.1 → idempotent complete-shape `PATCH /bookmarks/{bookmarkId}`; stacked to `develop`; exclude PR4a1, extension | Same sync files, limited to bookmark wiring/proof. RED then GREEN: focused HTTP plus isolated-schema real PostgreSQL proves URL/full-shape normalization, folder containment, and the folder-contract matrix. | Revert bookmark wiring/tests/evidence only; PR4a0b.1 remains correct. |
 | PR4a1–PR4b (330–380 / 20–70 each) | Follow the existing outbox → receipts → apply → repair sequence | Extension paths; `cd extension && npm run build && node --test tests/convergence.test.mjs`; restart/callback/ordering/Retry-Rebuild harnesses. | Respective unit paths/tests. |
 
 ## Completed legacy phases (preserved: 28/28)
@@ -69,8 +70,8 @@ Progress: 43/53 semantic tasks complete. Native checklist progress is 26/36. PR4
 - [x] 13c.2 GREEN: in `backend/internal/bookmarks/service.go` and `backend/internal/sync/{types.go,service.go,postgres.go}`, add `ApplyPreparedFolderPatchTx`/`ApplyPreparedBookmarkPatchTx` consuming the same prepared state/tx and returning uninvoked publisher data; make no prepare/lock changes and add no routes, HTTP idempotency, or migration. Run the same command; rollback: remove only apply API/tests, retaining prepare and legacy `Update*`.
 
 ## Phase 14: Complete-shape integration — PR4a0b
-- [ ] 14.1 RED: after PR4a0a2 + PR4a0a3a.2c + PR4a0a3b, prove partial shape, replay/conflict, stable ack, no advance, and real mutation regression.
-- [ ] 14.2 GREEN: ledger-routed update/move retains auth/base-cursor/containment and one event/cursor.
+- [x] 14.1 PR4a0b.1 folder vertical (base `448eb1f` → `develop`): RED then GREEN only `PATCH /folders/{folderId}` through `ExecutePrepared`, adding its route/bridge/ACK wiring and focused HTTP + isolated-schema real PostgreSQL proof. Preserve HTTP/auth/base-cursor/containment, receipt conflict/idempotency, full-shape/no-op zero event/cursor/publication, mutation one event/cursor and post-commit ordering; same-key replay returns identical status/body/headers/ack. Forecast 94 production + 152 proof + 1 task + 10 progress + 25 reserve = 282; update task/progress artifacts with exact OpenSpec/Engram parity, record passing focused command/harness and rollback, run cleanup/no-skip checks; no bookmark, PR4a1, or extension work.
+- [ ] 14.2 PR4a0b.2 bookmark vertical (after PR4a0b.1 → `develop`): RED then GREEN only `PATCH /bookmarks/{bookmarkId}` through `ExecutePrepared`, adding bookmark-only route/bridge/ACK wiring and focused HTTP + isolated-schema real PostgreSQL proof. Preserve the same HTTP/auth/conflict/idempotency/no-op/transaction/post-commit contracts, plus URL/full-shape normalization and folder containment; forecast 63 production + 132 proof + 1 task + 10 progress + 25 reserve = 231. Update task/progress artifacts with exact OpenSpec/Engram parity, record focused proof/harness, rollback, cleanup/no-skip evidence; no PR4a1 or extension work.
 
 ## Phase 15: Intent foundation — PR4a1
 - [ ] 15.1 RED: contained stable-ID capture, cursor-0 failure, and unpruned intent.

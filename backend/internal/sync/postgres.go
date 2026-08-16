@@ -129,6 +129,10 @@ func (s *PostgresStore) UpdateBookmark(ctx context.Context, userID, bookmarkID s
 	})
 }
 
+func (s *PostgresStore) PrepareFolderPatchTx(ctx context.Context, tx pgx.Tx, userID, folderID string, input bookmarks.UpdateFolderInput) (bookmarks.PreparedFolderPatch, error) {
+	return s.bookmarks.PrepareFolderPatchTx(ctx, tx, userID, folderID, input)
+}
+
 // ApplyPreparedFolderPatchTx applies a prepared patch and records its event in
 // the caller-owned transaction. Publishing is returned as post-commit data and
 // is never invoked here.
