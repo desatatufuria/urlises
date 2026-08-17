@@ -127,6 +127,16 @@ test("workspace status model keeps degraded sync explicit", () => {
   assert.equal(model.showNewActivity, false);
 });
 
+test("workspace status exposes the failed cursor, repair gate, and disposition", () => {
+  const model = getWorkspaceStatusModel(createProjection({
+    health: "degraded",
+    convergenceJournal: { version: 1, phase: "paused", operations: [], localIntents: [], attempts: 0, failedCursor: 8, pauseReason: "durable-write-failed", repairDisposition: "rebuild" },
+  }));
+
+  assert.equal(model.detail, "Pause at cursor 8: durable-write-failed; Rebuild required.");
+  assert.doesNotMatch(model.detail, /token|secret|url/i);
+});
+
 test("toolbar badge prefers degraded state over unseen activity and clears when seen", () => {
   const degraded = getToolbarBadgeModel(createState({
     activitySignal: { revision: 4, lastSeenRevision: 2 },

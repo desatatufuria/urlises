@@ -105,6 +105,19 @@ test("only one exact pending receipt consumes; duplicate callbacks stay intent-d
   assert.equal(duplicate.journal.localIntents.length, 1);
 });
 
+test("update receipts retain predecessor/final proof across restart and queue reordered callbacks", () => {
+  const receipt = convergence.createRemoteReceipt({ workspaceId: "workspace-a", backendId: "bookmark-a", chromeId: "chrome-a", type: "bookmark", before: { parentId: "folder-a", index: 2, title: "Before", url: "https://example.com/before" }, expectedAfter: { parentId: "folder-a", index: 2, title: "After", url: "https://example.com/after" }, eventId: "event-12", cursor: 12 });
+  const restored = convergence.normalizeJournal(JSON.parse(JSON.stringify({ ...convergence.emptyJournal(), receipts: [receipt] })));
+  const mismatch = convergence.reduceRemoteCallback(restored, { kind: "changed", workspaceId: "workspace-a", backendId: "bookmark-a", chromeId: "chrome-a", type: "bookmark", node: { parentId: "folder-a", index: 2, title: "After", url: "https://example.com/hidden" } });
+  const consumed = convergence.reduceRemoteCallback(mismatch.journal, { kind: "changed", workspaceId: "workspace-a", backendId: "bookmark-a", chromeId: "chrome-a", type: "bookmark", node: { parentId: "folder-a", index: 2, title: "After", url: "https://example.com/after" } });
+  const duplicate = convergence.reduceRemoteCallback(consumed.journal, { kind: "changed", workspaceId: "workspace-a", backendId: "bookmark-a", chromeId: "chrome-a", type: "bookmark", node: { parentId: "folder-a", index: 2, title: "Before", url: "https://example.com/before" } });
+  assert.deepEqual(receipt.expectedSignatures.length, 2);
+  assert.equal(mismatch.disposition, "intent");
+  assert.equal(consumed.disposition, "consumed");
+  assert.equal(duplicate.disposition, "intent");
+  assert.equal(duplicate.journal.localIntents.length, 2);
+});
+
 test("restart retains pending receipt and intent without enabling remote application", () => {
   const receipt = convergence.createRemoteReceipt({ workspaceId: "workspace-a", backendId: "folder-a", chromeId: "chrome-a", type: "folder", before: { parentId: "root", index: 0, title: "Before" }, expectedAfter: { parentId: "root", index: 1, title: "After" }, eventId: "event-11", cursor: 11 });
   const journal = convergence.captureLocalIntent({ ...convergence.emptyJournal(), receipts: [receipt] }, { workspaceId: "workspace-a", backendId: "folder-a", chromeId: "chrome-a", type: "folder", kind: "changed", node: { parentId: "root", index: 0, title: "Local" } });
@@ -112,4 +125,49 @@ test("restart retains pending receipt and intent without enabling remote applica
   assert.equal(restored.receipts[0].status, "pending");
   assert.equal(restored.localIntents.length, 1);
   assert.notEqual(restored.phase, "apply");
+});
+
+test("serialized move receipts enforce predecessor order after restart", () => {
+  const first = convergence.createRemoteReceipt({ workspaceId: "workspace-a", backendId: "bookmark-a", chromeId: "chrome-a", type: "bookmark", before: { parentId: "folder-a", index: 0, title: "Before", url: "https://example.com/before" }, expectedAfter: { parentId: "folder-b", index: 1, title: "First", url: "https://example.com/first" }, eventId: "event-13", cursor: 13, move: { oldParentId: "folder-a", oldIndex: 0, parentId: "folder-b", index: 1 } });
+  const second = convergence.createRemoteReceipt({ workspaceId: "workspace-a", backendId: "bookmark-a", chromeId: "chrome-a", type: "bookmark", before: { parentId: "folder-b", index: 1, title: "First", url: "https://example.com/first" }, expectedAfter: { parentId: "folder-c", index: 2, title: "Second", url: "https://example.com/second" }, eventId: "event-14", cursor: 14, move: { oldParentId: "folder-b", oldIndex: 1, parentId: "folder-c", index: 2 } });
+  const restored = convergence.normalizeJournal(JSON.parse(JSON.stringify({ ...convergence.emptyJournal(), receipts: [first, second] })));
+  const secondFirst = convergence.reduceRemoteCallback(restored, { kind: "moved", workspaceId: "workspace-a", backendId: "bookmark-a", chromeId: "chrome-a", type: "bookmark", node: { parentId: "folder-c", index: 2, title: "Second", url: "https://example.com/second" }, move: { parentId: "folder-c", index: 2, oldParentId: "folder-b", oldIndex: 1 } });
+  const firstConsumed = convergence.reduceRemoteCallback(secondFirst.journal, { kind: "moved", workspaceId: "workspace-a", backendId: "bookmark-a", chromeId: "chrome-a", type: "bookmark", node: { parentId: "folder-b", index: 1, title: "First", url: "https://example.com/first" }, move: first.move });
+  const secondConsumed = convergence.reduceRemoteCallback(firstConsumed.journal, { kind: "moved", workspaceId: "workspace-a", backendId: "bookmark-a", chromeId: "chrome-a", type: "bookmark", node: { parentId: "folder-c", index: 2, title: "Second", url: "https://example.com/second" }, move: second.move });
+  assert.equal(secondFirst.disposition, "intent");
+  assert.deepEqual(secondFirst.journal.receipts.map((receipt) => receipt.status), ["pending", "pending"]);
+  assert.deepEqual(firstConsumed.journal.receipts.map((receipt) => receipt.status), ["consumed", "pending"]);
+  assert.deepEqual(secondConsumed.journal.receipts.map((receipt) => receipt.status), ["consumed", "consumed"]);
+});
+
+test("repair gate matrix pauses before unsafe effects and retains receipts and intents", () => {
+  for (const reason of ["receipt-capacity", "durable-write-failed", "complete-node-read-failed", "final-verification-failed", "chrome-effect-rejected", "ambiguous-predecessor"]) {
+    const journal = convergence.gateRemoteEffect({ ...convergence.emptyJournal(), receipts: [{ status: "pending", cursor: 7 }], localIntents: [{ eventId: "local-1", status: "queued" }] }, 8, reason);
+    assert.equal(journal.phase, "paused", reason);
+    assert.equal(journal.pauseReason, reason);
+    assert.equal(journal.failedCursor, 8);
+    assert.equal(journal.receipts.length, 1);
+    assert.equal(journal.localIntents.length, 1);
+    assert.equal(convergence.normalizeJournal({ ...journal, operations: [{ status: "started" }] }).pauseReason, reason);
+  }
+});
+
+test("receipt capacity prunes only terminal safe receipts and retry keeps the failed cursor", () => {
+  const consumed = Array.from({ length: 100 }, (_, cursor) => ({ status: "consumed", cursor }));
+  assert.equal(convergence.canPersistReceipt({ ...convergence.emptyJournal(), receipts: consumed }, 101), true);
+  const blocked = convergence.gateRemoteEffect({ ...convergence.emptyJournal(), receipts: [...consumed, { status: "pending", cursor: 101 }] }, 102, "receipt-capacity");
+  assert.equal(convergence.retryJournal(blocked).phase, "paused");
+  assert.equal(convergence.retryJournal(blocked).repairDisposition, "rebuild");
+  assert.equal(convergence.retryJournal(blocked).failedCursor, 102);
+});
+
+test("bootstrap requires rebuild and retry cannot bypass the gate", () => {
+  const blocked = convergence.gateRemoteEffect(convergence.emptyJournal(), 0, "bootstrap-required");
+  assert.equal(blocked.phase, "paused");
+  assert.equal(blocked.repairDisposition, "rebuild");
+  assert.equal(convergence.retryJournal(blocked).phase, "paused");
+  assert.equal(convergence.retryJournal(blocked).pauseReason, "bootstrap-required");
+  const restored = convergence.normalizeJournal({ ...blocked, repairDisposition: "retry" });
+  assert.equal(restored.repairDisposition, "rebuild");
+  assert.equal(convergence.retryJournal(restored).phase, "paused");
 });

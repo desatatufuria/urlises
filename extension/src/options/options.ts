@@ -16,10 +16,6 @@ document.querySelector<HTMLButtonElement>("#save-selection")!.addEventListener("
     .catch(showError);
 });
 
-document.querySelector<HTMLButtonElement>("#resync-all")!.addEventListener("click", () => {
-  void sendMessage<UiState>({ type: "projection/resync-all" }).then(render).catch(showError);
-});
-
 void load();
 
 async function load(): Promise<void> {
@@ -84,6 +80,19 @@ function render(ui: UiState): void {
       label.appendChild(checkboxRow);
       if (model) {
         label.appendChild(createStatusRow(model));
+        if (projection.convergenceJournal?.phase === "paused") {
+          const actions = document.createElement("div");
+          actions.className = "ui-actions";
+          const repairActions = projection.convergenceJournal.repairDisposition === "rebuild"
+            ? [["Rebuild", "projection/rebuild"]] as const
+            : [["Retry", "projection/retry"], ["Rebuild", "projection/rebuild"]] as const;
+          for (const [text, type] of repairActions) {
+            const button = document.createElement("button"); button.type = "button"; button.className = "ui-button-secondary"; button.textContent = text;
+            button.addEventListener("click", () => void sendMessage<UiState>({ type, payload: { workspaceId: workspace.workspaceId } }).then(render).catch(showError));
+            actions.appendChild(button);
+          }
+          label.appendChild(actions);
+        }
       } else {
         const empty = document.createElement("p");
         empty.className = "ui-card-copy";

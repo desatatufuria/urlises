@@ -228,8 +228,11 @@ export function getWorkspaceStatusModel(projection: ProjectionState, signal?: Ac
       ? "live"
       : "neutral";
 
+  const repair = projection.convergenceJournal?.pauseReason
+    ? `Pause at cursor ${projection.convergenceJournal.failedCursor ?? projection.lastCursor}: ${projection.convergenceJournal.pauseReason}; ${projection.convergenceJournal.repairDisposition === "rebuild" ? "Rebuild required" : "Retry available"}.`
+    : undefined;
   const detail = projection.health === "degraded"
-    ? projection.degradedReason ?? projection.lastError ?? "Silent recovery budget was exhausted."
+    ? repair ?? projection.degradedReason ?? projection.lastError ?? "Repair action is required."
     : projection.health === "recovering"
       ? projection.lastError ?? "Recovery is in progress."
       : projection.lastSyncedAt

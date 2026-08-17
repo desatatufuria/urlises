@@ -113,10 +113,11 @@ export async function updateFolder(
   folderId: string,
   input: { name?: string; parentId?: string | null; position?: number },
   baseCursor: number,
+  eventId?: string,
 ): Promise<{ resource: FolderResource; ack: MutationAck }> {
   const response = await requestRaw(backendUrl, `/folders/${folderId}`, {
     method: "PATCH",
-    headers: mutationHeaders(session, baseCursor),
+    headers: mutationHeaders(session, baseCursor, eventId),
     body: input,
   });
   return { resource: await parseJSON<FolderResource>(response), ack: parseAck(response) };
@@ -156,10 +157,11 @@ export async function updateBookmark(
   bookmarkId: string,
   input: { folderId?: string | null; title?: string; url?: string; position?: number },
   baseCursor: number,
+  eventId?: string,
 ): Promise<{ resource: BookmarkResource; ack: MutationAck }> {
   const response = await requestRaw(backendUrl, `/bookmarks/${bookmarkId}`, {
     method: "PATCH",
-    headers: mutationHeaders(session, baseCursor),
+    headers: mutationHeaders(session, baseCursor, eventId),
     body: input,
   });
   return { resource: await parseJSON<BookmarkResource>(response), ack: parseAck(response) };
@@ -193,10 +195,10 @@ function authHeaders(session: SessionData): Record<string, string> {
   };
 }
 
-function mutationHeaders(session: SessionData, baseCursor: number): Record<string, string> {
+function mutationHeaders(session: SessionData, baseCursor: number, eventId: string = crypto.randomUUID()): Record<string, string> {
   return {
     ...authHeaders(session),
-    [SYNC_EVENT_ID_HEADER]: crypto.randomUUID(),
+    [SYNC_EVENT_ID_HEADER]: eventId,
     [SYNC_BASE_CURSOR_HEADER]: String(baseCursor),
   };
 }

@@ -1,7 +1,7 @@
 # Apply Progress: Extension Sync Convergence Session
 
 ## Cumulative Status
-49/53 semantic tasks complete; native checkbox progress is 32/36. Delivery is `auto-chain`, stacked-to-`main`, with no `size:exception`.
+55/55 semantic tasks complete; 18/18 checked task blocks cover 38/38 native subtasks. Delivery is `auto-chain`, stacked-to-`develop`, with no `size:exception`.
 
 ## Completed Foundations
 - [x] 7.1–7.2: dormant journal/planner.
@@ -201,3 +201,63 @@ Settlement evidence: active native token `sha256:79a779a7a9dd5c62fcdc22243432ffd
 | Settlement | Token `sha256:6902ac215da66db0f4c15facb5d017d5b32f2d6b52a4af7cf197cbe0244c483c` was supplied already acquired; no acquire, settle, reset, or ledger mutation was performed. |
 
 Final accounting relative to `b2cfbb4`: 76 additions + 7 deletions = 83 changed lines. OpenSpec tasks are 32/36 native and 49/53 semantic; PR4a3 and later remain unchecked.
+
+## PR4a3 Remote Update/Move — Blocked Before RED
+- Forecast before source or test edits: a coherent PR4a3 requires 96 convergence-reducer/type changes, 214 projection integration changes (durable receipt persistence, predecessor verification, exact callback proof, and removal of update/move timing suppression), 142 deterministic convergence/projection harness changes, and 28 hybrid-artifact lines: **480 additions plus deletions**.
+- The forecast exceeds the strict 400-line chained work-unit limit by 80 lines. Splitting the reducer/tests from projection activation would violate the required autonomous verified remote update/move behavior and leave a half-wired production path.
+- No source, test, task checkbox, RDD, backend route, PR4b, generated output, `.docmanager/`, or checksum artifact was changed. No native-token lifecycle command was run.
+- Required unblock: revise tasks into autonomous sub-400 PR4a3 slices with their own complete verification, or explicitly authorize a size exception. The current contract authorizes neither.
+
+## PR4a3.1 Verified Remote Update — Complete
+- [x] 17.1a RED: added update receipt/restart/reorder and projection complete-node proof tests before production changes. The combined deterministic command failed as expected (45 pass, 1 fail): no durable receipt existed after the remote update, so the required pending receipt assertion received `undefined`.
+- [x] 17.1b GREEN: folder and bookmark pure updates persist one versioned pending receipt with complete predecessor/final shapes before Chrome effects; exact complete-node callbacks checkpoint only their consumed receipt. Pending proof gates before live cursor-gap recovery; replay stops at the uncheckpointed event. Any existing-node parent/index change is deferred with no effect/checkpoint until 17.2; pure updates use no TTL/ID/time suppression.
+
+## Work Unit Evidence
+| Evidence | Exact result |
+|---|---|
+| RED | `cd extension && npm run build && node --test tests/convergence.test.mjs tests/projection-behavior.test.mjs`: FAIL (45 pass, 1 fail; pending remote-update receipt was `undefined`). |
+| Focused GREEN | `cd extension && npm run build && node --test tests/convergence.test.mjs`: PASS (10/10; no skip, todo, or pending). |
+| Runtime harness | `cd extension && npm run test:projection`: PASS (101/101 deterministic repository-native tests; no skip, todo, or pending). It proves folder pure-update receipt/checkpoint, serialized update checkpoints 8 then 9, replay stop, and deferred moves. `npm run typecheck`: PASS. |
+| Rollback / cleanup | Revert only `extension/src/background/projection.ts`, `extension/tests/convergence.test.mjs`, `extension/tests/projection-behavior.test.mjs`, and the 17.1 task/progress marks. Create/delete behavior, session behavior, and move receipts remain outside this unit. `git diff --check`: PASS; no generated tracked/untracked outputs or lingering test processes. Pre-existing `.docmanager/` and `SHA256SUMS.txt` remain untouched. |
+| Budget | Final accounting relative to `HEAD`: 210 additions + 159 deletions = 369 changed lines, within the hard 400-line cap. |
+
+## PR4a3.2 Verified Remote Move — Complete
+- [x] 17.2a RED: serialized move-tuple/restart and projection callback-order tests failed before their corresponding fixes; the predecessor-order RED observed the second receipt consume before its pending predecessor.
+- [x] 17.2b GREEN: folder and bookmark moves persist a complete pending receipt before update/move effects. Exact `onMoved` tuple plus final complete node and workspace containment consume only the first matching pending receipt and checkpoint its cursor; changed/reordered/duplicate callbacks retain stable local intent. Missing predecessor parent/index now fails closed before any effect. A per-workspace live FIFO serializes socket envelopes, clears only its registry on reset, and cleans up without creating a rejected detached promise.
+
+### TDD Cycle Evidence
+| Task | Test files | Layer | Safety net | RED | GREEN | TRIANGULATE | REFACTOR |
+|---|---|---|---|---|---|---|---|
+| 17.2a | `tests/convergence.test.mjs`, `tests/projection-behavior.test.mjs` | Unit + deterministic runtime harness | 48/48 existing focused tests passed | FAIL: 10/11 convergence tests; later receipt consumed before predecessor | PASS: 51/51 | Restart predecessor order, semantic tuple fields, folder/bookmark callback paths, reversion, concurrent live burst | Extracted semantic tuple comparison |
+| 17.2b | same | Unit + deterministic runtime harness | Same | N/A: implementation follows 17.2a RED | PASS: 51/51 | Exact callback, wrong tuple, duplicate/reversion, combined update/move, FIFO burst | Replaced TTL pending-op suppression with durable receipt ownership |
+
+## Work Unit Evidence
+| Evidence | Exact result |
+|---|---|
+| RED | `cd extension && npm run build && node --test tests/convergence.test.mjs`: FAIL (10 pass, 1 fail; a later move receipt consumed while its predecessor was pending). |
+| Focused GREEN | `cd extension && npm run build && node --test tests/convergence.test.mjs tests/projection-behavior.test.mjs`: PASS (51/51; no skip, todo, or pending). |
+| Runtime harness | `cd extension && npm run test:projection`: PASS (104/104 deterministic repository-native tests; no skip, todo, or pending). `cd extension && npm run typecheck`: PASS. |
+| Rollback | Revert only PR4a3.2 changes in `extension/src/background/{convergence.ts,projection.ts}`, `extension/tests/{convergence,projection-behavior}.test.mjs`, and 17.2 task/progress marks. PR4a3.1 update receipts remain intact. |
+| Live FIFO proof | Two `MockWebSocket.emitMessage()` calls launched without awaiting the first leave cursor 8's update receipt pending and applied, while cursor 9 has no effect or checkpoint; cursor remains 7. Replay-stop coverage remains separate. |
+| Cleanup / budget | `git diff --check`: PASS; no generated output or lingering test processes. Current cumulative diff is 647 additions+deletions versus `HEAD`; incremental PR4a3.2 accounting is 278 lines over the supplied 369-line PR4a3.1 baseline, below the 400-line cap. Pre-existing `.docmanager/` and `SHA256SUMS.txt` remain untouched. |
+| Guard-only note | Missing move predecessor `parentId`/`index` fails closed in production before receipt/effect; no separate deterministic omission fixture was added. |
+
+## PR4b Repair Enablement — Complete
+- [x] 18.1 RED: `npm run build && node --test tests/convergence.test.mjs` failed with `gateRemoteEffect is not a function` and `canPersistReceipt is not a function` (11 pass, 2 fail).
+- [x] 18.2 GREEN: capacity, durable-write, complete-read, final-verification, Chrome-promise, and ambiguity gates retain receipts/intents, record a workspace-local failed cursor/disposition, and stop live/replay advancement. Retry never rebuilds; explicit Rebuild is the sole destructive route.
+
+### TDD Cycle Evidence
+| Task | RED | GREEN | REFACTOR |
+|---|---|---|---|
+| 18.1 | 11/13 convergence tests; missing gate APIs | 75/75 focused repair/regression tests | Added projection-level capacity, persistent storage failure, and status-detail proof |
+| 18.2 | Same RED guards production wiring | 110/110 runtime harness | Centralized bounded receipt persistence and removed cursor promotion after unverified replay |
+
+### Work Unit Evidence
+| Evidence | Exact result |
+|---|---|
+| Focused | `cd extension && npm run build && node --test tests/convergence.test.mjs tests/delete-ownership.test.mjs tests/projection-behavior.test.mjs tests/status-ui.test.mjs`: PASS (75/75). |
+| Runtime | `cd extension && npm run test:projection`: PASS (110/110); `npm run typecheck`: PASS. |
+| Matrix | Capacity prunes only terminal receipts; terminal capacity pauses pre-effect. Durable receipt-write failure blocks the process even when pause persistence also fails. Complete-read, final-verification, Chrome rejection, and ambiguity gates retain cursor/mappings/intents. |
+| Repair | Retry never fetches the destructive tree and remains paused for unproven receipts; explicit Rebuild alone clears/recreates, retains intents, and cannot promote an uncheckpointed replay cursor. Status and diagnostics expose only workspace/cursor/gate/disposition. |
+| Rollback | Revert PR4b-only changes in `extension/src/{background/{convergence,projection,service-worker}.ts,shared/types.ts,options/{options.ts,options.html}}`, corresponding extension tests, and 18/artifact marks. |
+| Cleanup / budget | `git diff --check`: PASS; no generated output. Native settlement measured PR4b at 444/400 lines; the maintainer approved and reset the exceeded objective at revision `sha256:4872969057eb456b08f2f5253aea29ece584bca507f28073b4b8885a9c0a4456`, preserving the tested candidate. Pre-existing `.docmanager/` and `SHA256SUMS.txt` remain untouched. |

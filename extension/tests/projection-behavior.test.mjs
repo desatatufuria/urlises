@@ -1,10 +1,14 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { webcrypto } from "node:crypto";
+
+globalThis.crypto ??= webcrypto;
 
 const storageData = new Map();
 const bookmarkNodes = new Map();
 let nextBookmarkId = 100;
 let enforceStrictIndices = false;
+let storageSetFailure;
 
 function cloneNode(node) {
   return {
@@ -83,6 +87,13 @@ globalThis.chrome = {
       },
       set(items, callback) {
         setTimeout(() => {
+          const failure = storageSetFailure?.(items);
+          if (failure) {
+            globalThis.chrome.runtime.lastError = { message: failure };
+            callback();
+            globalThis.chrome.runtime.lastError = null;
+            return;
+          }
           for (const [key, value] of Object.entries(items)) {
             storageData.set(key, value);
           }
@@ -231,9 +242,12 @@ import {
   logout,
   markActivitySeen,
   projectionTestHooks,
+  rebuildWorkspace,
+  retryWorkspace,
   runCoalescedWorkspaceTask,
   setSelectedWorkspaces,
 } from "../dist/background/projection.js";
+import { createRemoteReceipt } from "../dist/background/convergence.js";
 import { getState, setState } from "../dist/shared/storage.js";
 import { connectWorkspaceSocket } from "../dist/shared/websocket.js";
 
@@ -241,7 +255,7 @@ const fetchLog = [];
 let fetchHandlers = [];
 let pendingTicketResponse;
 
-globalThis.fetch = async (input) => {
+globalThis.fetch = async (input, init) => {
   const url = String(input);
   fetchLog.push(url);
   if (url.endsWith("/auth/ws-ticket")) {
@@ -254,7 +268,7 @@ globalThis.fetch = async (input) => {
   if (!handler) {
     throw new Error(`Unhandled fetch: ${url}`);
   }
-  return handler.respond(url);
+  return handler.respond(url, init);
 };
 
 function jsonResponse(body) {
@@ -271,13 +285,13 @@ function errorResponse(status, error) {
   });
 }
 
-function ackResponse() {
+function ackResponse(cursor = 6) {
   return new Response(JSON.stringify({ ok: true }), {
     status: 200,
     headers: {
       "Content-Type": "application/json",
       "X-Sync-Event-Id": "evt-ack",
-      "X-Sync-Cursor": "6",
+      "X-Sync-Cursor": String(cursor),
       "X-Sync-Duplicate": "false",
     },
   });
@@ -383,6 +397,7 @@ async function resetRuntime() {
   fetchHandlers = [];
   pendingTicketResponse = undefined;
   enforceStrictIndices = false;
+  storageSetFailure = undefined;
   globalThis.chrome.runtime.lastError = null;
   projectionTestHooks.resetRuntimeState();
   await setState(createRuntimeState());
@@ -889,7 +904,7 @@ test("live remote activity updates revision metadata and markActivitySeen acknow
   assert.equal(state.activitySignal?.lastSeenRevision, 1);
 });
 
-test("connectWorkspace falls back to full resync when replay reports a gap", async () => {
+test("replay gap pauses the workspace without destructive resync", async () => {
   await setState(createRuntimeState({ lastCursor: 5 }));
   fetchHandlers = [
     {
@@ -918,17 +933,84 @@ test("connectWorkspace falls back to full resync when replay reports a gap", asy
 
   await projectionTestHooks.replayWorkspaceDelta("workspace-1", 5, "resume after socket ack");
 
-  assert.equal(MockWebSocket.instances.length, 1);
   assert.equal(fetchLog.filter((url) => url.includes("afterCursor=5")).length, 1);
-  assert.equal(fetchLog.filter((url) => url.endsWith("/workspaces/workspace-1/tree")).length, 1);
-  assert.equal(fetchLog.filter((url) => url.includes("afterCursor=0")).length, 1);
-
-  await MockWebSocket.instances[0].emitMessage({ type: "ack", currentCursor: 8 });
-
   const projection = (await getState()).projectionsByWorkspaceId["workspace-1"];
-  assert.equal(projection.lastCursor, 8);
-  assert.equal(projection.health, "live");
-  assert.equal(projection.status, "ready");
+  assert.equal(fetchLog.filter((url) => url.endsWith("/workspaces/workspace-1/tree")).length, 0);
+  assert.equal(projection.lastCursor, 5);
+  assert.equal(projection.convergenceJournal?.pauseReason, "ambiguous-predecessor");
+});
+
+test("Retry keeps an unproven receipt paused and Rebuild is the only destructive workspace action", async () => {
+  const journal = { version: 1, phase: "paused", pauseReason: "final-verification-failed", failedCursor: 6, repairDisposition: "retry", operations: [], attempts: 0, receipts: [{ version: 1, workspaceId: "workspace-1", backendId: "bookmark-1", chromeId: "bookmark-node", type: "bookmark", before: { title: "Before" }, expectedAfter: { title: "After" }, expectedSignatures: ["bad"], eventId: "evt-6", cursor: 6, status: "pending" }], localIntents: [{ eventId: "local-1", kind: "changed", status: "queued", payload: { workspaceId: "workspace-1", backendId: "bookmark-1", chromeId: "bookmark-node", type: "bookmark", kind: "changed", node: { id: "bookmark-node", title: "Local" } } }] };
+  await setState({ ...createRuntimeState({ lastCursor: 5 }), projectionsByWorkspaceId: { "workspace-1": createProjection({ lastCursor: 5, convergenceJournal: journal }) } });
+  await retryWorkspace("workspace-1");
+  let projection = (await getState()).projectionsByWorkspaceId["workspace-1"];
+  assert.equal(fetchLog.filter((url) => url.endsWith("/tree")).length, 0);
+  assert.equal(projection.convergenceJournal?.phase, "paused");
+  assert.equal(projection.convergenceJournal?.repairDisposition, "rebuild");
+  assert.equal(projection.convergenceJournal?.localIntents.length, 1);
+  fetchHandlers = [{ match: (url) => url.endsWith("/workspaces/workspace-1/tree"), respond: () => jsonResponse({ workspace: projection.workspace, folders: [] }) }, { match: (url) => url.includes("afterCursor=0"), respond: () => jsonResponse({ currentCursor: 5, events: [] }) }];
+  await rebuildWorkspace("workspace-1");
+  projection = (await getState()).projectionsByWorkspaceId["workspace-1"];
+  assert.equal(fetchLog.filter((url) => url.endsWith("/tree")).length, 1);
+  assert.equal(projection.convergenceJournal?.localIntents.length, 1);
+  assert.equal(projection.convergenceJournal?.phase, "live");
+});
+
+test("remote receipt capacity prunes consumed receipts or pauses before the Chrome effect", async () => {
+  for (const status of ["consumed", "pending"]) {
+    await resetRuntime();
+    bookmarkNodes.set("workspace-node", createBookmarkNode({ id: "workspace-node", parentId: "1", title: "Workspace", index: 0 }));
+    bookmarkNodes.set("folder-a", createBookmarkNode({ id: "folder-a", parentId: "workspace-node", title: "Docs", index: 0 }));
+    bookmarkNodes.set("bookmark-node", createBookmarkNode({ id: "bookmark-node", parentId: "folder-a", title: "Before", url: "https://example.com/before", index: 0 }));
+    rebuildBookmarkChildren();
+    const receipts = Array.from({ length: 100 }, (_, cursor) => ({ ...createRemoteReceipt({ workspaceId: "workspace-1", backendId: `old-${cursor}`, chromeId: `old-${cursor}`, type: "bookmark", before: { parentId: "folder-a", index: cursor, title: "Before", url: "https://example.com/before" }, expectedAfter: { parentId: "folder-a", index: cursor, title: "After", url: "https://example.com/after" }, eventId: `old-${cursor}`, cursor }), status }));
+    await setState({ ...createRuntimeState({ lastCursor: 7 }), projectionsByWorkspaceId: { "workspace-1": createEditorProjection({ workspaceChromeId: "workspace-node", chromeIdByBackendId: { "folder-a": "folder-a", "bookmark-1": "bookmark-node" }, backendIdByChromeId: { "folder-a": "folder-a", "bookmark-node": "bookmark-1" }, entityTypeByBackendId: { "folder-a": "folder", "bookmark-1": "bookmark" }, lastCursor: 7, convergenceJournal: { version: 1, phase: "live", operations: [], localIntents: [], attempts: 0, receipts } }) } });
+
+    await projectionTestHooks.applyRemoteEnvelope("workspace-1", createSyncEvent({ cursor: 8, eventId: `capacity-${status}`, payload: { id: "bookmark-1", workspaceId: "workspace-1", folderId: "folder-a", title: "After", url: "https://example.com/after", position: 0 } }));
+
+    const projection = (await getState()).projectionsByWorkspaceId["workspace-1"];
+    if (status === "consumed") {
+      assert.equal(projection.convergenceJournal.receipts.length, 21);
+      assert.equal(projection.convergenceJournal.receipts.at(-1).status, "pending");
+      assert.equal(bookmarkNodes.get("bookmark-node").title, "After");
+    } else {
+      assert.equal(projection.convergenceJournal.pauseReason, "receipt-capacity");
+      assert.equal(projection.convergenceJournal.failedCursor, 8);
+      assert.equal(bookmarkNodes.get("bookmark-node").title, "Before");
+    }
+    assert.equal(projection.lastCursor, 7);
+  }
+});
+
+test("durable receipt write failure blocks the process without claiming a persisted pause", async () => {
+  bookmarkNodes.set("workspace-node", createBookmarkNode({ id: "workspace-node", parentId: "1", title: "Workspace", index: 0 }));
+  bookmarkNodes.set("folder-a", createBookmarkNode({ id: "folder-a", parentId: "workspace-node", title: "Docs", index: 0 }));
+  bookmarkNodes.set("bookmark-node", createBookmarkNode({ id: "bookmark-node", parentId: "folder-a", title: "Before", url: "https://example.com/before", index: 0 }));
+  rebuildBookmarkChildren();
+  await setState({ ...createRuntimeState({ lastCursor: 7 }), projectionsByWorkspaceId: { "workspace-1": createEditorProjection({ workspaceChromeId: "workspace-node", chromeIdByBackendId: { "folder-a": "folder-a", "bookmark-1": "bookmark-node" }, backendIdByChromeId: { "folder-a": "folder-a", "bookmark-node": "bookmark-1" }, entityTypeByBackendId: { "folder-a": "folder", "bookmark-1": "bookmark" }, lastCursor: 7 }) } });
+  let failAllWrites = false;
+  storageSetFailure = (items) => {
+    const projection = Object.values(items)[0]?.projectionsByWorkspaceId?.["workspace-1"];
+    if (failAllWrites || projection?.convergenceJournal?.receipts?.some((receipt) => receipt.cursor === 8 && receipt.status === "pending")) {
+      failAllWrites = true;
+      return "durable storage unavailable";
+    }
+  };
+
+  await projectionTestHooks.applyRemoteEnvelope("workspace-1", createSyncEvent({ cursor: 8, eventId: "durable-8", payload: { id: "bookmark-1", workspaceId: "workspace-1", folderId: "folder-a", title: "After", url: "https://example.com/after", position: 0 } }));
+  storageSetFailure = undefined;
+  let projection = (await getState()).projectionsByWorkspaceId["workspace-1"];
+  assert.equal(projectionTestHooks.volatileRepairGate("workspace-1"), "durable-write-failed");
+  assert.equal(projection.convergenceJournal?.phase, "plan");
+  assert.equal(projection.convergenceJournal?.pauseReason, undefined);
+  assert.equal(projection.lastCursor, 7);
+  assert.equal(bookmarkNodes.get("bookmark-node").title, "Before");
+
+  await projectionTestHooks.applyRemoteEnvelope("workspace-1", createSyncEvent({ cursor: 9, eventId: "durable-9", payload: { id: "bookmark-1", workspaceId: "workspace-1", folderId: "folder-a", title: "Later", url: "https://example.com/later", position: 0 } }));
+  projection = (await getState()).projectionsByWorkspaceId["workspace-1"];
+  assert.equal(projection.lastCursor, 7);
+  assert.equal(bookmarkNodes.get("bookmark-node").title, "Before");
 });
 
 test("connectWorkspace degrades only after the silent recovery budget is exhausted", async () => {
@@ -951,7 +1033,7 @@ test("connectWorkspace degrades only after the silent recovery budget is exhaust
   assert.equal(projection.degradedReason, "websocket closed");
 });
 
-test("connectWorkspace logs live remote apply context before resyncing on out-of-bounds bookmark creation", async () => {
+test("connectWorkspace logs secret-free pause context on rejected Chrome effects", async () => {
   enforceStrictIndices = true;
   bookmarkNodes.set("workspace-node", createBookmarkNode({ id: "workspace-node", parentId: "1", title: "Workspace", index: 0 }));
   bookmarkNodes.set("parent-folder", createBookmarkNode({ id: "parent-folder", parentId: "workspace-node", title: "Docs", index: 0 }));
@@ -1016,10 +1098,11 @@ test("connectWorkspace logs live remote apply context before resyncing on out-of
       },
     },
   });
+  await flushMicrotasks(8);
 
   const diagnostics = (await getState()).diagnostics.map((entry) => entry.message);
   const applyLine = diagnostics.find((entry) => entry.includes("eventId=evt-bookmark-8") && entry.includes("action=live-apply"));
-  const resyncLine = diagnostics.find((entry) => entry.includes("eventId=evt-bookmark-8") && entry.includes("action=resync") && entry.includes("failure=Index out of bounds."));
+  const pauseLine = diagnostics.find((entry) => entry.includes("eventId=evt-bookmark-8") && entry.includes("action=paused") && entry.includes("failure=remote effect gate failed"));
 
   assert.ok(applyLine);
   assert.match(applyLine, /operation=bookmark-upsert/);
@@ -1028,8 +1111,12 @@ test("connectWorkspace logs live remote apply context before resyncing on out-of
   assert.match(applyLine, /requestedIndex=5/);
   assert.match(applyLine, /branch=create/);
 
-  assert.ok(resyncLine);
-  assert.match(resyncLine, /action=resync/);
+  assert.ok(pauseLine);
+  assert.match(pauseLine, /action=paused/);
+  const projection = (await getState()).projectionsByWorkspaceId["workspace-1"];
+  assert.equal(projection.convergenceJournal?.pauseReason, "chrome-effect-rejected");
+  assert.equal(projection.convergenceJournal?.failedCursor, 8);
+  assert.equal(projection.lastCursor, 7);
 });
 
 test("connectWorkspace restores a missing parent subtree before bookmark apply resumes", async () => {
@@ -1205,6 +1292,102 @@ test("remote bookmark update side effects are not re-emitted as local changes", 
   assert.equal(projection.lastCursor, 8);
 });
 
+test("remote update pauses at a hidden-field verification failure", async () => {
+  bookmarkNodes.set("workspace-node", createBookmarkNode({ id: "workspace-node", parentId: "1", title: "Workspace", index: 0 }));
+  bookmarkNodes.set("folder-a", createBookmarkNode({ id: "folder-a", parentId: "workspace-node", title: "Docs", index: 0 }));
+  bookmarkNodes.set("bookmark-node", createBookmarkNode({ id: "bookmark-node", parentId: "folder-a", title: "Before", url: "https://example.com/before", index: 0 }));
+  rebuildBookmarkChildren();
+  await setState({ ...createRuntimeState({ lastCursor: 7 }), projectionsByWorkspaceId: { "workspace-1": createEditorProjection({ workspaceChromeId: "workspace-node", chromeIdByBackendId: { "folder-a": "folder-a", "bookmark-1": "bookmark-node" }, backendIdByChromeId: { "folder-a": "folder-a", "bookmark-node": "bookmark-1" }, entityTypeByBackendId: { "folder-a": "folder", "bookmark-1": "bookmark" }, lastCursor: 7 }) } });
+  await projectionTestHooks.connectWorkspace("workspace-1");
+  await MockWebSocket.instances[0].emitMessage({ type: "ack", currentCursor: 7 });
+  await MockWebSocket.instances[0].emitMessage({ type: "event", event: createSyncEvent({ cursor: 8, eventId: "evt-update-8", payload: { id: "bookmark-1", workspaceId: "workspace-1", folderId: "folder-a", title: "After", url: "https://example.com/after", position: 0 } }) });
+  let projection = (await getState()).projectionsByWorkspaceId["workspace-1"];
+  assert.deepEqual(projection.convergenceJournal?.receipts?.map((receipt) => [receipt.status, receipt.before.title, receipt.expectedAfter.title]), [["pending", "Before", "After"]]);
+  assert.equal(projection.lastCursor, 7);
+  bookmarkNodes.set("bookmark-node", createBookmarkNode({ id: "bookmark-node", parentId: "folder-a", title: "After", url: "https://example.com/hidden", index: 0 }));
+  rebuildBookmarkChildren();
+  await handleBookmarkChanged("bookmark-node", { title: "After" });
+  projection = (await getState()).projectionsByWorkspaceId["workspace-1"];
+  assert.equal(projection.convergenceJournal?.receipts?.[0]?.status, "pending");
+  assert.equal(projection.lastCursor, 7);
+  await MockWebSocket.instances[0].emitMessage({ type: "event", event: createSyncEvent({ cursor: 9, eventId: "evt-update-9", payload: { id: "bookmark-1", workspaceId: "workspace-1", folderId: "folder-a", title: "Final", url: "https://example.com/final", position: 0 } }) });
+  projection = (await getState()).projectionsByWorkspaceId["workspace-1"];
+  assert.equal(projection.convergenceJournal?.pauseReason, "final-verification-failed");
+  assert.equal(projection.convergenceJournal?.failedCursor, 8);
+  assert.equal(projection.lastCursor, 7);
+  assert.equal(fetchLog.length, 1);
+});
+
+test("remote folder title update waits for its durable complete-node proof", async () => {
+  bookmarkNodes.set("workspace-node", createBookmarkNode({ id: "workspace-node", parentId: "1", title: "Workspace", index: 0 }));
+  bookmarkNodes.set("folder-node", createBookmarkNode({ id: "folder-node", parentId: "workspace-node", title: "Before", index: 0 })); rebuildBookmarkChildren();
+  await setState({ ...createRuntimeState({ lastCursor: 7 }), projectionsByWorkspaceId: { "workspace-1": createEditorProjection({ workspaceChromeId: "workspace-node", chromeIdByBackendId: { "folder-1": "folder-node" }, backendIdByChromeId: { "folder-node": "folder-1" }, entityTypeByBackendId: { "folder-1": "folder" }, lastCursor: 7 }) } });
+  await projectionTestHooks.connectWorkspace("workspace-1"); await MockWebSocket.instances[0].emitMessage({ type: "ack", currentCursor: 7 });
+  await MockWebSocket.instances[0].emitMessage({ type: "event", event: createSyncEvent({ cursor: 8, eventId: "evt-folder-update-8", kind: "folder.updated", entityType: "folder", entityId: "folder-1", payload: { id: "folder-1", workspaceId: "workspace-1", name: "After", position: 0 } }) });
+  let projection = (await getState()).projectionsByWorkspaceId["workspace-1"];
+  assert.deepEqual(projection.convergenceJournal?.receipts?.map((receipt) => [receipt.type, receipt.status, receipt.before.title, receipt.expectedAfter.title]), [["folder", "pending", "Before", "After"]]);
+  assert.equal(projection.lastCursor, 7);
+  await handleBookmarkChanged("folder-node", { title: "After" });
+  projection = (await getState()).projectionsByWorkspaceId["workspace-1"];
+  assert.equal(projection.lastCursor, 8);
+  assert.equal(projection.convergenceJournal?.receipts?.[0]?.status, "consumed");
+  assert.equal(fetchLog.length, 1);
+});
+
+test("remote folder move persists and waits for its exact complete callback", async () => {
+  bookmarkNodes.set("workspace-node", createBookmarkNode({ id: "workspace-node", parentId: "1", title: "Workspace", index: 0 }));
+  bookmarkNodes.set("folder-a", createBookmarkNode({ id: "folder-a", parentId: "workspace-node", title: "A", index: 0 }));
+  bookmarkNodes.set("folder-b", createBookmarkNode({ id: "folder-b", parentId: "workspace-node", title: "B", index: 1 }));
+  bookmarkNodes.set("folder-node", createBookmarkNode({ id: "folder-node", parentId: "folder-a", title: "Moved", index: 0 })); rebuildBookmarkChildren();
+  await setState({ ...createRuntimeState({ lastCursor: 7 }), projectionsByWorkspaceId: { "workspace-1": createEditorProjection({ workspaceChromeId: "workspace-node", chromeIdByBackendId: { "folder-a": "folder-a", "folder-b": "folder-b", "folder-1": "folder-node" }, backendIdByChromeId: { "folder-a": "folder-a", "folder-b": "folder-b", "folder-node": "folder-1" }, entityTypeByBackendId: { "folder-a": "folder", "folder-b": "folder", "folder-1": "folder" }, lastCursor: 7 }) } });
+  await projectionTestHooks.connectWorkspace("workspace-1"); await MockWebSocket.instances[0].emitMessage({ type: "ack", currentCursor: 7 });
+  await MockWebSocket.instances[0].emitMessage({ type: "event", event: createSyncEvent({ cursor: 8, eventId: "evt-folder-move-8", kind: "folder.updated", entityType: "folder", entityId: "folder-1", payload: { id: "folder-1", workspaceId: "workspace-1", parentId: "folder-b", name: "Moved", position: 0 } }) });
+  let projection = (await getState()).projectionsByWorkspaceId["workspace-1"];
+  assert.deepEqual(projection.convergenceJournal?.receipts?.map((receipt) => [receipt.type, receipt.status, receipt.move]), [["folder", "pending", { oldParentId: "folder-a", oldIndex: 0, parentId: "folder-b", index: 0 }]]);
+  assert.equal(projection.lastCursor, 7);
+  await handleBookmarkMoved("folder-node", { parentId: "folder-b", oldParentId: "folder-a", index: 1, oldIndex: 0 });
+  assert.equal((await getState()).projectionsByWorkspaceId["workspace-1"].lastCursor, 7);
+  await handleBookmarkMoved("folder-node", { parentId: "folder-b", oldParentId: "folder-a", index: 0, oldIndex: 0 });
+  projection = (await getState()).projectionsByWorkspaceId["workspace-1"];
+  assert.equal(projection.lastCursor, 8);
+  assert.equal(projection.convergenceJournal?.receipts?.[0]?.status, "consumed");
+});
+
+test("replay stops at a pending update receipt before later effects or cursor promotion", async () => {
+  bookmarkNodes.set("workspace-node", createBookmarkNode({ id: "workspace-node", parentId: "1", title: "Workspace", index: 0 }));
+  bookmarkNodes.set("folder-a", createBookmarkNode({ id: "folder-a", parentId: "workspace-node", title: "Docs", index: 0 }));
+  bookmarkNodes.set("bookmark-node", createBookmarkNode({ id: "bookmark-node", parentId: "folder-a", title: "Before", url: "https://example.com/before", index: 0 }));
+  rebuildBookmarkChildren();
+  await setState({ ...createRuntimeState({ lastCursor: 7 }), projectionsByWorkspaceId: { "workspace-1": createEditorProjection({ workspaceChromeId: "workspace-node", chromeIdByBackendId: { "folder-a": "folder-a", "bookmark-1": "bookmark-node" }, backendIdByChromeId: { "folder-a": "folder-a", "bookmark-node": "bookmark-1" }, entityTypeByBackendId: { "folder-a": "folder", "bookmark-1": "bookmark" }, lastCursor: 7 }) } });
+  fetchHandlers = [{ match: (url) => url.includes("afterCursor=7"), respond: () => jsonResponse({ currentCursor: 9, events: [
+    createSyncEvent({ cursor: 8, eventId: "evt-update-8", payload: { id: "bookmark-1", workspaceId: "workspace-1", folderId: "folder-a", title: "After", url: "https://example.com/after", position: 0 } }),
+    createSyncEvent({ cursor: 9, eventId: "evt-create-9", kind: "bookmark.created", entityId: "bookmark-2", payload: { id: "bookmark-2", workspaceId: "workspace-1", folderId: "folder-a", title: "Later", url: "https://example.com/later", position: 1 } }),
+  ] }) }];
+  await projectionTestHooks.replayWorkspaceDelta("workspace-1", 7, "pending update proof");
+  const projection = (await getState()).projectionsByWorkspaceId["workspace-1"];
+  assert.equal(projection.lastCursor, 7);
+  assert.equal(projection.convergenceJournal?.receipts?.[0]?.status, "pending");
+  assert.equal(bookmarkNodes.get("bookmark-node")?.title, "After");
+  assert.equal(bookmarkNodes.get("folder-a")?.children?.length, 1);
+});
+
+test("live socket FIFO stops a burst after the predecessor receipt persists", async () => {
+  bookmarkNodes.set("workspace-node", createBookmarkNode({ id: "workspace-node", parentId: "1", title: "Workspace", index: 0 }));
+  bookmarkNodes.set("folder-a", createBookmarkNode({ id: "folder-a", parentId: "workspace-node", title: "Docs", index: 0 }));
+  bookmarkNodes.set("bookmark-node", createBookmarkNode({ id: "bookmark-node", parentId: "folder-a", title: "Before", url: "https://example.com/before", index: 0 })); rebuildBookmarkChildren();
+  await setState({ ...createRuntimeState({ lastCursor: 7 }), projectionsByWorkspaceId: { "workspace-1": createEditorProjection({ workspaceChromeId: "workspace-node", chromeIdByBackendId: { "folder-a": "folder-a", "bookmark-1": "bookmark-node" }, backendIdByChromeId: { "folder-a": "folder-a", "bookmark-node": "bookmark-1" }, entityTypeByBackendId: { "folder-a": "folder", "bookmark-1": "bookmark" }, lastCursor: 7 }) } });
+  await projectionTestHooks.connectWorkspace("workspace-1"); await MockWebSocket.instances[0].emitMessage({ type: "ack", currentCursor: 7 });
+  const socket = MockWebSocket.instances[0];
+  const first = socket.emitMessage({ type: "event", event: createSyncEvent({ cursor: 8, eventId: "evt-live-8", payload: { id: "bookmark-1", workspaceId: "workspace-1", folderId: "folder-a", title: "After", url: "https://example.com/after", position: 0 } }) });
+  const second = socket.emitMessage({ type: "event", event: createSyncEvent({ cursor: 9, eventId: "evt-live-9", kind: "bookmark.created", entityId: "bookmark-2", payload: { id: "bookmark-2", workspaceId: "workspace-1", folderId: "folder-a", title: "Later", url: "https://example.com/later", position: 1 } }) });
+  await Promise.all([first, second]);
+  const projection = (await getState()).projectionsByWorkspaceId["workspace-1"];
+  assert.equal(bookmarkNodes.get("bookmark-node")?.title, "After");
+  assert.equal(bookmarkNodes.get("folder-a")?.children?.length, 1);
+  assert.equal(projection.lastCursor, 7);
+  assert.equal(projection.convergenceJournal?.receipts?.[0]?.status, "pending");
+});
+
 test("remote bookmark title-only update side effects are not re-emitted as local changes", async () => {
   bookmarkNodes.set("workspace-node", createBookmarkNode({ id: "workspace-node", parentId: "1", title: "Workspace", index: 0 }));
   bookmarkNodes.set("folder-a", createBookmarkNode({ id: "folder-a", parentId: "workspace-node", title: "Docs", index: 0 }));
@@ -1319,7 +1502,7 @@ test("remote bookmark url-only update side effects are not re-emitted as local c
   assert.equal(bookmarkNodes.get("bookmark-node")?.url, "https://example.com/remote");
 });
 
-test("remote bookmark move preserves final parent/index without local move re-emission", async () => {
+test("remote bookmark move persists before effect and checkpoints only its exact callback", async () => {
   bookmarkNodes.set("workspace-node", createBookmarkNode({ id: "workspace-node", parentId: "1", title: "Workspace", index: 0 }));
   bookmarkNodes.set("folder-a", createBookmarkNode({ id: "folder-a", parentId: "workspace-node", title: "Docs", index: 0 }));
   bookmarkNodes.set("folder-b", createBookmarkNode({ id: "folder-b", parentId: "workspace-node", title: "Links", index: 1 }));
@@ -1368,20 +1551,32 @@ test("remote bookmark move preserves final parent/index without local move re-em
     }),
   });
 
-  await handleBookmarkMoved("bookmark-node", {
-    parentId: "folder-b",
-    oldParentId: "folder-a",
-    index: 0,
-    oldIndex: 0,
-  });
-
   const movedNode = bookmarkNodes.get("bookmark-node");
+  let projection = (await getState()).projectionsByWorkspaceId["workspace-1"];
   assert.equal(bookmarkPatchCalls, 0);
   assert.equal(movedNode?.parentId, "folder-b");
   assert.equal(movedNode?.index, 0);
+  assert.equal(projection.lastCursor, 7);
+  assert.deepEqual(projection.convergenceJournal?.receipts?.map((receipt) => [receipt.status, receipt.move]), [["pending", { oldParentId: "folder-a", oldIndex: 0, parentId: "folder-b", index: 0 }]]);
+  await handleBookmarkMoved("bookmark-node", { parentId: "folder-b", oldParentId: "folder-a", index: 1, oldIndex: 0 });
+  projection = (await getState()).projectionsByWorkspaceId["workspace-1"];
+  assert.equal(projection.lastCursor, 7);
+  assert.equal(projection.convergenceJournal?.receipts?.[0]?.status, "pending");
+  assert.equal(projection.convergenceJournal?.localIntents.length, 1);
+  await handleBookmarkMoved("bookmark-node", { parentId: "folder-b", oldParentId: "folder-a", index: 0, oldIndex: 0 });
+  projection = (await getState()).projectionsByWorkspaceId["workspace-1"];
+  assert.equal(projection.lastCursor, 8);
+  assert.equal(projection.convergenceJournal?.receipts?.[0]?.status, "consumed");
+  bookmarkNodes.set("bookmark-node", createBookmarkNode({ id: "bookmark-node", parentId: "folder-a", title: "Bookmark", url: "https://example.com/bookmark", index: 0 }));
+  rebuildBookmarkChildren();
+  await handleBookmarkMoved("bookmark-node", { parentId: "folder-a", oldParentId: "folder-b", index: 0, oldIndex: 0 });
+  await handleBookmarkMoved("bookmark-node", { parentId: "folder-a", oldParentId: "folder-b", index: 0, oldIndex: 0 });
+  projection = (await getState()).projectionsByWorkspaceId["workspace-1"];
+  assert.equal(projection.lastCursor, 8);
+  assert.equal(projection.convergenceJournal?.localIntents.filter((intent) => intent.kind === "moved").length, 2);
 });
 
-test("remote bookmark update and move consume suppression independently", async () => {
+test("combined remote bookmark update and move waits for its complete moved callback", async () => {
   bookmarkNodes.set("workspace-node", createBookmarkNode({ id: "workspace-node", parentId: "1", title: "Workspace", index: 0 }));
   bookmarkNodes.set("folder-a", createBookmarkNode({ id: "folder-a", parentId: "workspace-node", title: "Docs", index: 0 }));
   bookmarkNodes.set("folder-b", createBookmarkNode({ id: "folder-b", parentId: "workspace-node", title: "Links", index: 1 }));
@@ -1430,23 +1625,18 @@ test("remote bookmark update and move consume suppression independently", async 
     }),
   });
 
-  await handleBookmarkChanged("bookmark-node", {
-    title: "Remote Bookmark",
-    url: "https://example.com/remote",
-  });
-  await handleBookmarkMoved("bookmark-node", {
-    parentId: "folder-b",
-    oldParentId: "folder-a",
-    index: 0,
-    oldIndex: 0,
-  });
-
+  const projection = (await getState()).projectionsByWorkspaceId["workspace-1"];
   assert.equal(bookmarkPatchCalls, 0);
-  assert.equal(bookmarkNodes.get("bookmark-node")?.parentId, "folder-b");
-  assert.equal(bookmarkNodes.get("bookmark-node")?.title, "Remote Bookmark");
+  assert.deepEqual(bookmarkNodes.get("bookmark-node"), { id: "bookmark-node", parentId: "folder-b", title: "Remote Bookmark", url: "https://example.com/remote", index: 0 });
+  assert.equal(projection.lastCursor, 7);
+  assert.deepEqual(projection.convergenceJournal?.receipts?.map((receipt) => [receipt.status, receipt.expectedAfter]), [["pending", { parentId: "folder-b", index: 0, title: "Remote Bookmark", url: "https://example.com/remote" }]]);
+  await handleBookmarkChanged("bookmark-node", { title: "Remote Bookmark", url: "https://example.com/remote" });
+  assert.equal((await getState()).projectionsByWorkspaceId["workspace-1"].lastCursor, 7);
+  await handleBookmarkMoved("bookmark-node", { parentId: "folder-b", oldParentId: "folder-a", index: 0, oldIndex: 0 });
+  assert.equal((await getState()).projectionsByWorkspaceId["workspace-1"].lastCursor, 8);
 });
 
-test("local update and move are captured as durable intent without remote mutation", async () => {
+test("local update and move dispatch durable complete-shape intents in order", async () => {
   bookmarkNodes.set("workspace-node", createBookmarkNode({ id: "workspace-node", parentId: "1", title: "Workspace", index: 0 }));
   bookmarkNodes.set("folder-a", createBookmarkNode({ id: "folder-a", parentId: "workspace-node", title: "Docs", index: 0 }));
   bookmarkNodes.set("folder-b", createBookmarkNode({ id: "folder-b", parentId: "workspace-node", title: "Links", index: 1 }));
@@ -1459,17 +1649,80 @@ test("local update and move are captured as durable intent without remote mutati
     entityTypeByBackendId: { "folder-a": "folder", "folder-b": "folder", "bookmark-1": "bookmark" },
   }) } });
 
+  const requests = [];
+  fetchHandlers = [{
+    match: (url) => url.endsWith("/bookmarks/bookmark-1"),
+    respond: (_url, init) => {
+      requests.push({ body: JSON.parse(init.body), headers: new Headers(init.headers) });
+      return ackResponse(8 + requests.length - 1);
+    },
+  }];
+
   await handleBookmarkChanged("bookmark-node", { title: "Renamed" });
   bookmarkNodes.set("bookmark-node", createBookmarkNode({ id: "bookmark-node", parentId: "folder-b", title: "Renamed", url: "https://example.com/renamed", index: 0 }));
   rebuildBookmarkChildren();
   await handleBookmarkMoved("bookmark-node", { parentId: "folder-b", oldParentId: "folder-a", index: 0, oldIndex: 0 });
 
-  const journal = (await getState()).projectionsByWorkspaceId["workspace-1"].convergenceJournal;
-  assert.equal(fetchLog.length, 0);
+  const projection = (await getState()).projectionsByWorkspaceId["workspace-1"];
+  const journal = projection.convergenceJournal;
+  assert.equal(requests.length, 2, JSON.stringify((await getState()).diagnostics));
   assert.deepEqual(journal.localIntents.map((intent) => [intent.kind, intent.payload.workspaceId, intent.payload.backendId, intent.payload.chromeId, intent.payload.type, intent.payload.node]), [
     ["changed", "workspace-1", "bookmark-1", "bookmark-node", "bookmark", { id: "bookmark-node", parentId: "folder-a", index: 0, title: "Renamed", url: "https://example.com/renamed" }],
     ["moved", "workspace-1", "bookmark-1", "bookmark-node", "bookmark", { id: "bookmark-node", parentId: "folder-b", index: 0, title: "Renamed", url: "https://example.com/renamed" }],
   ]);
+  assert.deepEqual(journal.localIntents.map((intent) => intent.status), ["acked", "acked"]);
+  assert.equal(projection.lastCursor, 9);
+  assert.deepEqual(requests.map((request) => request.body), [
+    { folderId: "folder-a", title: "Renamed", url: "https://example.com/renamed", position: 0 },
+    { folderId: "folder-b", title: "Renamed", url: "https://example.com/renamed", position: 0 },
+  ]);
+  for (const request of requests) {
+    assert.match(request.headers.get("X-Sync-Event-Id"), /^local-intent-sha256-[a-f0-9]{64}$/);
+    assert.equal(request.headers.get("X-Sync-Event-Id").includes("renamed"), false);
+  }
+});
+
+test("sent local intent resumes with the same opaque event ID after recovery", async () => {
+  bookmarkNodes.set("workspace-node", createBookmarkNode({ id: "workspace-node", parentId: "1", title: "Workspace", index: 0 }));
+  bookmarkNodes.set("folder-node", createBookmarkNode({ id: "folder-node", parentId: "workspace-node", title: "Docs", index: 0 }));
+  bookmarkNodes.set("bookmark-node", createBookmarkNode({ id: "bookmark-node", parentId: "folder-node", title: "Retry", url: "https://example.com/retry", index: 0 }));
+  rebuildBookmarkChildren();
+  const intent = {
+    eventId: "local-intent-v1:durable-retry",
+    kind: "changed",
+    status: "sent",
+    payload: { workspaceId: "workspace-1", backendId: "bookmark-1", chromeId: "bookmark-node", type: "bookmark", kind: "changed", node: { id: "bookmark-node", parentId: "folder-node", index: 0, title: "Retry", url: "https://example.com/retry" } },
+  };
+  await setState({ ...createRuntimeState({ lastCursor: 7 }), projectionsByWorkspaceId: { "workspace-1": createEditorProjection({
+    workspaceChromeId: "workspace-node",
+    chromeIdByBackendId: { "folder-1": "folder-node", "bookmark-1": "bookmark-node" },
+    backendIdByChromeId: { "folder-node": "folder-1", "bookmark-node": "bookmark-1" },
+    entityTypeByBackendId: { "folder-1": "folder", "bookmark-1": "bookmark" },
+    lastCursor: 7,
+    convergenceJournal: { version: 1, phase: "live", operations: [], localIntents: [intent], attempts: 0 },
+  }) } });
+
+  const eventIds = [];
+  fetchHandlers = [{ match: (url) => url.endsWith("/bookmarks/bookmark-1"), respond: (_url, init) => {
+    eventIds.push(new Headers(init.headers).get("X-Sync-Event-Id"));
+    throw new Error("lost response");
+  } }];
+  await projectionTestHooks.drainLocalIntents("workspace-1", "restart");
+  const firstEventId = eventIds[0];
+  assert.equal((await getState()).projectionsByWorkspaceId["workspace-1"].convergenceJournal.localIntents[0].status, "sent");
+
+  await setState({ ...(await getState()), projectionsByWorkspaceId: { "workspace-1": {
+    ...(await getState()).projectionsByWorkspaceId["workspace-1"],
+    convergenceJournal: { ...(await getState()).projectionsByWorkspaceId["workspace-1"].convergenceJournal, phase: "live", pauseReason: undefined, failedCursor: undefined },
+  } } });
+  fetchHandlers = [{ match: (url) => url.endsWith("/bookmarks/bookmark-1"), respond: (_url, init) => {
+    eventIds.push(new Headers(init.headers).get("X-Sync-Event-Id"));
+    return ackResponse(8);
+  } }];
+  await projectionTestHooks.drainLocalIntents("workspace-1", "retry");
+  assert.equal(eventIds.length, 2);
+  assert.equal(eventIds[1], firstEventId);
+  assert.equal((await getState()).projectionsByWorkspaceId["workspace-1"].convergenceJournal.localIntents[0].status, "acked");
 });
 
 test("missing cursor-zero node pauses intent capture without advancing or mutating remotely", async () => {
@@ -1488,7 +1741,7 @@ test("missing cursor-zero node pauses intent capture without advancing or mutati
   assert.deepEqual(projection.convergenceJournal.localIntents, []);
 });
 
-test("handleBookmarkChanged retains one stable local intent without backend recovery", async () => {
+test("handleBookmarkChanged retains one failed stable intent without destructive recovery", async () => {
   bookmarkNodes.set("workspace-node", createBookmarkNode({ id: "workspace-node", parentId: "1", title: "Workspace", index: 0 }));
   bookmarkNodes.set("folder-node", createBookmarkNode({ id: "folder-node", parentId: "workspace-node", title: "Docs", index: 0 }));
   bookmarkNodes.set("bookmark-node", createBookmarkNode({ id: "bookmark-node", parentId: "folder-node", title: "Bookmark", url: "https://example.com/bookmark", index: 0 }));
@@ -1546,12 +1799,14 @@ test("handleBookmarkChanged retains one stable local intent without backend reco
 
   const state = await getState();
   const projection = state.projectionsByWorkspaceId["workspace-1"];
-  assert.equal(fetchLog.length, 0);
+  assert.equal(fetchLog.filter((url) => url.endsWith("/bookmarks/bookmark-1")).length, 1);
   assert.equal(projection.convergenceJournal.localIntents.length, 1);
+  assert.equal(projection.convergenceJournal.localIntents[0].status, "sent");
   assert.equal(projection.convergenceJournal.localIntents[0].payload.node.title, "Renamed Bookmark");
+  assert.equal(projection.convergenceJournal.pauseReason, "ambiguous-predecessor");
 });
 
-test("handleBookmarkRemoved stops retrying a rejected local delete after bounded recovery starts", async () => {
+test("handleBookmarkRemoved pauses a rejected local delete without destructive recovery", async () => {
   bookmarkNodes.set("workspace-node", createBookmarkNode({ id: "workspace-node", parentId: "1", title: "Workspace", index: 0 }));
   bookmarkNodes.set("folder-node", createBookmarkNode({ id: "folder-node", parentId: "workspace-node", title: "Docs", index: 0 }));
   rebuildBookmarkChildren();
@@ -1607,11 +1862,12 @@ test("handleBookmarkRemoved stops retrying a rejected local delete after bounded
   await flushMicrotasks();
 
   const projection = (await getState()).projectionsByWorkspaceId["workspace-1"];
-  assert.equal(fetchLog.filter((url) => url.endsWith("/workspaces/workspace-1/tree")).length, 1);
-  assert.equal(projection.chromeIdByBackendId["folder-1"], undefined);
+  assert.equal(fetchLog.filter((url) => url.endsWith("/workspaces/workspace-1/tree")).length, 0);
+  assert.equal(projection.chromeIdByBackendId["folder-1"], "folder-node");
+  assert.equal(projection.convergenceJournal?.pauseReason, "ambiguous-predecessor");
 });
 
-test("handleBookmarkMoved retains one stable local intent without backend recovery", async () => {
+test("handleBookmarkMoved retains one failed stable intent without destructive recovery", async () => {
   bookmarkNodes.set("workspace-node", createBookmarkNode({ id: "workspace-node", parentId: "1", title: "Workspace", index: 0 }));
   bookmarkNodes.set("folder-node", createBookmarkNode({ id: "folder-node", parentId: "workspace-node", title: "Docs", index: 0 }));
   rebuildBookmarkChildren();
@@ -1668,9 +1924,11 @@ test("handleBookmarkMoved retains one stable local intent without backend recove
 
   const state = await getState();
   const projection = state.projectionsByWorkspaceId["workspace-1"];
-  assert.equal(fetchLog.length, 0);
+  assert.equal(fetchLog.filter((url) => url.endsWith("/folders/folder-1")).length, 1);
   assert.equal(projection.convergenceJournal.localIntents.length, 1);
+  assert.equal(projection.convergenceJournal.localIntents[0].status, "sent");
   assert.equal(projection.convergenceJournal.localIntents[0].payload.node.parentId, "workspace-node");
+  assert.equal(projection.convergenceJournal.pauseReason, "ambiguous-predecessor");
 });
 
 test("connectWorkspace falls back from subtree recovery to workspace resync before degrading", async () => {
@@ -1778,13 +2036,12 @@ test("connectWorkspace falls back from subtree recovery to workspace resync befo
 
   const projection = (await getState()).projectionsByWorkspaceId["workspace-1"];
   const diagnostics = (await getState()).diagnostics.map((entry) => entry.message);
-  assert.equal(fetchLog.filter((url) => url.endsWith("/workspaces/workspace-1/tree")).length, 2);
+  assert.equal(fetchLog.filter((url) => url.endsWith("/workspaces/workspace-1/tree")).length, 1);
   assert.equal(fetchLog.filter((url) => url.includes("afterCursor=7")).length, 1);
-  assert.equal(fetchLog.filter((url) => url.includes("afterCursor=0")).length, 1);
+  assert.equal(fetchLog.filter((url) => url.includes("afterCursor=0")).length, 0);
   assert.ok(diagnostics.some((entry) => entry.includes("action=recover-subtree") && entry.includes("entityId=bookmark-remote")));
-  assert.ok(diagnostics.some((entry) => entry.includes("action=recover-workspace") && entry.includes("entityId=bookmark-remote")));
-  assert.equal(projection.health, "live");
-  assert.equal(projection.degradedReason, undefined);
+  assert.equal(projection.health, "degraded");
+  assert.equal(projection.convergenceJournal?.pauseReason, "ambiguous-predecessor");
 });
 
 test("connectWorkspace validates the expected parent path before folder delete continues", async () => {
@@ -1980,7 +2237,7 @@ test("connectWorkspace prunes descendant mappings and exclusions after stale fol
   assert.equal(bookmarkNodes.get("workspace-node")?.children?.length ?? 0, 0);
 });
 
-test("replay catchup skips stale historical bookmark events after subtree recovery advances the cursor", async () => {
+test("replay catchup stops at an unverified subtree event without cursor promotion", async () => {
   bookmarkNodes.set("workspace-node", createBookmarkNode({ id: "workspace-node", parentId: "1", title: "Workspace", index: 0 }));
   rebuildBookmarkChildren();
 
@@ -2097,9 +2354,11 @@ test("replay catchup skips stale historical bookmark events after subtree recove
 
   assert.equal(fetchLog.filter((url) => url.includes("afterCursor=7")).length, 2);
   assert.equal(evt9ReplayLines.length, 1);
-  assert.equal(projection.lastCursor, 9);
+  assert.equal(projection.lastCursor, 8);
+  assert.equal(projection.convergenceJournal?.receipts?.find((receipt) => receipt.cursor === 9)?.status, "pending");
+  assert.equal(projection.convergenceJournal?.repairDisposition, "rebuild");
   assert.equal(projection.chromeIdByBackendId["folder-parent"], docsFolder?.id);
-  assert.equal(projection.health, "live");
+  assert.equal(projection.health, "degraded");
   assert.equal(docsFolder?.children?.length ?? 0, 1);
   assert.equal(docsFolder?.children?.[0]?.title, "Remote Bookmark Updated");
   assert.equal(docsFolder?.children?.[0]?.url, "https://example.com/remote-updated");

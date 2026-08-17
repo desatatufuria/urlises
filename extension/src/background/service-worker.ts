@@ -10,7 +10,9 @@ import {
   login,
   markActivitySeen,
   logout,
+  rebuildWorkspace,
   resyncAll,
+  retryWorkspace,
   setSelectedWorkspaces,
 } from "./projection.js";
 import { STORAGE_KEY } from "../shared/runtime.js";
@@ -51,6 +53,12 @@ chrome.runtime.onMessage.addListener((message: { type: string; payload?: unknown
         return;
       case "projection/resync-all":
         sendResponse(await resyncAll());
+        return;
+      case "projection/retry":
+        sendResponse(await retryWorkspace((message.payload as { workspaceId: string }).workspaceId));
+        return;
+      case "projection/rebuild":
+        sendResponse(await rebuildWorkspace((message.payload as { workspaceId: string }).workspaceId));
         return;
       case "diagnostics/get":
         sendResponse(await getUiState());

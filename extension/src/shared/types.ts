@@ -171,7 +171,9 @@ export interface ConvergenceJournal {
   receipts?: RemoteReceipt[];
   localIntents: { eventId: string; kind: string; payload: { workspaceId: string; backendId: string; chromeId: string; type: "folder" | "bookmark"; kind: string; node: { id: string; parentId?: string; index?: number; title: string; url?: string } }; status: "queued" | "sent" | "acked" }[];
   attempts: number;
-  pauseReason?: "ambiguous-operation" | "identity-ambiguous" | "mapping-not-bijective" | "managed-root-missing" | "stale-mapping" | "operation-overflow" | "intent-overflow" | "cursor-zero-read-failed" | "receipt-overflow";
+  pauseReason?: "ambiguous-operation" | "identity-ambiguous" | "mapping-not-bijective" | "managed-root-missing" | "stale-mapping" | "operation-overflow" | "intent-overflow" | "cursor-zero-read-failed" | "receipt-overflow" | "receipt-capacity" | "durable-write-failed" | "complete-node-read-failed" | "final-verification-failed" | "chrome-effect-rejected" | "ambiguous-predecessor" | "bootstrap-required";
+  failedCursor?: number;
+  repairDisposition?: "retry" | "rebuild";
   queuedEpoch?: number;
 }
 

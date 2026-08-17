@@ -8,6 +8,7 @@ let sequence = 0;
 const fresh = (prefix) => `${prefix}-${++sequence}`;
 const flush = async () => { for (let index = 0; index < 96; index += 1) await Promise.resolve(); };
 const reply = (body, status = 200) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
+const mutationReply = (cursor) => new Response("{}", { status: 200, headers: { "content-type": "application/json", "X-Sync-Event-Id": fresh("ack"), "X-Sync-Cursor": String(cursor) } });
 const workspace = (id) => ({ workspaceId: id, workspaceName: id, workspaceType: "team", organizationId: `org-${id}`, organizationName: "Org", role: "editor" });
 const event = (current, kind, payload) => ({ cursor: 1, eventId: fresh("event"), workspaceId: current.workspaceId, originClientId: "remote", kind, entityType: kind.split(".")[0], entityId: payload.id, payload, createdAt: "2026-01-01T00:00:00Z" });
 
@@ -58,7 +59,7 @@ test("folder delete subtree read errors pause without removing or clearing mappi
   assert.equal(removeCalls, 0);
   assert.equal(next.chromeIdByBackendId[ids.backend], ids.chrome); assert.equal(next.chromeIdByBackendId[ids.childBackend], ids.childChrome);
   assert.equal(next.backendIdByChromeId[ids.chrome], ids.backend); assert.equal(next.backendIdByChromeId[ids.childChrome], ids.childBackend);
-  assert.equal(next.convergenceJournal.phase, "paused"); assert.equal(next.convergenceJournal.pauseReason, "ambiguous-operation");
+  assert.equal(next.convergenceJournal.phase, "paused"); assert.equal(next.convergenceJournal.pauseReason, "complete-node-read-failed");
   assert.equal(next.convergenceJournal.operations.some(({ status }) => status === "done"), false); assert.equal(next.lastCursor, 0);
   harness.teardown();
 });
@@ -112,10 +113,15 @@ test("delete verification failure pauses, workspace ownership is isolated, and u
 });
 
 test("unmatched local bookmark deletion emits exactly one bookmark mutation", async () => {
-  const { harness, projection, current, ids } = await runtime({ type: "bookmark", mode: "after" });
-  harness.fetch.respond(reply({ eventId: fresh("ack"), cursor: 2 })); harness.fetch.respond(reply({ workspace: current, folders: [] })); harness.fetch.respond(reply({ events: [], currentCursor: 2 }));
+  const { harness, projection, storage, current, ids } = await runtime({ type: "bookmark", mode: "after" });
+  harness.fetch.respond(mutationReply(2));
   void projection.handleBookmarkRemoved(ids.chrome, { parentId: `workspace:${current.workspaceId}`, index: 0, node: { id: ids.chrome, title: "local", url: "https://local.test" } }); await flush();
-  assert.equal(harness.fetch.requests.filter((request) => request.method === "DELETE" && request.url.includes("/bookmarks/")).length, 1); harness.teardown();
+  const next = (await storage.getState()).projectionsByWorkspaceId[current.workspaceId];
+  assert.equal(harness.fetch.requests.filter((request) => request.method === "DELETE" && request.url.includes("/bookmarks/")).length, 1);
+  assert.equal(next.lastCursor, 2);
+  assert.equal(next.chromeIdByBackendId[ids.backend], undefined);
+  assert.notEqual(next.convergenceJournal?.phase, "paused");
+  harness.teardown();
 });
 
 for (const prunable of [true, false]) test(`delete capacity ${prunable ? "prunes" : "pauses before effect"}`, async () => {
@@ -123,5 +129,5 @@ for (const prunable of [true, false]) test(`delete capacity ${prunable ? "prunes
   await storage.updateState((state) => { state.projectionsByWorkspaceId[current.workspaceId].convergenceJournal = { version: 1, phase: "live", localIntents: [], attempts: 0, operations: Array.from({ length: 500 }, (_, index) => ({ id: `old-${index}`, kind: "delete", backendId: `old-${index}`, fingerprint: "old", status: prunable && index === 0 ? "done" : "planned", ownership: { workspaceId: current.workspaceId, effect: "delete", type: "folder", chromeId: `old-${index}` } })) }; return state; });
   await projection.projectionTestHooks.applyRemoteEnvelope(current.workspaceId, event(current, "folder.deleted", { id: ids.backend, workspaceId: current.workspaceId }));
   const next = (await storage.getState()).projectionsByWorkspaceId[current.workspaceId];
-  assert.equal(next.convergenceJournal.phase, prunable ? "live" : "paused"); assert.equal(await new Promise((resolve) => chrome.bookmarks.get(ids.chrome, (nodes) => resolve(nodes.length))), prunable ? 0 : 1); harness.teardown();
+  assert.equal(next.convergenceJournal.phase, "paused"); assert.equal(await new Promise((resolve) => chrome.bookmarks.get(ids.chrome, (nodes) => resolve(nodes.length))), prunable ? 0 : 1); harness.teardown();
 });

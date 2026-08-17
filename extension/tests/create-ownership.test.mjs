@@ -14,6 +14,10 @@ const response = (body, status = 200) => new Response(JSON.stringify(body), {
   status,
   headers: { "content-type": "application/json" },
 });
+const mutationResponse = (body, cursor) => new Response(JSON.stringify(body), {
+  status: 201,
+  headers: { "content-type": "application/json", "X-Sync-Event-Id": fresh("ack"), "X-Sync-Cursor": String(cursor) },
+});
 const bookmarkNode = (chrome, id) => new Promise((resolve) => chrome.bookmarks.get(id, ([node]) => resolve(node)));
 
 function workspace(id) {
@@ -261,20 +265,26 @@ test("remote create final-shape mismatch pauses rather than completing ownership
 });
 
 for (const fixture of [
-  { label: "folder", create: (chrome, parentChromeId) => chrome.bookmarks.create({ parentId: parentChromeId, title: "Local folder", index: 0 }, () => {}) },
-  { label: "bookmark", create: (chrome, parentChromeId) => chrome.bookmarks.create({ parentId: parentChromeId, title: "Local bookmark", url: "https://local.test", index: 0 }, () => {}) },
+  { label: "folder", create: (chrome, parentChromeId) => new Promise((resolve) => chrome.bookmarks.create({ parentId: parentChromeId, title: "Local folder", index: 0 }, resolve)) },
+  { label: "bookmark", create: (chrome, parentChromeId) => new Promise((resolve) => chrome.bookmarks.create({ parentId: parentChromeId, title: "Local bookmark", url: "https://local.test", index: 0 }, resolve)) },
 ]) {
-  test(`local ${fixture.label} create emits exactly one domain mutation`, async () => {
+  test(`local ${fixture.label} create settles its mapping and cursor after one domain mutation`, async () => {
     const current = workspace(fresh("workspace"));
     const parentId = fresh("parent");
     const parentChromeId = fresh("parent-chrome");
-    const { harness } = await runtime({ workspaces: [{ workspace: current, parentId, parentChromeId }] });
-    harness.fetch.respond(response({ eventId: fresh("ack"), cursor: 1, duplicate: false }, 201));
-    harness.fetch.respond(response({ workspace: current, folders: [] }));
-    harness.fetch.respond(response({ events: [], currentCursor: 1 }));
-    fixture.create(chrome, fixture.label === "folder" ? `workspace:${current.workspaceId}` : parentChromeId);
+    const backendId = fresh(`backend-${fixture.label}`);
+    const { harness, storage } = await runtime({ workspaces: [{ workspace: current, parentId, parentChromeId }] });
+    harness.fetch.respond(mutationResponse(fixture.label === "folder"
+      ? { id: backendId, workspaceId: current.workspaceId, parentId: null, name: "Local folder", position: 0 }
+      : { id: backendId, workspaceId: current.workspaceId, folderId: parentId, title: "Local bookmark", url: "https://local.test", position: 0 }, 1));
+    const created = await fixture.create(chrome, fixture.label === "folder" ? `workspace:${current.workspaceId}` : parentChromeId);
     await flushMicrotasks();
+    const projection = (await storage.getState()).projectionsByWorkspaceId[current.workspaceId];
     assert.equal(harness.fetch.mutationCount(), 1);
+    assert.equal(projection.backendIdByChromeId[created.id], backendId);
+    assert.equal(projection.chromeIdByBackendId[backendId], created.id);
+    assert.equal(projection.lastCursor, 1);
+    assert.notEqual(projection.convergenceJournal?.phase, "paused");
     harness.teardown();
   });
 }

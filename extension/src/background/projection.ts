@@ -60,17 +60,17 @@ import {
 } from "./chrome-bookmarks.js";
 import { connectWorkspaceSocket } from "../shared/websocket.js";
 import type { BookmarkChangeInfo, BookmarkMoveInfo, BookmarkRemoveInfo } from "./bookmark-listeners.js";
-import { captureLocalIntent, emptyJournal } from "./convergence.js";
+import { canPersistReceipt, captureLocalIntent, createRemoteReceipt, emptyJournal, gateRemoteEffect, normalizedReceipts, rebuildJournal, reduceRemoteCallback, retryJournal, type RepairGate } from "./convergence.js";
 
 const socketClosers = new Map<string, () => void>();
 const socketTokens = new Map<string, symbol>();
 const socketConnectFlights = new Map<string, Promise<void>>();
+const liveApplyQueues = new Map<string, Promise<void>>();
 const suppressedChromeIds = new Set<string>();
 const abandonedMutationKeys = new Map<string, ReturnType<typeof setTimeout>>();
-const pendingRemoteBookmarkOps = new Map<string, PendingRemoteBookmarkOp>();
+const volatileRepairGates = new Map<string, RepairGate>();
 const MAX_SILENT_RECOVERY_ATTEMPTS = 3;
 const ABANDONED_MUTATION_TTL_MS = 1500;
-const REMOTE_BOOKMARK_OP_TTL_MS = 1500;
 
 type RemoteApplyDiagnosticContext = Record<string, string | number | boolean | undefined>;
 type RecoveryReason = "missing-parent" | "stale-mapping" | "local-404";
@@ -89,16 +89,6 @@ type RecoveryValidation =
   | { status: "valid" }
   | { status: "recover-subtree"; reason: string; invalidateBackendIds?: string[] };
 
-type PendingRemoteBookmarkOp = {
-  workspaceId: string;
-  backendId: string;
-  chromeId?: string;
-  expected?: { title?: string; url?: string };
-  targetMove?: { parentChromeId: string; index: number };
-  cursor: number;
-  expiresAt: number;
-};
-
 type CanonicalAnchor = {
   parentChromeId: string;
   folders: FolderNode[];
@@ -110,6 +100,7 @@ class RemoteApplyError extends Error {
   constructor(
     message: string,
     readonly context: RemoteApplyDiagnosticContext,
+    readonly gate: RepairGate = "chrome-effect-rejected",
   ) {
     super(message);
     this.name = "RemoteApplyError";
@@ -121,9 +112,11 @@ class RemoteDeleteReadError extends Error {}
 export const projectionTestHooks = {
   applyRemoteEnvelope,
   connectWorkspace,
+  drainLocalIntents,
   recoverWorkspace,
   replayWorkspaceDelta,
   resetRuntimeState,
+  volatileRepairGate: (workspaceId: string) => volatileRepairGates.get(workspaceId),
   socketRuntimeCounts: () => ({ tokens: socketTokens.size, closers: socketClosers.size, flights: socketConnectFlights.size }),
 };
 
@@ -223,9 +216,26 @@ export async function setSelectedWorkspaces(workspaceIds: string[]): Promise<UiS
 export async function resyncAll(): Promise<UiState> {
   const state = await getState();
   for (const workspaceId of state.selectedWorkspaceIds) {
-    await resyncWorkspace(workspaceId, "manual resync-all");
-    await connectWorkspace(workspaceId);
+    await retryWorkspace(workspaceId);
   }
+  return getUiState();
+}
+
+export async function retryWorkspace(workspaceId: string): Promise<UiState> {
+  const projection = (await getState()).projectionsByWorkspaceId[workspaceId];
+  if (!projection) return getUiState();
+  let retryable = false;
+  await updateProjectionState(workspaceId, (current) => { current.convergenceJournal = retryJournal(current.convergenceJournal ?? emptyJournal()); retryable = current.convergenceJournal.phase === "replay"; if (retryable) current.status = "syncing"; });
+  if (!retryable) return getUiState();
+  volatileRepairGates.delete(workspaceId);
+  await replayWorkspaceDelta(workspaceId, projection.lastCursor, "explicit retry");
+  return getUiState();
+}
+
+export async function rebuildWorkspace(workspaceId: string): Promise<UiState> {
+  await updateProjectionState(workspaceId, (current) => { current.convergenceJournal = rebuildJournal(current.convergenceJournal ?? emptyJournal()); });
+  volatileRepairGates.delete(workspaceId);
+  if (await doResyncWorkspace(workspaceId, "explicit rebuild", "recovering")) await connectWorkspace(workspaceId);
   return getUiState();
 }
 
@@ -235,6 +245,21 @@ type LocalIntentContext = {
   backendId: string;
   entityType: "folder" | "bookmark";
 };
+
+async function settleLocalMutation(
+  workspaceId: string,
+  cursor: number,
+  mutateProjection: (projection: ProjectionState) => void,
+): Promise<void> {
+  await updateProjectionState(workspaceId, (projection) => {
+    mutateProjection(projection);
+    projection.lastCursor = Math.max(projection.lastCursor, cursor);
+    projection.lastSyncedAt = new Date().toISOString();
+    projection.status = "ready";
+    if (projection.socketConnected) projection.health = "live";
+    projection.lastError = undefined;
+  });
+}
 
 async function captureLocalUpdateOrMove(context: LocalIntentContext, chromeId: string, kind: "changed" | "moved"): Promise<void> {
   const node = await getNode(chromeId);
@@ -266,6 +291,81 @@ async function captureLocalUpdateOrMove(context: LocalIntentContext, chromeId: s
       node: { parentId: node.parentId, index: node.index, title: node.title, url: node.url },
     });
   });
+  await drainLocalIntents(context.workspaceId, `local ${kind}`);
+}
+
+async function drainLocalIntents(workspaceId: string, reason: string): Promise<void> {
+  await runCoalescedWorkspaceTask(workspaceLocks, workspaceId, reason, () => drainLocalIntentsNow(workspaceId));
+}
+
+async function drainLocalIntentsNow(workspaceId: string): Promise<void> {
+  while (true) {
+    const state = await getState();
+    const projection = state.projectionsByWorkspaceId[workspaceId];
+    const journal = projection?.convergenceJournal;
+    if (!state.session || !projection || journal?.phase === "paused") return;
+    const intent = journal?.localIntents.find((candidate) => candidate.status !== "acked");
+    if (!intent) return;
+
+    try {
+      if (intent.payload.workspaceId !== workspaceId
+        || projection.backendIdByChromeId[intent.payload.chromeId] !== intent.payload.backendId
+        || projection.entityTypeByBackendId[intent.payload.backendId] !== intent.payload.type) {
+        throw new Error("local intent identity is outside the workspace mapping");
+      }
+      const chromeNode = await getNode(intent.payload.chromeId);
+      if (!chromeNode || !await isWithinWorkspace(chromeNode, projection.workspaceChromeId)) {
+        throw new Error("local intent node is outside the workspace projection");
+      }
+      const parentChromeId = intent.payload.node.parentId;
+      const parentBackendId = parentChromeId === projection.workspaceChromeId
+        ? null
+        : parentChromeId ? projection.backendIdByChromeId[parentChromeId] : undefined;
+      if (intent.payload.node.index === undefined || (parentChromeId !== projection.workspaceChromeId && !parentBackendId)) {
+        throw new Error("local intent parent or position is not mapped");
+      }
+      if (intent.payload.type === "bookmark" && (!parentBackendId || !intent.payload.node.url)) {
+        throw new Error("bookmark intent requires a canonical folder and URL");
+      }
+
+      await updateProjectionState(workspaceId, (current) => {
+        const pending = current.convergenceJournal?.localIntents.find((candidate) => candidate.eventId === intent.eventId);
+        if (pending && pending.status !== "acked") pending.status = "sent";
+      });
+
+      const eventId = await opaqueLocalIntentEventId(intent.eventId);
+      const ack = intent.payload.type === "folder"
+        ? (await apiUpdateFolder(state.settings.backendUrl, state.session, intent.payload.backendId, {
+          name: intent.payload.node.title,
+          parentId: parentBackendId ?? null,
+          position: intent.payload.node.index,
+        }, projection.lastCursor, eventId)).ack
+        : (await apiUpdateBookmark(state.settings.backendUrl, state.session, intent.payload.backendId, {
+          folderId: parentBackendId!,
+          title: intent.payload.node.title,
+          url: intent.payload.node.url!,
+          position: intent.payload.node.index,
+        }, projection.lastCursor, eventId)).ack;
+
+      await settleLocalMutation(workspaceId, ack.cursor, (current) => {
+        const acknowledged = current.convergenceJournal?.localIntents.find((candidate) => candidate.eventId === intent.eventId);
+        if (acknowledged) acknowledged.status = "acked";
+      });
+      await log(`intent:${workspaceId}`, `local ${intent.kind} acknowledged at cursor ${ack.cursor}`, "info");
+    } catch (error) {
+      try {
+        await log(`intent:${workspaceId}`, `local intent dispatch failed: ${describeError(error)}`, "warn");
+        await pauseWorkspace(workspaceId, (await getState()).projectionsByWorkspaceId[workspaceId]?.lastCursor ?? 0, "ambiguous-predecessor");
+      } catch {}
+      return;
+    }
+  }
+}
+
+async function opaqueLocalIntentEventId(eventId: string): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(eventId));
+  const hex = [...new Uint8Array(digest)].map((value) => value.toString(16).padStart(2, "0")).join("");
+  return `local-intent-sha256-${hex}`;
 }
 
 async function isWithinWorkspace(node: chrome.bookmarks.BookmarkTreeNode, workspaceChromeId: string | undefined): Promise<boolean> {
@@ -304,45 +404,44 @@ export async function handleBookmarkCreated(id: string, node: chrome.bookmarks.B
       return;
     }
     try {
-      await apiCreateBookmark(state.settings.backendUrl, state.session!, context.workspaceId, {
+      const { resource, ack } = await apiCreateBookmark(state.settings.backendUrl, state.session!, context.workspaceId, {
         folderId: parentBackendId,
         title: node.title,
         url: node.url,
         position: node.index,
       }, projection.lastCursor);
+      await settleLocalMutation(context.workspaceId, ack.cursor, (current) => {
+        setMapping(current, resource.id, id, "bookmark");
+      });
     } catch (error) {
       await logRejectedMutation(context.workspaceId, "bookmark create rejected by backend", error);
       return;
     }
-    await resyncWorkspace(context.workspaceId, "bookmark created locally");
     return;
   }
 
   try {
-    await apiCreateFolder(state.settings.backendUrl, state.session!, context.workspaceId, {
+    const { resource, ack } = await apiCreateFolder(state.settings.backendUrl, state.session!, context.workspaceId, {
       parentId: resolveParentBackendId(projection, node.parentId),
       name: node.title,
       position: node.index,
     }, projection.lastCursor);
+    await settleLocalMutation(context.workspaceId, ack.cursor, (current) => {
+      setMapping(current, resource.id, id, "folder");
+    });
   } catch (error) {
     await logRejectedMutation(context.workspaceId, "folder create rejected by backend", error);
-    return;
   }
-  await resyncWorkspace(context.workspaceId, "folder created locally");
 }
 
 export async function handleBookmarkChanged(id: string, changeInfo: BookmarkChangeInfo): Promise<void> {
-  const remoteOp = consumePendingRemoteBookmarkChange(id, changeInfo);
-  if (remoteOp) {
-    return;
-  }
-  if (isSuppressed(id)) {
-    return;
-  }
   const context = await resolveContext(id);
   if (!context?.backendId || !context.entityType) {
     return;
   }
+  const node = await getNode(id);
+  if (node && await consumeRemoteUpdate({ projection: context.projection, workspaceId: context.workspaceId, backendId: context.backendId, entityType: context.entityType }, id, node)) return;
+  if (isSuppressed(id)) return;
   if (isMutationAbandoned(context.workspaceId, context.backendId, id)) {
     return;
   }
@@ -359,17 +458,13 @@ export async function handleBookmarkChanged(id: string, changeInfo: BookmarkChan
 }
 
 export async function handleBookmarkMoved(id: string, moveInfo: BookmarkMoveInfo): Promise<void> {
-  const remoteOp = consumePendingRemoteBookmarkMove(id, moveInfo);
-  if (remoteOp) {
-    return;
-  }
-  if (isSuppressed(id)) {
-    return;
-  }
   const context = await resolveContext(id);
   if (!context?.backendId || !context.entityType) {
     return;
   }
+  const node = await getNode(id);
+  if (node && await isWithinWorkspace(node, context.projection.workspaceChromeId) && await consumeRemoteMove({ projection: context.projection, workspaceId: context.workspaceId, backendId: context.backendId, entityType: context.entityType }, id, node, moveInfo)) return;
+  if (isSuppressed(id)) return;
   if (isMutationAbandoned(context.workspaceId, context.backendId, id)) {
     return;
   }
@@ -430,33 +525,20 @@ export async function handleBookmarkRemoved(id: string, removeInfo: BookmarkRemo
     return;
   }
 
-  const parentBackendId = resolveParentBackendId(context.projection, removeInfo.parentId);
-
   try {
+    let ack;
     if (context.entityType === "folder") {
-      await apiDeleteFolder(context.state.settings.backendUrl, context.state.session!, context.backendId, context.projection.lastCursor);
+      ack = await apiDeleteFolder(context.state.settings.backendUrl, context.state.session!, context.backendId, context.projection.lastCursor);
     } else {
-      await apiDeleteBookmark(context.state.settings.backendUrl, context.state.session!, context.backendId, context.projection.lastCursor);
+      ack = await apiDeleteBookmark(context.state.settings.backendUrl, context.state.session!, context.backendId, context.projection.lastCursor);
     }
+    const removedChromeIds = removeInfo.node ? collectChromeIds(removeInfo.node) : [id];
+    await settleLocalMutation(context.workspaceId, ack.cursor, (projection) => {
+      removeMappingsByChromeIds(projection, removedChromeIds);
+    });
   } catch (error) {
-    await logRejectedMutation(
-      context.workspaceId,
-      "local delete rejected by backend",
-      error,
-      createRecoveryScope({
-        workspaceId: context.workspaceId,
-        entityType: context.entityType,
-        entityBackendId: context.backendId,
-        parentBackendId: parentBackendId ?? undefined,
-        mappedChromeId: id,
-        reason: "local-404",
-        pruneExclusions: true,
-      }),
-    );
-    return;
+    await logRejectedMutation(context.workspaceId, "local delete rejected by backend", error);
   }
-
-  await resyncWorkspace(context.workspaceId, "local delete accepted");
 }
 
 async function syncSelectedWorkspaces(reason: string): Promise<void> {
@@ -489,7 +571,7 @@ async function ensureWorkspaceProjection(workspaceId: string, reason: string): P
 
   const latest = (await getState()).projectionsByWorkspaceId[workspaceId];
   if (!latest || needsBootstrap(latest)) {
-    await doResyncWorkspace(workspaceId, reason, "bootstrap");
+    await pauseWorkspace(workspaceId, latest?.lastCursor ?? 0, "bootstrap-required");
   }
 }
 
@@ -564,12 +646,13 @@ async function connectWorkspaceNow(workspaceId: string): Promise<void> {
         return;
       }
       await markProjectionLive(workspaceId);
+      await drainLocalIntents(workspaceId, "socket acknowledged");
     },
     onEvent: async (event) => {
       if (!isActiveSocket()) {
         return;
       }
-      await applyRemoteEnvelope(workspaceId, event);
+      await enqueueLiveRemoteEnvelope(workspaceId, event);
     },
     onResyncRequired: async (reason) => {
       if (!isActiveSocket()) {
@@ -613,8 +696,11 @@ async function replayWorkspaceDelta(workspaceId: string, afterCursor: number, re
   }
   for (const event of replay.events) {
     await applyRemoteEnvelope(workspaceId, event, true);
+    const projection = (await getState()).projectionsByWorkspaceId[workspaceId];
+    if (!projection || projection.lastCursor < event.cursor) return;
   }
   await markProjectionLive(workspaceId, replay.currentCursor);
+  await drainLocalIntents(workspaceId, reason);
   await log(`sync:${workspaceId}`, `replayed workspace delta (${reason})`, "info");
 }
 
@@ -658,7 +744,8 @@ export async function runCoalescedWorkspaceTask(
 }
 
 async function resyncWorkspace(workspaceId: string, reason: string): Promise<void> {
-  await runCoalescedWorkspaceTask(workspaceLocks, workspaceId, reason, (currentReason) => doResyncWorkspace(workspaceId, currentReason));
+  await pauseWorkspace(workspaceId, (await getState()).projectionsByWorkspaceId[workspaceId]?.lastCursor ?? 0, "ambiguous-predecessor");
+  await log(`repair:${workspaceId}`, `automatic resync disabled: ${reason}`, "warn");
 }
 
 async function logRejectedMutation(
@@ -721,14 +808,14 @@ function buildStatusOverview(state: ExtensionState): StatusOverview {
   };
 }
 
-async function doResyncWorkspace(workspaceId: string, reason: string, targetHealth: ProjectionState["health"] = "bootstrap"): Promise<void> {
+async function doResyncWorkspace(workspaceId: string, reason: string, targetHealth: ProjectionState["health"] = "bootstrap"): Promise<boolean> {
   const state = await getState();
   if (!state.session) {
-    return;
+    return false;
   }
   const workspace = resolveWorkspace(state, workspaceId);
   if (!workspace) {
-    return;
+    return false;
   }
 
   await updateProjectionState(workspaceId, (projection) => {
@@ -779,14 +866,20 @@ async function doResyncWorkspace(workspaceId: string, reason: string, targetHeal
     const replay = await replayEvents(state.settings.backendUrl, state.session, workspaceId, 0);
     for (const event of replay.events) {
       await applyRemoteEnvelope(workspaceId, event, true);
+      if ((await getState()).projectionsByWorkspaceId[workspaceId]?.lastCursor < event.cursor) throw new Error("rebuild replay did not checkpoint");
     }
 
     await updateProjectionState(workspaceId, (projectionState) => {
-      projectionState.lastCursor = replay.currentCursor;
+      projectionState.lastCursor = Math.max(projectionState.lastCursor, replay.currentCursor);
       projectionState.lastSyncedAt = new Date().toISOString();
       projectionState.status = "ready";
       projectionState.health = projectionState.socketConnected ? "live" : targetHealth;
       projectionState.lastError = undefined;
+      if (projectionState.convergenceJournal) {
+        projectionState.convergenceJournal.phase = "live";
+        projectionState.convergenceJournal.pauseReason = undefined;
+        projectionState.convergenceJournal.failedCursor = undefined;
+      }
       if (projectionState.health === "live") {
         projectionState.recoveryAttemptCount = 0;
         projectionState.recoveryStartedAt = undefined;
@@ -796,15 +889,14 @@ async function doResyncWorkspace(workspaceId: string, reason: string, targetHeal
     }, tree.workspace);
     await recordActivity(workspaceId);
     await log(`sync:${workspaceId}`, `resynced workspace (${reason})`, "info");
-  } catch (error) {
-    await updateProjectionState(workspaceId, (projection) => {
-      projection.status = "error";
-      projection.health = "degraded";
-      projection.lastError = error instanceof Error ? error.message : "workspace resync failed";
-      projection.degradedReason = projection.lastError;
-      projection.degradedAt = new Date().toISOString();
-    }, workspace);
-    await log(`sync:${workspaceId}`, `resync failed: ${error instanceof Error ? error.message : String(error)}`, "error");
+    return true;
+  } catch {
+    try {
+      await pauseWorkspace(workspaceId, (await getState()).projectionsByWorkspaceId[workspaceId]?.lastCursor ?? 0, "chrome-effect-rejected");
+    } catch {
+      volatileRepairGates.set(workspaceId, "chrome-effect-rejected");
+    }
+    return false;
   }
 }
 
@@ -843,6 +935,7 @@ async function materializeBookmark(workspaceId: string, parentChromeId: string, 
 }
 
 async function applyRemoteEnvelope(workspaceId: string, event: SyncEnvelope, allowReplayCatchup = false): Promise<void> {
+  if (volatileRepairGates.has(workspaceId)) return;
   const state = await getState();
   const projection = state.projectionsByWorkspaceId[workspaceId];
   if (!projection) {
@@ -853,6 +946,11 @@ async function applyRemoteEnvelope(workspaceId: string, event: SyncEnvelope, all
   const baseContext = createRemoteEventContext(event, { action, projectionCursor: projection.lastCursor });
 
   if (event.cursor <= projection.lastCursor) {
+    return;
+  }
+  if (projection.convergenceJournal?.phase === "paused") return;
+  if (projection.convergenceJournal?.receipts?.some((receipt) => receipt.status === "pending")) {
+    if (!canPersistReceipt(projection.convergenceJournal, event.cursor)) await pauseWorkspace(workspaceId, event.cursor, "receipt-capacity");
     return;
   }
   if (!allowReplayCatchup && projection.lastCursor > 0 && event.cursor !== projection.lastCursor + 1) {
@@ -868,11 +966,12 @@ async function applyRemoteEnvelope(workspaceId: string, event: SyncEnvelope, all
 
   try {
     let shouldRecordActivity = false;
+    let deferCheckpoint = false;
     let activityDetail: ProjectionActivityDetail | undefined;
     switch (event.kind) {
       case "folder.created":
       case "folder.updated":
-        await applyRemoteFolderUpsert(workspaceId, event, event.payload as FolderResource, action);
+        deferCheckpoint = await applyRemoteFolderUpsert(workspaceId, event, event.payload as FolderResource, action);
         shouldRecordActivity = true;
         activityDetail = createEntityActivityDetail(
           "folder",
@@ -886,7 +985,7 @@ async function applyRemoteEnvelope(workspaceId: string, event: SyncEnvelope, all
         break;
       case "bookmark.created":
       case "bookmark.updated":
-        await applyRemoteBookmarkUpsert(workspaceId, event, event.payload as BookmarkResource, action);
+        deferCheckpoint = await applyRemoteBookmarkUpsert(workspaceId, event, event.payload as BookmarkResource, action);
         shouldRecordActivity = true;
         activityDetail = createEntityActivityDetail(
           "bookmark",
@@ -903,7 +1002,7 @@ async function applyRemoteEnvelope(workspaceId: string, event: SyncEnvelope, all
     }
 
     await updateProjectionState(workspaceId, (current) => {
-      current.lastCursor = Math.max(current.lastCursor, event.cursor);
+      if (!deferCheckpoint) current.lastCursor = Math.max(current.lastCursor, event.cursor);
       current.lastSyncedAt = new Date().toISOString();
       current.status = "ready";
       current.health = current.socketConnected ? "live" : current.health;
@@ -917,17 +1016,30 @@ async function applyRemoteEnvelope(workspaceId: string, event: SyncEnvelope, all
     }
   } catch (error) {
     const context = error instanceof RemoteApplyError ? error.context : baseContext;
-    const detail = error instanceof Error ? error.message : String(error);
-    const failClosed = error instanceof RemoteDeleteReadError;
-    await logRemoteApplyDiagnostic(workspaceId, {
-      ...context,
-      action: failClosed ? "degraded" : "resync",
-      failure: detail,
-    }, "warn");
-    await log(`sync:${workspaceId}`, `remote apply failed for ${event.kind}: ${detail}`, "warn");
-    if (failClosed) return;
-    await recoverWorkspace(workspaceId, `remote apply fallback for ${event.kind}`, "resync");
+    const gate = error instanceof RemoteDeleteReadError ? "complete-node-read-failed" : error instanceof RemoteApplyError ? error.gate : "chrome-effect-rejected";
+    if (gate === "durable-write-failed") volatileRepairGates.set(workspaceId, gate);
+    try {
+      await logRemoteApplyDiagnostic(workspaceId, { ...context, action: "paused", failure: "remote effect gate failed" }, "warn");
+      await log(`sync:${workspaceId}`, `remote apply paused at cursor ${event.cursor}`, "warn");
+    } catch {}
+    try {
+      await pauseWorkspace(workspaceId, event.cursor, gate);
+      volatileRepairGates.delete(workspaceId);
+    } catch {
+      volatileRepairGates.set(workspaceId, gate);
+    }
   }
+}
+
+function enqueueLiveRemoteEnvelope(workspaceId: string, event: SyncEnvelope): Promise<void> {
+  const previous = liveApplyQueues.get(workspaceId) ?? Promise.resolve();
+  const next = previous.catch(() => undefined).then(() => applyRemoteEnvelope(workspaceId, event));
+  liveApplyQueues.set(workspaceId, next);
+  void next.then(
+    () => { if (liveApplyQueues.get(workspaceId) === next) liveApplyQueues.delete(workspaceId); },
+    () => { if (liveApplyQueues.get(workspaceId) === next) liveApplyQueues.delete(workspaceId); },
+  );
+  return next;
 }
 
 async function applyRemoteFolderUpsert(
@@ -935,7 +1047,7 @@ async function applyRemoteFolderUpsert(
   event: SyncEnvelope,
   folder: FolderResource,
   action: "live-apply" | "replay",
-): Promise<void> {
+): Promise<boolean> {
   const projection = (await getState()).projectionsByWorkspaceId[workspaceId];
   if (!projection?.workspaceChromeId) {
     throw new Error("workspace projection missing for folder upsert");
@@ -955,14 +1067,14 @@ async function applyRemoteFolderUpsert(
     if (hiddenChromeId) {
       await deleteChromeNode(workspaceId, hiddenChromeId, folder.id, "folder");
     }
-    return;
+    return false;
   }
 
   const parentChromeId = folder.parentId ? projection.chromeIdByBackendId[folder.parentId] : projection.workspaceChromeId;
   const validation = await validateRecoveryScope(scope, parentChromeId);
   if (validation.status !== "valid") {
     await recoverSubtreeThenWorkspace(scope, validation.reason, validation.invalidateBackendIds);
-    return;
+    return false;
   }
 
   const parentState = await inspectChromeParent(parentChromeId);
@@ -978,7 +1090,7 @@ async function applyRemoteFolderUpsert(
 
   const chromeId = await reconcileFolderChromeNode(workspaceId, projection, folder, parentChromeId, scope);
   if (chromeId === null) {
-    return;
+    return false;
   }
   if (!chromeId) {
     await logRemoteApplyDiagnostic(workspaceId, {
@@ -986,7 +1098,7 @@ async function applyRemoteFolderUpsert(
       branch: "create",
     });
     const ownership = await startRemoteCreate(workspaceId, event, folder.id, "folder", parentChromeId, folder.name, undefined, folder.position);
-    if (!ownership) return;
+    if (!ownership) return false;
     const created = await withSuppression(
       async () => {
         try {
@@ -1004,12 +1116,12 @@ async function applyRemoteFolderUpsert(
       setMapping(current, folder.id, created.id, "folder");
     });
     await finishRemoteCreate(workspaceId, ownership, created.id);
-    return;
+    return false;
   }
 
   const existing = await getNode(chromeId);
   if (!existing) {
-    throw new Error("stale folder mapping");
+    throw new RemoteApplyError("stale folder mapping", baseContext, "complete-node-read-failed");
   }
   const existingContext = {
     ...baseContext,
@@ -1019,18 +1131,19 @@ async function applyRemoteFolderUpsert(
     currentIndex: existing.index,
   };
   await logRemoteApplyDiagnostic(workspaceId, existingContext);
-  await withSuppression(async () => {
-    if (existing.title !== folder.name) {
-      await updateNode(chromeId, { title: folder.name });
-    }
-    if (existing.parentId !== parentChromeId || existing.index !== folder.position) {
-      try {
-        await moveNode(chromeId, { parentId: parentChromeId, index: folder.position });
-      } catch (error) {
-        throw createRemoteApplyError(error, existingContext);
-      }
-    }
-  });
+  if (existing.parentId !== parentChromeId || existing.index !== folder.position) {
+    if (!canPersistReceipt(projection.convergenceJournal ?? emptyJournal(), event.cursor)) { await pauseWorkspace(workspaceId, event.cursor, "receipt-capacity"); return true; }
+    if (existing.parentId === undefined || existing.index === undefined) throw new RemoteApplyError("remote folder move predecessor is incomplete", existingContext, "ambiguous-predecessor");
+    await persistRemoteReceipt(workspaceId, event, folder.id, chromeId, "folder", existing, { parentId: parentChromeId, index: folder.position, title: folder.name }, { oldParentId: existing.parentId, oldIndex: existing.index, parentId: parentChromeId, index: folder.position });
+    if (existing.title !== folder.name) await updateNode(chromeId, { title: folder.name });
+    await moveNode(chromeId, { parentId: parentChromeId, index: folder.position });
+    return true;
+  }
+  const updateReceipt = existing.title !== folder.name;
+  if (updateReceipt && !canPersistReceipt(projection.convergenceJournal ?? emptyJournal(), event.cursor)) { await pauseWorkspace(workspaceId, event.cursor, "receipt-capacity"); return true; }
+  if (updateReceipt) await persistRemoteReceipt(workspaceId, event, folder.id, chromeId, "folder", existing, { parentId: existing.parentId!, index: existing.index!, title: folder.name });
+  if (updateReceipt) await updateNode(chromeId, { title: folder.name });
+  return updateReceipt;
 }
 
 async function applyRemoteBookmarkUpsert(
@@ -1038,7 +1151,7 @@ async function applyRemoteBookmarkUpsert(
   event: SyncEnvelope,
   bookmark: BookmarkResource,
   action: "live-apply" | "replay",
-): Promise<void> {
+): Promise<boolean> {
   const projection = (await getState()).projectionsByWorkspaceId[workspaceId];
   if (!projection) {
     throw new Error("workspace projection missing for bookmark upsert");
@@ -1058,14 +1171,14 @@ async function applyRemoteBookmarkUpsert(
     if (hiddenChromeId) {
       await deleteChromeNode(workspaceId, hiddenChromeId, bookmark.id, "bookmark");
     }
-    return;
+    return false;
   }
 
   const parentChromeId = projection.chromeIdByBackendId[bookmark.folderId];
   const validation = await validateRecoveryScope(scope, parentChromeId);
   if (validation.status !== "valid") {
     await recoverSubtreeThenWorkspace(scope, validation.reason, validation.invalidateBackendIds);
-    return;
+    return false;
   }
 
   const parentState = await inspectChromeParent(parentChromeId);
@@ -1081,7 +1194,7 @@ async function applyRemoteBookmarkUpsert(
 
   const chromeId = await reconcileBookmarkChromeNode(workspaceId, projection, bookmark, parentChromeId, scope);
   if (chromeId === null) {
-    return;
+    return false;
   }
   if (!chromeId) {
     await logRemoteApplyDiagnostic(workspaceId, {
@@ -1089,7 +1202,7 @@ async function applyRemoteBookmarkUpsert(
       branch: "create",
     });
     const ownership = await startRemoteCreate(workspaceId, event, bookmark.id, "bookmark", parentChromeId, bookmark.title, bookmark.url, bookmark.position);
-    if (!ownership) return;
+    if (!ownership) return false;
     const created = await withSuppression(
       async () => {
         try {
@@ -1107,12 +1220,12 @@ async function applyRemoteBookmarkUpsert(
       setMapping(current, bookmark.id, created.id, "bookmark");
     });
     await finishRemoteCreate(workspaceId, ownership, created.id);
-    return;
+    return false;
   }
 
   const existing = await getNode(chromeId);
   if (!existing) {
-    throw new Error("stale bookmark mapping");
+    throw new RemoteApplyError("stale bookmark mapping", baseContext, "complete-node-read-failed");
   }
 
   const existingContext = {
@@ -1124,46 +1237,75 @@ async function applyRemoteBookmarkUpsert(
   };
   await logRemoteApplyDiagnostic(workspaceId, existingContext);
 
-  const expectedRemoteChange = existing.title !== bookmark.title || existing.url !== bookmark.url
-    ? {
-      ...(existing.title !== bookmark.title ? { title: bookmark.title } : {}),
-      ...(existing.url !== bookmark.url ? { url: bookmark.url } : {}),
-    }
-    : undefined;
+  if (existing.parentId !== parentChromeId || existing.index !== bookmark.position) {
+    if (!canPersistReceipt(projection.convergenceJournal ?? emptyJournal(), event.cursor)) { await pauseWorkspace(workspaceId, event.cursor, "receipt-capacity"); return true; }
+    if (existing.parentId === undefined || existing.index === undefined) throw new RemoteApplyError("remote bookmark move predecessor is incomplete", existingContext, "ambiguous-predecessor");
+    await persistRemoteReceipt(workspaceId, event, bookmark.id, chromeId, "bookmark", existing, { parentId: parentChromeId, index: bookmark.position, title: bookmark.title, url: bookmark.url }, { oldParentId: existing.parentId, oldIndex: existing.index, parentId: parentChromeId, index: bookmark.position });
+    if (existing.title !== bookmark.title || existing.url !== bookmark.url) await updateNode(chromeId, { title: bookmark.title, url: bookmark.url });
+    await moveNode(chromeId, { parentId: parentChromeId, index: bookmark.position });
+    return true;
+  }
 
-  const remoteOp = registerPendingRemoteBookmarkOp({
-    workspaceId,
-    backendId: bookmark.id,
-    chromeId,
-    expected: expectedRemoteChange,
-    targetMove: existing.parentId !== parentChromeId || existing.index !== bookmark.position
-      ? { parentChromeId, index: bookmark.position }
-      : undefined,
-    cursor: event.cursor,
-  });
-
+  const updateReceipt = existing.title !== bookmark.title || existing.url !== bookmark.url;
+  if (updateReceipt && !canPersistReceipt(projection.convergenceJournal ?? emptyJournal(), event.cursor)) { await pauseWorkspace(workspaceId, event.cursor, "receipt-capacity"); return true; }
+  if (updateReceipt) await persistRemoteReceipt(workspaceId, event, bookmark.id, chromeId, "bookmark", existing, { parentId: existing.parentId!, index: existing.index!, title: bookmark.title, url: bookmark.url });
   try {
     if (existing.title !== bookmark.title || existing.url !== bookmark.url) {
       await updateNode(chromeId, { title: bookmark.title, url: bookmark.url });
     }
-    if (existing.parentId !== parentChromeId || existing.index !== bookmark.position) {
-      await moveNode(chromeId, { parentId: parentChromeId, index: bookmark.position });
-    }
   } catch (error) {
-    clearPendingRemoteBookmarkOp(remoteOp);
     throw createRemoteApplyError(error, existingContext);
   }
 
   const finalNode = await getNode(chromeId);
   if (!finalNode) {
-    clearPendingRemoteBookmarkOp(remoteOp);
-    await recoverSubtreeThenWorkspace(scope, "remote bookmark missing after apply", [bookmark.id]);
-    return;
+    throw new RemoteApplyError("remote bookmark missing after apply", existingContext, "complete-node-read-failed");
   }
   if (finalNode.parentId !== parentChromeId || finalNode.index !== bookmark.position) {
-    clearPendingRemoteBookmarkOp(remoteOp);
-    await recoverSubtreeThenWorkspace(scope, "remote bookmark final parent/index mismatch after apply", [bookmark.id]);
-    return;
+    throw new RemoteApplyError("remote bookmark final parent/index mismatch after apply", existingContext, "final-verification-failed");
+  }
+  return updateReceipt;
+}
+
+async function consumeRemoteUpdate(context: LocalIntentContext, chromeId: string, node: chrome.bookmarks.BookmarkTreeNode): Promise<boolean> {
+  return consumeRemoteCallback(context, chromeId, node, "changed");
+}
+
+async function consumeRemoteMove(context: LocalIntentContext, chromeId: string, node: chrome.bookmarks.BookmarkTreeNode, move: BookmarkMoveInfo): Promise<boolean> {
+  return consumeRemoteCallback(context, chromeId, node, "moved", move);
+}
+
+async function consumeRemoteCallback(context: LocalIntentContext, chromeId: string, node: chrome.bookmarks.BookmarkTreeNode, kind: "changed" | "moved", move?: BookmarkMoveInfo): Promise<boolean> {
+  let consumed = false;
+  await updateProjectionState(context.workspaceId, (projection) => {
+    const before = projection.convergenceJournal?.receipts ?? [];
+    const result = reduceRemoteCallback(projection.convergenceJournal ?? emptyJournal(), {
+      kind, workspaceId: context.workspaceId, backendId: context.backendId, chromeId, type: context.entityType,
+      node: { parentId: node.parentId, index: node.index, title: node.title, url: node.url }, move,
+    });
+    projection.convergenceJournal = result.journal;
+    if (result.disposition === "consumed") {
+      const pendingReceipt = result.journal.receipts?.find((receipt, index) => before[index]?.status === "pending" && receipt.status === "consumed");
+      if (pendingReceipt) projection.lastCursor = Math.max(projection.lastCursor, pendingReceipt.cursor);
+      consumed = true;
+    } else if (before.some((receipt) => receipt.status === "pending" && receipt.workspaceId === context.workspaceId && receipt.backendId === context.backendId && receipt.chromeId === chromeId)) {
+      projection.convergenceJournal = gateRemoteEffect(result.journal, before.find((receipt) => receipt.status === "pending" && receipt.workspaceId === context.workspaceId && receipt.backendId === context.backendId && receipt.chromeId === chromeId)?.cursor ?? projection.lastCursor, "final-verification-failed");
+    }
+  });
+  return consumed;
+}
+
+async function persistRemoteReceipt(workspaceId: string, event: SyncEnvelope, backendId: string, chromeId: string, type: "folder" | "bookmark", before: chrome.bookmarks.BookmarkTreeNode, expectedAfter: { parentId: string; index: number; title: string; url?: string }, move?: { oldParentId: string; oldIndex: number; parentId: string; index: number }): Promise<void> {
+  try {
+    await updateProjectionState(workspaceId, (current) => {
+      const journal = current.convergenceJournal ?? emptyJournal();
+      journal.receipts = normalizedReceipts(journal.receipts);
+      const pending = journal.receipts.some((receipt) => receipt.status === "pending" && receipt.workspaceId === workspaceId && receipt.backendId === backendId && receipt.chromeId === chromeId && receipt.type === type);
+      if (!pending) journal.receipts.push(createRemoteReceipt({ workspaceId, backendId, chromeId, type, before: { parentId: before.parentId, index: before.index, title: before.title, url: before.url }, expectedAfter, eventId: event.eventId, cursor: event.cursor, move }));
+      current.convergenceJournal = journal;
+    });
+  } catch {
+    throw new RemoteApplyError("durable receipt write failed", createRemoteEventContext(event, { operation: "receipt-write", backendId, chromeId }), "durable-write-failed");
   }
 }
 
@@ -1469,6 +1611,7 @@ async function markSocketState(workspaceId: string, connected: boolean): Promise
 
 async function markProjectionLive(workspaceId: string, currentCursor?: number): Promise<void> {
   await updateProjectionState(workspaceId, (projection) => {
+    if (projection.convergenceJournal?.phase === "paused") return;
     if (typeof currentCursor === "number") {
       projection.lastCursor = Math.max(projection.lastCursor, currentCursor);
     }
@@ -1481,6 +1624,11 @@ async function markProjectionLive(workspaceId: string, currentCursor?: number): 
     projection.degradedAt = undefined;
     projection.degradedReason = undefined;
     projection.socketConnected = true;
+    if (projection.convergenceJournal) {
+      projection.convergenceJournal.phase = "live";
+      projection.convergenceJournal.pauseReason = undefined;
+      projection.convergenceJournal.failedCursor = undefined;
+    }
   });
 }
 
@@ -1569,9 +1717,21 @@ async function recoverWorkspace(
     return;
   }
 
-  closeWorkspaceSocket(workspaceId);
-  await doResyncWorkspace(workspaceId, reason, "recovering");
-  await connectWorkspace(workspaceId);
+  await pauseWorkspace(workspaceId, (await getState()).projectionsByWorkspaceId[workspaceId]?.lastCursor ?? 0, "ambiguous-predecessor");
+}
+
+async function pauseWorkspace(workspaceId: string, cursor: number, reason: Parameters<typeof gateRemoteEffect>[2]): Promise<void> {
+  let disposition: "retry" | "rebuild" = "retry";
+  await updateProjectionState(workspaceId, (projection) => {
+    projection.convergenceJournal = gateRemoteEffect(projection.convergenceJournal ?? emptyJournal(), cursor, reason);
+    if (projection.convergenceJournal.receipts?.some((receipt) => receipt.status === "pending")) projection.convergenceJournal.repairDisposition = "rebuild";
+    disposition = projection.convergenceJournal.repairDisposition ?? "retry";
+    projection.status = "error";
+    projection.health = "degraded";
+    projection.degradedReason = reason;
+    projection.degradedAt = new Date().toISOString();
+  });
+  await log(`repair:${workspaceId}`, `paused cursor ${cursor}; ${reason}; disposition ${disposition}`, "warn");
 }
 
 async function enterRecovery(workspaceId: string, reason: string): Promise<boolean> {
@@ -1624,122 +1784,6 @@ function createRecoveryScope(scope: RecoveryScope): RecoveryScope {
 
 function createAbandonedMutationKey(workspaceId: string, value: string): string {
   return `${workspaceId}:${value}`;
-}
-
-function createPendingRemoteBookmarkOpKey(workspaceId: string, backendId: string): string {
-  return `${workspaceId}:${backendId}`;
-}
-
-function pruneExpiredPendingRemoteBookmarkOps(now = Date.now()): void {
-  for (const [key, op] of pendingRemoteBookmarkOps.entries()) {
-    if (op.expiresAt <= now) {
-      pendingRemoteBookmarkOps.delete(key);
-    }
-  }
-}
-
-function discardPendingRemoteBookmarkOps(
-  workspaceId: string,
-  backendIds: Iterable<string>,
-  chromeIds: Iterable<string>,
-): void {
-  const backendIdSet = new Set(backendIds);
-  const chromeIdSet = new Set(chromeIds);
-  if (backendIdSet.size === 0 && chromeIdSet.size === 0) {
-    return;
-  }
-
-  pruneExpiredPendingRemoteBookmarkOps();
-  for (const [key, op] of pendingRemoteBookmarkOps.entries()) {
-    if (op.workspaceId !== workspaceId) {
-      continue;
-    }
-    if (backendIdSet.has(op.backendId) || (op.chromeId && chromeIdSet.has(op.chromeId))) {
-      pendingRemoteBookmarkOps.delete(key);
-    }
-  }
-}
-
-function registerPendingRemoteBookmarkOp(input: Omit<PendingRemoteBookmarkOp, "expiresAt">): PendingRemoteBookmarkOp | undefined {
-  if (!input.expected && !input.targetMove) {
-    return undefined;
-  }
-  pruneExpiredPendingRemoteBookmarkOps();
-  const op: PendingRemoteBookmarkOp = {
-    ...input,
-    expiresAt: Date.now() + REMOTE_BOOKMARK_OP_TTL_MS,
-  };
-  pendingRemoteBookmarkOps.set(createPendingRemoteBookmarkOpKey(op.workspaceId, op.backendId), op);
-  return op;
-}
-
-function clearPendingRemoteBookmarkOp(op: PendingRemoteBookmarkOp | undefined): void {
-  if (!op) {
-    return;
-  }
-  pendingRemoteBookmarkOps.delete(createPendingRemoteBookmarkOpKey(op.workspaceId, op.backendId));
-}
-
-function findPendingRemoteBookmarkOp(chromeId: string): PendingRemoteBookmarkOp | undefined {
-  pruneExpiredPendingRemoteBookmarkOps();
-  for (const op of pendingRemoteBookmarkOps.values()) {
-    if (op.chromeId === chromeId) {
-      return op;
-    }
-  }
-  return undefined;
-}
-
-function matchesRemoteBookmarkChange(op: PendingRemoteBookmarkOp, changeInfo: BookmarkChangeInfo): boolean {
-  if (!op.expected) {
-    return false;
-  }
-  if (op.expected.title !== undefined && changeInfo.title !== op.expected.title) {
-    return false;
-  }
-  if (op.expected.url !== undefined && changeInfo.url !== op.expected.url) {
-    return false;
-  }
-  return true;
-}
-
-function matchesRemoteBookmarkMove(op: PendingRemoteBookmarkOp, moveInfo: BookmarkMoveInfo): boolean {
-  if (!op.targetMove) {
-    return false;
-  }
-  return op.targetMove.parentChromeId === moveInfo.parentId && op.targetMove.index === moveInfo.index;
-}
-
-function finalizePendingRemoteBookmarkOp(op: PendingRemoteBookmarkOp, kind: "change" | "move"): void {
-  if (kind === "change") {
-    op.expected = undefined;
-  } else {
-    op.targetMove = undefined;
-  }
-  if (!op.expected && !op.targetMove) {
-    clearPendingRemoteBookmarkOp(op);
-    return;
-  }
-  op.expiresAt = Date.now() + REMOTE_BOOKMARK_OP_TTL_MS;
-  pendingRemoteBookmarkOps.set(createPendingRemoteBookmarkOpKey(op.workspaceId, op.backendId), op);
-}
-
-function consumePendingRemoteBookmarkChange(chromeId: string, changeInfo: BookmarkChangeInfo): PendingRemoteBookmarkOp | undefined {
-  const op = findPendingRemoteBookmarkOp(chromeId);
-  if (!op || !matchesRemoteBookmarkChange(op, changeInfo)) {
-    return undefined;
-  }
-  finalizePendingRemoteBookmarkOp(op, "change");
-  return op;
-}
-
-function consumePendingRemoteBookmarkMove(chromeId: string, moveInfo: BookmarkMoveInfo): PendingRemoteBookmarkOp | undefined {
-  const op = findPendingRemoteBookmarkOp(chromeId);
-  if (!op || !matchesRemoteBookmarkMove(op, moveInfo)) {
-    return undefined;
-  }
-  finalizePendingRemoteBookmarkOp(op, "move");
-  return op;
 }
 
 function isMutationAbandoned(workspaceId: string, backendId?: string, chromeId?: string): boolean {
@@ -1832,8 +1876,6 @@ async function invalidateSubtreeMappings(scope: RecoveryScope, extraBackendIds: 
     }
   }
 
-  discardPendingRemoteBookmarkOps(scope.workspaceId, backendIds, chromeIds);
-
   await updateProjectionState(scope.workspaceId, (current) => {
     removeMappingsByBackendIds(current, backendIds);
     removeMappingsByChromeIds(current, [...chromeIds]);
@@ -1881,9 +1923,7 @@ async function recoverSubtreeThenWorkspace(
     parentBackendId: scope.parentBackendId,
   }, "warn");
 
-  closeWorkspaceSocket(scope.workspaceId);
-  await doResyncWorkspace(scope.workspaceId, reason, "recovering");
-  await connectWorkspace(scope.workspaceId);
+  await pauseWorkspace(scope.workspaceId, (await getState()).projectionsByWorkspaceId[scope.workspaceId]?.lastCursor ?? 0, "ambiguous-predecessor");
 }
 
 async function attemptSubtreeRecovery(
@@ -1939,6 +1979,7 @@ async function attemptSubtreeRecovery(
 
   for (const event of replay.events) {
     await applyRemoteEnvelope(scope.workspaceId, event, true);
+    if ((await getState()).projectionsByWorkspaceId[scope.workspaceId]?.lastCursor < event.cursor) return false;
   }
 
   await updateProjectionState(scope.workspaceId, (current) => {
@@ -2157,8 +2198,9 @@ function resetRuntimeState(): void {
   socketClosers.clear();
   socketTokens.clear();
   socketConnectFlights.clear();
+  liveApplyQueues.clear();
   suppressedChromeIds.clear();
-  pendingRemoteBookmarkOps.clear();
+  volatileRepairGates.clear();
   for (const timeout of abandonedMutationKeys.values()) {
     clearTimeout(timeout);
   }

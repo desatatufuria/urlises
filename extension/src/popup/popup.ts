@@ -22,7 +22,7 @@ let lastAcknowledgedRevision = 0;
 
 document.querySelector<HTMLFormElement>("#login-form")!.addEventListener("submit", (event) => {
   event.preventDefault();
-  void runLogin();
+  void runLogin().catch(showError);
 });
 
 document.querySelector<HTMLButtonElement>("#logout")!.addEventListener("click", () => {
@@ -33,7 +33,7 @@ document.querySelector<HTMLButtonElement>("#open-options")!.addEventListener("cl
   chrome.runtime.openOptionsPage();
 });
 
-void bootstrap();
+void bootstrap().catch(showError);
 
 async function bootstrap(): Promise<void> {
   backendUrlInput.value = DEFAULT_BACKEND_URL;
