@@ -51,6 +51,27 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--output-document=/dev/null", "http://127.0.0.1:8080/readyz"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks:
+      - default
+      - dtf-netwok
+
+  admin-web:
+    build:
+      context: ./admin-web
+      args:
+        VITE_API_BASE_URL: /api
+    image: shared-bookmark-sync-admin-web:local
+    container_name: shared-bookmark-sync-admin-web
+    ports:
+      - "127.0.0.1:${ADMIN_WEB_HOST_PORT:-0}:80"
+    depends_on:
+      backend:
+        condition: service_healthy
     networks:
       - default
       - dtf-netwok

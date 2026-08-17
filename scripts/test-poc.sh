@@ -14,7 +14,7 @@ for tool in docker curl jq go; do
 done
 
 show_logs() {
-  "${COMPOSE[@]}" logs --tail=100 postgres backend mailpit >&2 || true
+  "${COMPOSE[@]}" logs --tail=100 postgres backend admin-web mailpit >&2 || true
 }
 
 fail() {
@@ -111,7 +111,7 @@ if ! docker network inspect dtf-netwok >/dev/null 2>&1; then
 fi
 
 printf 'Starting POC services...\n'
-"${COMPOSE[@]}" up -d --build postgres backend mailpit
+"${COMPOSE[@]}" up -d --build postgres backend admin-web mailpit
 
 wait_for_http \
   "backend" \
@@ -119,6 +119,25 @@ wait_for_http \
   "http://127.0.0.1:8081/readyz" \
   BACKEND_READY_URL
 API_BASE_URL="${BACKEND_READY_URL%/readyz}"
+
+ADMIN_WEB_BINDING="$("${COMPOSE[@]}" port admin-web 80)" || fail "cannot resolve the admin web host port"
+ADMIN_WEB_PORT="${ADMIN_WEB_BINDING##*:}"
+if [[ ! "${ADMIN_WEB_PORT}" =~ ^[0-9]+$ ]]; then
+  fail "admin web host port is invalid: ${ADMIN_WEB_BINDING}"
+fi
+ADMIN_WEB_URL="http://127.0.0.1:${ADMIN_WEB_PORT}"
+
+wait_for_http \
+  "admin web" \
+  "http://shared-bookmark-sync-admin-web/" \
+  "${ADMIN_WEB_URL}/" \
+  ADMIN_WEB_READY_URL
+
+wait_for_http \
+  "admin web API proxy" \
+  "http://shared-bookmark-sync-admin-web/api/readyz" \
+  "${ADMIN_WEB_URL}/api/readyz" \
+  ADMIN_WEB_API_READY_URL
 
 wait_for_smtp
 
@@ -175,6 +194,7 @@ fi
 umask 077
 {
   printf 'API_BASE_URL=%q\n' "${API_BASE_URL}"
+  printf 'ADMIN_WEB_URL=%q\n' "${ADMIN_WEB_URL}"
   printf 'MAILPIT_UI_URL=%q\n' "http://127.0.0.1:${MAILPIT_UI_HOST_PORT:-18025}"
   printf 'SMTP_ADDR=%q\n' "${SMTP_ADDR}"
   printf 'EMAIL=%q\n' "${EMAIL}"
@@ -189,7 +209,7 @@ chmod 600 "${SESSION_FILE}"
 
 trap - ERR
 printf '\nPOC test ready\n'
-printf 'Start admin UI: cd admin-web && VITE_API_BASE_URL=/api npm run dev -- --host 0.0.0.0\n'
+printf 'Admin UI:       %s\n' "${ADMIN_WEB_URL}"
 printf 'Mailpit UI:     http://127.0.0.1:%s\n' "${MAILPIT_UI_HOST_PORT:-18025}"
 printf 'Email:          %s\n' "${EMAIL}"
 printf 'Password:       %s\n' "${PASSWORD}"
