@@ -105,7 +105,7 @@ export function AuthProvider({ children, initialSnapshot }: PropsWithChildren<{ 
     const session = await login({
       ...payload,
       clientId: getStoredClientId(),
-      deviceName: payload.deviceName?.trim() || "Admin Web",
+      deviceName: payload.deviceName?.trim() || "URLises Control",
     });
 
     const nextSnapshot = await loadSessionSnapshot(session);
@@ -118,7 +118,7 @@ export function AuthProvider({ children, initialSnapshot }: PropsWithChildren<{ 
     const session = await register({
       ...payload,
       clientId: getStoredClientId(),
-      deviceName: payload.deviceName?.trim() || "Admin Web",
+      deviceName: payload.deviceName?.trim() || "URLises Control",
     });
     const nextSnapshot = await loadSessionSnapshot(session);
     setSnapshot(nextSnapshot);

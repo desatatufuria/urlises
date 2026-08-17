@@ -1,6 +1,6 @@
-# Shared Bookmark Sync MVP
+# URLises
 
-Shared Bookmark Sync is a greenfield MVP that keeps organization and workspace bookmark trees consistent across Chrome clients while treating the Go backend as the canonical source of truth.
+URLises keeps organization and workspace bookmark trees consistent across Chrome clients while treating the Go backend as the canonical source of truth.
 
 ## Admin Control Plane Delivery
 
@@ -70,7 +70,7 @@ admin-web/
 
 Run `./scripts/test-poc.sh` to start the complete local stack, verify the admin UI and its API proxy, create a test user and organization, and run the Mailpit smoke test. The script creates the required shared Docker network (`dtf-netwok`) when absent and prints the assigned admin UI URL. Reusable local session details are written to `/tmp/shared-bookmark-sync-poc-session.env` with mode `600`.
 
-On an empty database, opening Admin Web starts a one-time owner setup: create the first account, then create its organization. The account becomes organization owner. No default administrator password is embedded in the image. Existing installations go directly to sign-in.
+On an empty database, opening URLises Control starts a one-time owner setup: create the first account, then create its organization. The account becomes organization owner. No default administrator password is embedded in the image. Existing installations go directly to sign-in.
 
 ## Local Bootstrap
 
@@ -282,7 +282,7 @@ Set `ADMIN_WEB_HOST_PORT` before `docker compose up --build` when a stable host 
 - `GET /sync/events` returns only events after the caller's cursor and rejects replay gaps with `resync_required` semantics.
 - Duplicate `X-Sync-Event-Id` values return the prior ACK without producing a second shared mutation.
 - WebSocket fan-out excludes the origin client and broadcasts only to other subscribers on the same workspace.
-- The extension projects only `Shared Bookmarks / Organization / Workspace` and ignores everything outside that managed path.
+- The extension projects only `URLises / Organization / Workspace` and ignores everything outside that managed path. If no `URLises` root exists, an exact legacy `Shared Bookmarks` root is renamed in place; when both exist, URLises uses `URLises` without merging or deleting either tree.
 - Viewer-local exclusions stay in `chrome.storage.local`, survive remote updates, and do not mutate canonical backend data.
 
 ## Extension Bring-up for This Slice
@@ -455,7 +455,7 @@ Use an authenticated admin session with the durable client header already requir
 6. Remove one grant path at a time with the matching `DELETE` endpoints and confirm remaining access is recalculated instead of dropped prematurely.
 7. Validate bookmark writes: `POST /workspaces/{workspaceId}/folders` must succeed for effective `admin`/`editor` access and fail with `403` for viewer-only or no-grant users.
 
-## Manual UI Validation: Admin Web UI
+## Manual UI Validation: URLises Control
 
 Use an authenticated organization `owner` or `admin` session against the backend target configured in `admin-web`.
 

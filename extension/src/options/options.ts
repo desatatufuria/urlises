@@ -36,7 +36,7 @@ function render(ui: UiState): void {
     return;
   }
 
-  summary.textContent = `Signed in as ${state.session.user.email}. Choose which workspaces appear under Shared Bookmarks / Organization / Workspace.`;
+  summary.textContent = `Signed in as ${state.session.user.email}. Choose which workspaces appear under URLises / Organization / Workspace.`;
   workspaceGroups.innerHTML = "";
   renderOverviewMetrics(overview);
 

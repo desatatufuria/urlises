@@ -18,7 +18,7 @@ export function AdminLayout() {
 
   return (
     <AppShell context={<>
-      <div className="ui-context-identity"><strong>OdA</strong><span>{activeOrganization?.organizationName ?? "Admin Web"}</span></div>
+      <div className="ui-context-identity"><strong>URLises</strong><span>{activeOrganization?.organizationName ?? "Control"}</span></div>
       <nav aria-label="Admin sections" className="ui-nav">
             {navItems.map((item) => (
               <NavLink

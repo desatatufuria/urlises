@@ -8,7 +8,7 @@ import { useAuth } from "../providers/AuthProvider";
 export function RegisterPage() {
   const { signUp, status } = useAuth();
   const navigate = useNavigate();
-  const [form, setForm] = useState({ name: "", email: "", password: "", confirmPassword: "", deviceName: "Admin Web" });
+  const [form, setForm] = useState({ name: "", email: "", password: "", confirmPassword: "", deviceName: "URLises Control" });
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 

@@ -1,4 +1,4 @@
-# Shared Bookmark Sync MVP Roadmap
+# URLises MVP Roadmap
 
 ## Delivery Model
 
@@ -44,7 +44,7 @@ Delivered in PR 3:
 - slice-level backend tests cover replay continuity, replay-gap detection, duplicate ACK headers, and origin suppression
 
 ### Work Unit 4
-- The extension must manage only `Shared Bookmarks / Organization / Workspace`.
+- The extension must manage only `URLises / Organization / Workspace`.
 - Viewer-local exclusions must stay local and survive remote updates.
 
 Delivered in PR 4:
@@ -104,7 +104,7 @@ Delivered PR 3 scope:
 - bookmark write guards consume the shared access resolver instead of legacy `workspace_members` checks
 - manual validation notes live in `README.md` alongside the runtime/admin endpoint summary
 
-## Admin Web UI Delivery
+## URLises Control Delivery
 
 - Workflow: Gitflow
 - Tracker branch: `feature/admin-web-ui`

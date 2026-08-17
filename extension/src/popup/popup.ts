@@ -50,7 +50,7 @@ async function runLogin(): Promise<void> {
     backendUrl: backendUrlInput.value.trim(),
     email: emailInput.value.trim(),
     password: passwordInput.value,
-    deviceName: deviceNameInput.value.trim() || "Chrome Extension",
+    deviceName: deviceNameInput.value.trim() || "URLises for Chrome",
   };
   const ui = await sendMessage<UiState>({ type: "auth/login", payload: request });
   render(ui);

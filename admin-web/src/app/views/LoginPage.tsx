@@ -8,7 +8,7 @@ import type { LoginPayload } from "../../lib/api/types";
 
 export function LoginPage() {
   const { status, signIn } = useAuth();
-  const [form, setForm] = useState<LoginPayload>({ email: "", password: "", deviceName: "Admin Web" });
+  const [form, setForm] = useState<LoginPayload>({ email: "", password: "", deviceName: "URLises Control" });
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
@@ -35,7 +35,7 @@ export function LoginPage() {
       <AppShell
         compact
       >
-        <section className="ui-login-card"><p className="ui-eyebrow">OdA operator access</p><h1 className="ui-page-title">Sign in to Admin Web</h1><p className="ui-copy">Restrained controls for organization admins only.</p><form className="ui-form" onSubmit={handleSubmit}>
+        <section className="ui-login-card"><p className="ui-eyebrow">URLises operator access</p><h1 className="ui-page-title">Sign in to URLises Control</h1><p className="ui-copy">Restrained controls for organization admins only.</p><form className="ui-form" onSubmit={handleSubmit}>
           <FormRow label="Email">
             <input
               autoComplete="email"

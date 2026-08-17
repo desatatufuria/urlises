@@ -1,5 +1,7 @@
 import { ROOT_FOLDER_TITLE } from "../shared/runtime.js";
 
+const LEGACY_ROOT_FOLDER_TITLE = "Shared Bookmarks";
+
 export async function getNode(id: string): Promise<chrome.bookmarks.BookmarkTreeNode | null> {
   return new Promise((resolve) => {
     chrome.bookmarks.get(id, (nodes) => {
@@ -119,7 +121,7 @@ export async function removeTree(id: string): Promise<void> {
 
 export async function ensureManagedPath(organizationName: string, workspaceName: string): Promise<{ rootId: string; organizationId: string; workspaceId: string }> {
   const containerId = await getDefaultContainerId();
-  const root = await ensureFolderByTitle(containerId, ROOT_FOLDER_TITLE);
+  const root = await ensureManagedRoot(containerId);
   const organization = await ensureFolderByTitle(root.id, organizationName);
   const workspace = await ensureFolderByTitle(organization.id, workspaceName);
   return { rootId: root.id, organizationId: organization.id, workspaceId: workspace.id };
@@ -157,6 +159,21 @@ async function ensureFolderByTitle(parentId: string, title: string): Promise<chr
     return existing;
   }
   return createFolder(parentId, title);
+}
+
+async function ensureManagedRoot(containerId: string): Promise<chrome.bookmarks.BookmarkTreeNode> {
+  const children = await getChildren(containerId);
+  const currentRoot = children.find((child) => !child.url && child.title === ROOT_FOLDER_TITLE);
+  if (currentRoot) {
+    return currentRoot;
+  }
+
+  const legacyRoot = children.find((child) => !child.url && child.title === LEGACY_ROOT_FOLDER_TITLE);
+  if (legacyRoot) {
+    return updateNode(legacyRoot.id, { title: ROOT_FOLDER_TITLE });
+  }
+
+  return createFolder(containerId, ROOT_FOLDER_TITLE);
 }
 
 async function getDefaultContainerId(): Promise<string> {

@@ -1,6 +1,6 @@
-# Admin Web Operator UI
+# URLises Control
 
-Minimal admin shell for OdA organization operators, now including the final PR 4 workspace and access slice.
+Operator UI for URLises organization administration, including workspace and access controls.
 
 ## Quick path
 
@@ -10,7 +10,7 @@ Minimal admin shell for OdA organization operators, now including the final PR 4
 4. Vite proxies `/api` to `http://shared-bookmark-sync-backend:8080` by default. When running elsewhere, override it with `VITE_API_PROXY_TARGET=http://...`.
 5. Use the Members, Invitations, Groups, Workspaces, and Access routes to validate the current operator surface.
 
-On a fresh database, Admin Web redirects to first-run setup. The operator supplies the initial account credentials and organization name; that account becomes owner. Setup closes after the first organization exists. If account creation succeeds but organization creation is interrupted, sign in with that account to resume the organization step.
+On a fresh database, URLises Control redirects to first-run setup. The operator supplies the initial account credentials and organization name; that account becomes owner. Setup closes after the first organization exists. If account creation succeeds but organization creation is interrupted, sign in with that account to resume the organization step.
 
 ## Details
 

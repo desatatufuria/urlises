@@ -155,6 +155,8 @@ describe("AuthProvider client id propagation", () => {
 
     expect(authenticatedRequestClientIds).toEqual(["server-client", "server-client"]);
     expect(window.localStorage.getItem(CLIENT_ID_STORAGE_KEY)).toBe("server-client");
+    const loginRequest = fetchMock.mock.calls.find(([input]) => String(input).endsWith("/auth/login"));
+    expect(JSON.parse(String(loginRequest?.[1]?.body)).deviceName).toBe("URLises Control");
     expect(fetchMock).toHaveBeenCalledTimes(4);
   });
 

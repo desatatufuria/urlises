@@ -47,7 +47,7 @@ export interface ToolbarBadgeModel {
   title: string;
 }
 
-const DEFAULT_EXTENSION_TITLE = "Shared Bookmarks Sync";
+const DEFAULT_EXTENSION_TITLE = "URLises";
 const TOOLBAR_ACTIVITY_BADGE_COLOR = "#7e9cd8";
 const TOOLBAR_DEGRADED_BADGE_COLOR = "#c34043";
 const MADRID_TIMESTAMP_FORMATTER = new Intl.DateTimeFormat(UI_TIME_LOCALE, {

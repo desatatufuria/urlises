@@ -151,6 +151,7 @@ test("toolbar badge prefers degraded state over unseen activity and clears when 
 
   assert.equal(degraded.text, "•");
   assert.equal(degraded.backgroundColor, "#c34043");
+  assert.equal(degraded.title, "URLises — degraded sync needs attention");
 
   const activity = getToolbarBadgeModel(createState({
     activitySignal: { revision: 4, lastSeenRevision: 2 },
@@ -163,6 +164,7 @@ test("toolbar badge prefers degraded state over unseen activity and clears when 
 
   assert.equal(activity.text, "•");
   assert.equal(activity.backgroundColor, "#7e9cd8");
+  assert.equal(activity.title, "URLises — new activity available");
 
   const cleared = getToolbarBadgeModel(createState({
     activitySignal: { revision: 4, lastSeenRevision: 4 },
@@ -170,6 +172,7 @@ test("toolbar badge prefers degraded state over unseen activity and clears when 
 
   assert.equal(cleared.text, "");
   assert.equal(cleared.backgroundColor, undefined);
+  assert.equal(cleared.title, "URLises");
 });
 
 test("UI timestamps use Europe/Madrid with DST-aware labels", () => {

@@ -70,3 +70,17 @@ Existing access-only sessions MUST require one interactive login before renewabl
 - GIVEN an extension has a legacy access-only session
 - WHEN it runs the upgraded extension
 - THEN it requires login once while retaining its selected workspaces and projection state
+
+### Requirement: Managed Root Brand Compatibility
+
+The extension MUST use `URLises` as its managed Chrome root. If `URLises` is absent and an exact legacy `Shared Bookmarks` folder exists in the managed container, the extension MUST rename that folder in place. If both folders exist, the extension MUST use `URLises` and MUST NOT merge or delete either folder.
+
+#### Scenario: Upgrade an existing managed root
+- GIVEN the managed container has `Shared Bookmarks` and no `URLises` folder
+- WHEN the extension ensures the managed path
+- THEN it renames the existing folder to `URLises` without changing its identity or descendants
+
+#### Scenario: Both managed root names exist
+- GIVEN the managed container has both `URLises` and `Shared Bookmarks` folders
+- WHEN the extension ensures the managed path
+- THEN it uses `URLises` without merging or deleting either folder

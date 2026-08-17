@@ -32,7 +32,7 @@ describe("admin router", () => {
   it("redirects anonymous users to login", async () => {
     renderAppRoute("/members", null);
 
-    expect(await screen.findByRole("heading", { name: /sign in to admin web/i })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: /sign in to urlises control/i })).toBeInTheDocument();
   });
 
   it("onboards the first owner and organization, then closes first-run registration", async () => {
@@ -70,7 +70,7 @@ describe("admin router", () => {
   it("keeps first-run registration closed after an organization exists", async () => {
     fetchMock.mockImplementation((input) => String(input).endsWith("/setup/status") ? jsonResponse({ required: false }) : jsonResponse({ error: "not found" }, 404));
     const { router } = renderAppRoute("/register", null);
-    expect(await screen.findByRole("heading", { name: /sign in to admin web/i })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: /sign in to urlises control/i })).toBeInTheDocument();
     expect(router.state.location.pathname).toBe("/login");
   });
 
@@ -78,7 +78,7 @@ describe("admin router", () => {
     window.localStorage.setItem("admin-web/session", JSON.stringify({ session: { accessToken: "expired", clientId: "client-1", expiresAt: "2099-01-01T00:00:00Z", user: { id: "user-1", email: "owner@example.com" } } }));
     fetchMock.mockImplementation(() => jsonResponse({ error: "unauthorized" }, 401));
     renderAppRoute("/members", null);
-    expect(await screen.findByRole("heading", { name: /sign in to admin web/i })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: /sign in to urlises control/i })).toBeInTheDocument();
     expect(screen.queryByText(/invite member/i)).not.toBeInTheDocument();
   });
 
@@ -95,6 +95,8 @@ describe("admin router", () => {
 
     expect((await screen.findAllByRole("heading", { name: /workspaces/i })).length).toBeGreaterThan(0);
     expect(screen.getByRole("navigation", { name: /admin sections/i })).toBeInTheDocument();
+    expect(screen.getByText("URLises")).toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "Active organization" })).toHaveDisplayValue("Acme");
     expect(screen.getByRole("link", { name: "Overview" })).toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "Invitations" })).not.toBeInTheDocument();
   });

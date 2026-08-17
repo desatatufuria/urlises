@@ -13,7 +13,7 @@ export function register(input: RegistrationPayload & { clientId: string }) {
       email: input.email,
       name: input.name,
       password: input.password,
-      deviceName: input.deviceName ?? "Admin Web",
+      deviceName: input.deviceName ?? "URLises Control",
     },
   });
 }
@@ -25,7 +25,7 @@ export function login(input: LoginPayload & { clientId: string }) {
     body: {
       email: input.email,
       password: input.password,
-      deviceName: input.deviceName ?? "Admin Web",
+      deviceName: input.deviceName ?? "URLises Control",
     },
   });
 }

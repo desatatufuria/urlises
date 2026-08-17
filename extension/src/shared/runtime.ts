@@ -1,4 +1,4 @@
-export const ROOT_FOLDER_TITLE = "Shared Bookmarks";
+export const ROOT_FOLDER_TITLE = "URLises";
 export const DEFAULT_BACKEND_URL = "http://localhost:8081";
 export const STORAGE_KEY = "sharedBookmarkSyncState";
 export const ACCESS_TOKEN_STORAGE_KEY = "sharedBookmarkSyncAccessToken";

@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "Shared Bookmark Sync MVP",
+  "name": "URLises for Chrome",
   "version": "0.1.0",
-  "description": "Projects backend-authoritative shared workspaces into Chrome bookmarks.",
+  "description": "Keeps selected URLises workspaces synchronized with Chrome bookmarks.",
   "permissions": ["bookmarks", "storage"],
   "host_permissions": ["http://*/*", "https://*/*", "ws://*/*", "wss://*/*"],
   "background": {
@@ -22,7 +22,7 @@
       "48": "icons/icon-48.png",
       "128": "icons/icon-128.png"
     },
-    "default_title": "Shared Bookmark Sync",
+    "default_title": "URLises",
     "default_popup": "src/popup/popup.html"
   },
   "options_page": "src/options/options.html"
