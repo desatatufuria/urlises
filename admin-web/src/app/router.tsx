@@ -10,6 +10,7 @@ import { WorkspacesPage } from "../features/workspaces/WorkspacesPage";
 import { StateHome } from "../features/home/StateHome";
 import { LoginPage } from "./views/LoginPage";
 import { OrganizationSetupPage } from "./views/OrganizationSetupPage";
+import { OrganizationCreatePage } from "./views/OrganizationCreatePage";
 import { RegisterPage } from "./views/RegisterPage";
 
 function LoadingScreen() {
@@ -83,6 +84,7 @@ export const appRoutes: RouteObject[] = [
             element: <AdminLayout />,
             children: [
               { index: true, element: <StateHome /> },
+              { path: "organizations/new", element: <OrganizationCreatePage /> },
               {
                 path: "members",
                 element: <MembersPage />,

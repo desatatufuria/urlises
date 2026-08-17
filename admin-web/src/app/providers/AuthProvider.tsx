@@ -18,7 +18,7 @@ interface AuthContextValue extends AuthSnapshot {
   status: AuthStatus;
   signIn: (payload: LoginPayload) => Promise<void>;
   signUp: (payload: RegistrationPayload) => Promise<void>;
-  createOwnerOrganization: (name: string, idempotencyKey: string) => Promise<void>;
+  createOwnerOrganization: (name: string, idempotencyKey: string) => Promise<OrganizationMembership>;
   signOut: () => Promise<void>;
   refreshOrganizations: () => Promise<void>;
 }
@@ -132,6 +132,7 @@ export function AuthProvider({ children, initialSnapshot }: PropsWithChildren<{ 
     const nextSnapshot = { ...snapshot, organizations: [...snapshot.organizations, organization] };
     setSnapshot(nextSnapshot);
     persistSnapshot(nextSnapshot);
+    return organization;
   }, [snapshot]);
 
 	const signOut = useCallback(async () => {

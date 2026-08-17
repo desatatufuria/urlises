@@ -99,6 +99,37 @@ func TestIdempotencyRoutesCreateAndReplayAllFive(t *testing.T) {
 	}
 }
 
+func TestIdempotencyRoutesAllowAuthenticatedMemberToCreateOrganization(t *testing.T) {
+	ctx, pool := openRoutesPool(t)
+	ownerID := seedRouteUser(t, ctx, pool, "member-create-owner@example.com")
+	memberID := seedRouteUser(t, ctx, pool, "member-create-user@example.com")
+	baseOrgID := seedRouteOrganization(t, ctx, pool, ownerID, "Member Create Base")
+	if _, err := pool.Exec(ctx, `INSERT INTO organization_members (organization_id, user_id, role) VALUES ($1, $2, 'member')`, baseOrgID, memberID); err != nil {
+		t.Fatal(err)
+	}
+
+	response := routeRequest(routesMux(memberID, pool), http.MethodPost, "/organizations", `{"name":"Member Created Organization"}`, "member-create-key")
+	if response.Code != http.StatusCreated {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+
+	var membership map[string]any
+	if err := json.Unmarshal(response.Body.Bytes(), &membership); err != nil {
+		t.Fatal(err)
+	}
+	organizationID := stringField(t, membership, "organizationId")
+	if membership["role"] != "owner" {
+		t.Fatalf("created membership role=%v, want owner", membership["role"])
+	}
+	var storedRole string
+	if err := pool.QueryRow(ctx, `SELECT role FROM organization_members WHERE organization_id = $1 AND user_id = $2`, organizationID, memberID).Scan(&storedRole); err != nil {
+		t.Fatal(err)
+	}
+	if storedRole != "owner" {
+		t.Fatalf("stored role=%q, want owner", storedRole)
+	}
+}
+
 func TestIdempotencyRoutesDenyRevokedReplayWithoutStoredDTO(t *testing.T) {
 	ctx, pool := openRoutesPool(t)
 	userID := seedRouteUser(t, ctx, pool, "revoked-admin@example.com")

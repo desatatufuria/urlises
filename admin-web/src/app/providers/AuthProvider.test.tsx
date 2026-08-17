@@ -1,5 +1,5 @@
 import { render, screen, waitFor } from "@testing-library/react";
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AuthProvider, useAuth } from "./AuthProvider";
 
@@ -29,6 +29,20 @@ function SignInOnMount() {
   }, [signIn, status]);
 
   return <div data-testid="status">{status}</div>;
+}
+
+function CreateOrganizationProbe() {
+  const { createOwnerOrganization, organizations } = useAuth();
+  const created = useRef(false);
+
+  useEffect(() => {
+    if (!created.current) {
+      created.current = true;
+      void createOwnerOrganization("Ignored name", "create-key");
+    }
+  }, [createOwnerOrganization]);
+
+  return <div data-testid="organizations">{JSON.stringify(organizations)}</div>;
 }
 
 describe("AuthProvider client id propagation", () => {
@@ -142,6 +156,21 @@ describe("AuthProvider client id propagation", () => {
     expect(authenticatedRequestClientIds).toEqual(["server-client", "server-client"]);
     expect(window.localStorage.getItem(CLIENT_ID_STORAGE_KEY)).toBe("server-client");
     expect(fetchMock).toHaveBeenCalledTimes(4);
+  });
+
+  it("returns and persists the exact created owner membership", async () => {
+    const membership = { organizationId: "org-2", organizationName: "Server name", role: "owner" as const };
+    fetchMock.mockImplementation((input) => String(input).endsWith("/organizations") ? jsonResponse(membership, 201) : jsonResponse({ error: "not found" }, 404));
+    const snapshot = {
+      session: { accessToken: "token", clientId: "client", expiresAt: "2099-01-01T00:00:00Z", user: { id: "user-1", email: "owner@example.com" } },
+      principal: { userId: "user-1", email: "owner@example.com", clientId: "client" },
+      organizations: [],
+    };
+
+    render(<AuthProvider initialSnapshot={snapshot}><CreateOrganizationProbe /></AuthProvider>);
+
+    await waitFor(() => expect(screen.getByTestId("organizations")).toHaveTextContent(JSON.stringify([membership])));
+    expect(JSON.parse(window.localStorage.getItem(SESSION_STORAGE_KEY) ?? "{}").organizations).toEqual([membership]);
   });
 
   it.each(["rejected me", "expired session", "partial bootstrap failure", "malformed snapshot"]) ("leaves restoration anonymous for %s", async (scenario) => {

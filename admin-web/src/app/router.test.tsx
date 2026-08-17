@@ -1,6 +1,10 @@
-import { screen } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { MemoryRouter } from "react-router-dom";
+import { AuthProvider } from "./providers/AuthProvider";
+import { OrganizationProvider } from "./providers/OrganizationProvider";
+import { AdminLayout } from "./shell/AdminLayout";
 import { defaultAdminSnapshot, renderAppRoute } from "../test/renderRoute";
 
 function jsonResponse(body: unknown, status = 200) {
@@ -93,6 +97,83 @@ describe("admin router", () => {
     expect(screen.getByRole("navigation", { name: /admin sections/i })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Overview" })).toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "Invitations" })).not.toBeInTheDocument();
+  });
+
+  it("offers organization creation only to eligible operators and protects its route", async () => {
+    const user = userEvent.setup();
+    const { router, unmount } = renderAppRoute("/", defaultAdminSnapshot);
+    await user.click(await screen.findByRole("link", { name: /create organization/i }));
+    expect(router.state.location.pathname).toBe("/organizations/new");
+    expect(screen.getByRole("heading", { name: /create organization/i })).toBeInTheDocument();
+    await user.click(screen.getByRole("link", { name: /cancel/i }));
+    expect(router.state.location.pathname).toBe("/");
+    expect(fetchMock.mock.calls.some(([input, request]) => String(input).endsWith("/organizations") && request?.method === "POST")).toBe(false);
+    unmount();
+
+    renderAppRoute("/organizations/new", { ...defaultAdminSnapshot, organizations: [{ organizationId: "org-1", organizationName: "Acme", role: "member" }] });
+    expect(await screen.findByText(/organization admin access required/i)).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: /create organization/i })).not.toBeInTheDocument();
+  });
+
+  it("does not expose organization creation in a rendered member-only shell", () => {
+    const memberSnapshot = {
+      ...defaultAdminSnapshot,
+      organizations: [{ organizationId: "org-1", organizationName: "Acme", role: "member" as const }],
+    };
+
+    render(
+      <MemoryRouter>
+        <AuthProvider initialSnapshot={memberSnapshot}>
+          <OrganizationProvider initialOrganizationId="org-1">
+            <AdminLayout />
+          </OrganizationProvider>
+        </AuthProvider>
+      </MemoryRouter>,
+    );
+
+    expect(screen.getByRole("navigation", { name: /admin sections/i })).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /create organization/i })).not.toBeInTheDocument();
+  });
+
+  it("creates, selects, and replaces navigation to the new organization", async () => {
+    const membership = { organizationId: "org-2", organizationName: "New org", role: "owner" };
+    fetchMock.mockImplementation((input, init) => String(input).endsWith("/organizations") && init?.method === "POST" ? jsonResponse(membership, 201) : jsonResponse({ workspaces: [], members: [], invitations: [], groups: [] }));
+    const user = userEvent.setup();
+    const { router } = renderAppRoute("/organizations/new", defaultAdminSnapshot);
+    const input = await screen.findByRole("textbox", { name: /organization name/i });
+    expect(input).toHaveFocus();
+    expect(input).toBeRequired();
+    await user.type(input, "New org");
+    await user.click(screen.getByRole("button", { name: /^create organization$/i }));
+    expect(await screen.findByRole("navigation", { name: /admin sections/i })).toBeInTheDocument();
+    expect(router.state.location.pathname).toBe("/");
+    expect(window.localStorage.getItem("admin-web/active-organization-id")).toBe("org-2");
+    expect(JSON.parse(window.localStorage.getItem("admin-web/session") ?? "{}").organizations).toEqual([...defaultAdminSnapshot.organizations, membership]);
+  });
+
+  it("announces definite errors, retries uncertain failures with its key, and cancels without posting", async () => {
+    let calls = 0;
+    fetchMock.mockImplementation((input, init) => {
+      if (String(input).endsWith("/organizations") && init?.method === "POST") {
+        calls += 1;
+        return calls === 1 ? jsonResponse({ error: "Name is required" }, 422) : calls === 2 ? Promise.reject(new TypeError("network")) : jsonResponse({ organizationId: "org-2", organizationName: "New org", role: "owner" }, 201);
+      }
+      return jsonResponse({ workspaces: [], members: [], invitations: [], groups: [] });
+    });
+    const user = userEvent.setup();
+    const { router } = renderAppRoute("/organizations/new", defaultAdminSnapshot);
+    await user.type(await screen.findByRole("textbox", { name: /organization name/i }), "New org");
+    await user.click(screen.getByRole("button", { name: /^create organization$/i }));
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveAttribute("aria-atomic", "true");
+    expect(alert).toHaveTextContent("Name is required");
+    await user.click(screen.getByRole("button", { name: /^create organization$/i }));
+    const definiteKey = new Headers(fetchMock.mock.calls[0][1]?.headers).get("Idempotency-Key");
+    const uncertainKey = new Headers(fetchMock.mock.calls[1][1]?.headers).get("Idempotency-Key");
+    expect(uncertainKey).not.toBe(definiteKey);
+    await user.click(await screen.findByRole("button", { name: /retry creation/i }));
+    expect(new Headers(fetchMock.mock.calls[2][1]?.headers).get("Idempotency-Key")).toBe(uncertainKey);
+    expect(calls).toBe(3);
   });
 
   it("renders the state home at the root with pending invitation attention", async () => {
