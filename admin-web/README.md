@@ -4,10 +4,13 @@ Minimal admin shell for OdA organization operators, now including the final PR 4
 
 ## Quick path
 
-1. Install dependencies with `npm install`.
-2. In this devcontainer, start the app with `VITE_API_BASE_URL=/api npm run dev`.
-3. Vite proxies `/api` to `http://shared-bookmark-sync-backend:8080` by default. When running elsewhere, override it with `VITE_API_PROXY_TARGET=http://...`.
-4. Use the Members, Invitations, Groups, Workspaces, and Access routes to validate the current operator surface.
+1. From the repository root, run `docker compose up --build`.
+2. Run `docker compose port admin-web 80` and open the reported loopback address; Nginx proxies `/api` to the Compose backend.
+3. For local Vite development, install dependencies with `npm install` and run `VITE_API_BASE_URL=/api npm run dev`.
+4. Vite proxies `/api` to `http://shared-bookmark-sync-backend:8080` by default. When running elsewhere, override it with `VITE_API_PROXY_TARGET=http://...`.
+5. Use the Members, Invitations, Groups, Workspaces, and Access routes to validate the current operator surface.
+
+On a fresh database, Admin Web redirects to first-run setup. The operator supplies the initial account credentials and organization name; that account becomes owner. Setup closes after the first organization exists. If account creation succeeds but organization creation is interrupted, sign in with that account to resume the organization step.
 
 ## Details
 

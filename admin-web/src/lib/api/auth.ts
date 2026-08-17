@@ -1,5 +1,22 @@
 import { apiRequest } from "./client";
-import type { AdminPrincipal, AdminSession, LoginPayload } from "./types";
+import type { AdminPrincipal, AdminSession, LoginPayload, RegistrationPayload } from "./types";
+
+export function getSetupStatus() {
+  return apiRequest<{ required: boolean }>("/setup/status");
+}
+
+export function register(input: RegistrationPayload & { clientId: string }) {
+  return apiRequest<AdminSession>("/auth/register", {
+    method: "POST",
+    clientId: input.clientId,
+    body: {
+      email: input.email,
+      name: input.name,
+      password: input.password,
+      deviceName: input.deviceName ?? "Admin Web",
+    },
+  });
+}
 
 export function login(input: LoginPayload & { clientId: string }) {
   return apiRequest<AdminSession>("/auth/login", {

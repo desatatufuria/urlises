@@ -34,6 +34,15 @@ export async function listOrganizations(token: string) {
   return response.organizations;
 }
 
+export function createOrganization(token: string, name: string, idempotencyKey = newIdempotencyKey()) {
+  return apiRequest<OrganizationMembership>("/organizations", {
+    method: "POST",
+    token,
+    body: { name },
+    idempotencyKey,
+  });
+}
+
 export async function listOrganizationMembers(token: string, organizationId: string) {
   const response = await apiRequest<{ members: OrganizationMember[] }>(`/organizations/${organizationId}/members`, { token });
   return response.members;

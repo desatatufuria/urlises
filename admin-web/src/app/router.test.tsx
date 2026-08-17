@@ -31,6 +31,45 @@ describe("admin router", () => {
     expect(await screen.findByRole("heading", { name: /sign in to admin web/i })).toBeInTheDocument();
   });
 
+  it("onboards the first owner and organization, then closes first-run registration", async () => {
+    fetchMock.mockImplementation((input, init) => {
+      const url = String(input);
+      const method = init?.method ?? "GET";
+      if (url.endsWith("/setup/status")) return jsonResponse({ required: true });
+      if (url.endsWith("/auth/register")) return jsonResponse({ accessToken: "setup-token", clientId: "setup-client", expiresAt: "2099-01-01T00:00:00Z", user: { id: "owner-1", email: "owner@example.com", name: "Owner" } }, 201);
+      if (url.endsWith("/me")) return jsonResponse({ userId: "owner-1", email: "owner@example.com", name: "Owner", clientId: "setup-client" });
+      if (url.endsWith("/organizations") && method === "GET") return jsonResponse({ organizations: [] });
+      if (url.endsWith("/organizations") && method === "POST") return jsonResponse({ organizationId: "org-1", organizationName: "Acme", role: "owner" }, 201);
+      if (url.includes("/organizations/org-1/")) return jsonResponse(url.endsWith("/members") ? { members: [] } : url.endsWith("/invitations") ? { invitations: [] } : url.endsWith("/groups") ? { groups: [] } : { workspaces: [] });
+      return jsonResponse({ error: "not found" }, 404);
+    });
+
+    const user = userEvent.setup();
+    const { router } = renderAppRoute("/", null);
+    expect(await screen.findByRole("heading", { name: /create the first owner/i })).toBeInTheDocument();
+    await user.type(screen.getByRole("textbox", { name: "Name" }), "Owner");
+    await user.type(screen.getByRole("textbox", { name: "Email" }), "owner@example.com");
+    await user.type(screen.getByLabelText("Password"), "correct horse battery staple");
+    await user.type(screen.getByLabelText("Confirm password"), "correct horse battery staple");
+    await user.click(screen.getByRole("button", { name: /create owner account/i }));
+
+    expect(await screen.findByRole("heading", { name: /create your organization/i })).toBeInTheDocument();
+    await user.type(screen.getByRole("textbox", { name: /organization name/i }), "Acme");
+    await user.click(screen.getByRole("button", { name: /^create organization$/i }));
+
+    expect(await screen.findByRole("navigation", { name: /admin sections/i })).toBeInTheDocument();
+    expect(router.state.location.pathname).toBe("/");
+    const organizationRequest = fetchMock.mock.calls.find(([input, request]) => String(input).endsWith("/organizations") && request?.method === "POST");
+    expect(new Headers(organizationRequest?.[1]?.headers).get("Idempotency-Key")).toBeTruthy();
+  });
+
+  it("keeps first-run registration closed after an organization exists", async () => {
+    fetchMock.mockImplementation((input) => String(input).endsWith("/setup/status") ? jsonResponse({ required: false }) : jsonResponse({ error: "not found" }, 404));
+    const { router } = renderAppRoute("/register", null);
+    expect(await screen.findByRole("heading", { name: /sign in to admin web/i })).toBeInTheDocument();
+    expect(router.state.location.pathname).toBe("/login");
+  });
+
   it("redirects a protected members visit after restoration fails without rendering protected content", async () => {
     window.localStorage.setItem("admin-web/session", JSON.stringify({ session: { accessToken: "expired", clientId: "client-1", expiresAt: "2099-01-01T00:00:00Z", user: { id: "user-1", email: "owner@example.com" } } }));
     fetchMock.mockImplementation(() => jsonResponse({ error: "unauthorized" }, 401));

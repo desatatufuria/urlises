@@ -1,8 +1,8 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type PropsWithChildren } from "react";
-import { getMe, login, logout as apiLogout } from "../../lib/api/auth";
-import { listOrganizations } from "../../lib/api/organizations";
+import { getMe, getSetupStatus, login, logout as apiLogout, register } from "../../lib/api/auth";
+import { createOrganization, listOrganizations } from "../../lib/api/organizations";
 import { getStoredClientId, setStoredClientId } from "../../lib/api/client";
-import type { AdminPrincipal, AdminSession, LoginPayload, OrganizationMembership } from "../../lib/api/types";
+import type { AdminPrincipal, AdminSession, LoginPayload, OrganizationMembership, RegistrationPayload } from "../../lib/api/types";
 
 const STORAGE_KEY = "admin-web/session";
 
@@ -12,13 +12,15 @@ export interface AuthSnapshot {
   organizations: OrganizationMembership[];
 }
 
-type AuthStatus = "loading" | "anonymous" | "authenticated";
+type AuthStatus = "loading" | "setupRequired" | "anonymous" | "authenticated";
 
 interface AuthContextValue extends AuthSnapshot {
   status: AuthStatus;
   signIn: (payload: LoginPayload) => Promise<void>;
-	signOut: () => Promise<void>;
-	refreshOrganizations: () => Promise<void>;
+  signUp: (payload: RegistrationPayload) => Promise<void>;
+  createOwnerOrganization: (name: string, idempotencyKey: string) => Promise<void>;
+  signOut: () => Promise<void>;
+  refreshOrganizations: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -55,6 +57,15 @@ function persistSnapshot(snapshot: AuthSnapshot | null) {
 	try { window.localStorage.setItem(STORAGE_KEY, JSON.stringify(snapshot)); } catch { /* memory session remains usable */ }
 }
 
+async function loadSessionSnapshot(session: AdminSession): Promise<AuthSnapshot> {
+  setStoredClientId(session.clientId);
+  const [principal, organizations] = await Promise.all([
+    getMe(session.accessToken),
+    listOrganizations(session.accessToken),
+  ]);
+  return { session, principal, organizations };
+}
+
 export function AuthProvider({ children, initialSnapshot }: PropsWithChildren<{ initialSnapshot?: AuthSnapshot }>) {
   const [snapshot, setSnapshot] = useState<AuthSnapshot>(initialSnapshot ?? { session: null, principal: null, organizations: [] });
   const [status, setStatus] = useState<AuthStatus>(initialSnapshot ? "authenticated" : "loading");
@@ -67,18 +78,16 @@ export function AuthProvider({ children, initialSnapshot }: PropsWithChildren<{ 
     const restore = async () => {
       const stored = readStoredSnapshot();
       if (!stored?.session) {
-        setStatus("anonymous");
+        try {
+          setStatus((await getSetupStatus()).required ? "setupRequired" : "anonymous");
+        } catch {
+          setStatus("anonymous");
+        }
         return;
       }
 
       try {
-        setStoredClientId(stored.session.clientId);
-        const [principal, organizations] = await Promise.all([
-          getMe(stored.session.accessToken),
-          listOrganizations(stored.session.accessToken),
-        ]);
-
-        const nextSnapshot = { session: stored.session, principal, organizations };
+        const nextSnapshot = await loadSessionSnapshot(stored.session);
         setSnapshot(nextSnapshot);
         persistSnapshot(nextSnapshot);
         setStatus("authenticated");
@@ -99,18 +108,31 @@ export function AuthProvider({ children, initialSnapshot }: PropsWithChildren<{ 
       deviceName: payload.deviceName?.trim() || "Admin Web",
     });
 
-    setStoredClientId(session.clientId);
-
-    const [principal, organizations] = await Promise.all([
-      getMe(session.accessToken),
-      listOrganizations(session.accessToken),
-    ]);
-
-    const nextSnapshot = { session, principal, organizations };
+    const nextSnapshot = await loadSessionSnapshot(session);
     setSnapshot(nextSnapshot);
     persistSnapshot(nextSnapshot);
     setStatus("authenticated");
   }, []);
+
+  const signUp = useCallback(async (payload: RegistrationPayload) => {
+    const session = await register({
+      ...payload,
+      clientId: getStoredClientId(),
+      deviceName: payload.deviceName?.trim() || "Admin Web",
+    });
+    const nextSnapshot = await loadSessionSnapshot(session);
+    setSnapshot(nextSnapshot);
+    persistSnapshot(nextSnapshot);
+    setStatus("authenticated");
+  }, []);
+
+  const createOwnerOrganization = useCallback(async (name: string, idempotencyKey: string) => {
+    if (!snapshot.session) throw new Error("An authenticated session is required.");
+    const organization = await createOrganization(snapshot.session.accessToken, name, idempotencyKey);
+    const nextSnapshot = { ...snapshot, organizations: [...snapshot.organizations, organization] };
+    setSnapshot(nextSnapshot);
+    persistSnapshot(nextSnapshot);
+  }, [snapshot]);
 
 	const signOut = useCallback(async () => {
     if (snapshot.session?.accessToken) {
@@ -134,11 +156,13 @@ export function AuthProvider({ children, initialSnapshot }: PropsWithChildren<{ 
     () => ({
       ...snapshot,
       status,
-		signIn,
-		signOut,
-		refreshOrganizations,
+      signIn,
+      signUp,
+      createOwnerOrganization,
+      signOut,
+      refreshOrganizations,
     }),
-	[refreshOrganizations, signIn, signOut, snapshot, status],
+    [createOwnerOrganization, refreshOrganizations, signIn, signOut, signUp, snapshot, status],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

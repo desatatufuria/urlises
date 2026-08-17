@@ -25,8 +25,8 @@ function SignInOnMount() {
   const { signIn, status } = useAuth();
 
   useEffect(() => {
-    void signIn({ email: "admin@example.com", password: "secret123" });
-  }, [signIn]);
+    if (status === "anonymous") void signIn({ email: "admin@example.com", password: "secret123" });
+  }, [signIn, status]);
 
   return <div data-testid="status">{status}</div>;
 }
@@ -110,6 +110,10 @@ describe("AuthProvider client id propagation", () => {
         });
       }
 
+      if (url.endsWith("/setup/status")) {
+        return jsonResponse({ required: false });
+      }
+
       if (url.endsWith("/me") || url.endsWith("/organizations")) {
         authenticatedRequestClientIds.push(new Headers(init?.headers).get("X-Client-Id") ?? "");
       }
@@ -137,7 +141,7 @@ describe("AuthProvider client id propagation", () => {
 
     expect(authenticatedRequestClientIds).toEqual(["server-client", "server-client"]);
     expect(window.localStorage.getItem(CLIENT_ID_STORAGE_KEY)).toBe("server-client");
-    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(fetchMock).toHaveBeenCalledTimes(4);
   });
 
   it.each(["rejected me", "expired session", "partial bootstrap failure", "malformed snapshot"]) ("leaves restoration anonymous for %s", async (scenario) => {

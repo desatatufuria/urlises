@@ -68,7 +68,9 @@ admin-web/
 
 ## One-command POC test
 
-Run `./scripts/test-poc.sh` to start the local stack, create a test user and organization, and run the Mailpit smoke test. The script creates the required shared Docker network (`dtf-netwok`) when absent. Run the admin UI in the devcontainer with `cd admin-web && VITE_API_BASE_URL=/api npm run dev -- --host 0.0.0.0`. Reusable local session details are written to `/tmp/shared-bookmark-sync-poc-session.env` with mode `600`.
+Run `./scripts/test-poc.sh` to start the complete local stack, verify the admin UI and its API proxy, create a test user and organization, and run the Mailpit smoke test. The script creates the required shared Docker network (`dtf-netwok`) when absent and prints the assigned admin UI URL. Reusable local session details are written to `/tmp/shared-bookmark-sync-poc-session.env` with mode `600`.
+
+On an empty database, opening Admin Web starts a one-time owner setup: create the first account, then create its organization. The account becomes organization owner. No default administrator password is embedded in the image. Existing installations go directly to sign-in.
 
 ## Local Bootstrap
 
@@ -262,12 +264,16 @@ From the repository root:
 docker compose up --build
 ```
 
-This starts only:
+This starts:
 
 - PostgreSQL on `localhost:5433`
 - the Go backend on `localhost:8081`
+- the admin web UI on a free loopback port reported by `docker compose port admin-web 80`
+- Mailpit on `http://127.0.0.1:18025` (override with `MAILPIT_UI_HOST_PORT`)
 
-The backend container is built from `backend/Dockerfile`, bakes in the Go binary plus SQL migrations, and starts without a source bind mount. This avoids devcontainer-to-host Docker mount mismatches while keeping auto-migrations enabled.
+The backend and admin web containers are built from their Dockerfiles and start without source bind mounts. Nginx serves the admin SPA and proxies `/api` to the backend over the Compose network, avoiding devcontainer-to-host Docker mount mismatches.
+
+Set `ADMIN_WEB_HOST_PORT` before `docker compose up --build` when a stable host port is required.
 
 ## Sync Guarantees in This Slice
 

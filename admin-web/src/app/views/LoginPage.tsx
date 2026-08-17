@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from "react";
-import { Navigate } from "react-router-dom";
+import { Link, Navigate } from "react-router-dom";
 import { useAuth } from "../providers/AuthProvider";
 import { AppShell } from "../../lib/ui/components/AppShell";
 import { DataState } from "../../lib/ui/components/DataState";
@@ -66,7 +66,9 @@ export function LoginPage() {
             {submitting ? "Signing in…" : "Sign in"}
           </button>
           {error ? <DataState tone="danger" title="Sign-in failed" description={error} compact /> : null}
-        </form></section>
+        </form>
+        {status === "setupRequired" ? <p className="ui-copy"><Link to="/register">Create the first owner account</Link></p> : null}
+        </section>
       </AppShell>
     </div>
   );

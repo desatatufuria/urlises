@@ -27,6 +27,10 @@ export interface LoginPayload {
   deviceName?: string;
 }
 
+export interface RegistrationPayload extends LoginPayload {
+  name: string;
+}
+
 export interface OrganizationMembership {
   organizationId: string;
   organizationName: string;

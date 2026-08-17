@@ -17,6 +17,16 @@ type invitationAccepter interface {
 }
 
 func RegisterRoutes(mux *http.ServeMux, service *Service, invitations invitationAccepter) {
+	mux.HandleFunc("GET /setup/status", func(w http.ResponseWriter, r *http.Request) {
+		required, err := service.SetupRequired(r.Context())
+		if err != nil {
+			httpapi.WriteError(w, http.StatusServiceUnavailable, "unavailable")
+			return
+		}
+		w.Header().Set("Cache-Control", "no-store")
+		httpapi.WriteJSON(w, http.StatusOK, map[string]bool{"required": required})
+	})
+
 	mux.HandleFunc("POST /auth/register", func(w http.ResponseWriter, r *http.Request) {
 		var input RegisterInput
 		if err := httpapi.DecodeJSON(r, &input); err != nil {

@@ -119,6 +119,14 @@ func (s *Service) ClientIDHeader() string {
 	return s.clientIDHeader
 }
 
+func (s *Service) SetupRequired(ctx context.Context) (bool, error) {
+	var required bool
+	if err := s.pool.QueryRow(ctx, `SELECT NOT EXISTS(SELECT 1 FROM organizations)`).Scan(&required); err != nil {
+		return false, fmt.Errorf("check setup status: %w", err)
+	}
+	return required, nil
+}
+
 func (s *Service) Register(ctx context.Context, input RegisterInput, clientID string) (Session, error) {
 	session, _, err := s.register(ctx, input, clientID, false)
 	return session, err

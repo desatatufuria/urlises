@@ -9,6 +9,8 @@ import { MembersPage } from "../features/members/MembersPage";
 import { WorkspacesPage } from "../features/workspaces/WorkspacesPage";
 import { StateHome } from "../features/home/StateHome";
 import { LoginPage } from "./views/LoginPage";
+import { OrganizationSetupPage } from "./views/OrganizationSetupPage";
+import { RegisterPage } from "./views/RegisterPage";
 
 function LoadingScreen() {
   return <DataState tone="neutral" title="Restoring operator session" description="Checking your admin session and organization scope." />;
@@ -24,12 +26,20 @@ function RequireSession() {
   if (status === "anonymous") {
     return <Navigate to="/login" replace />;
   }
+  if (status === "setupRequired") {
+    return <Navigate to="/register" replace />;
+  }
 
   return <Outlet />;
 }
 
 function RequireAdminOrganization() {
+  const { organizations } = useAuth();
   const { adminOrganizations, activeOrganization } = useOrganization();
+
+  if (organizations.length === 0) {
+    return <Navigate to="/setup/organization" replace />;
+  }
 
   if (adminOrganizations.length === 0) {
     return (
@@ -54,9 +64,17 @@ export const appRoutes: RouteObject[] = [
     element: <LoginPage />,
   },
   {
+    path: "/register",
+    element: <RegisterPage />,
+  },
+  {
     path: "/",
     element: <RequireSession />,
     children: [
+      {
+        path: "setup/organization",
+        element: <OrganizationSetupPage />,
+      },
       {
         element: <RequireAdminOrganization />,
         children: [

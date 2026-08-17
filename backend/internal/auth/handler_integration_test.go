@@ -45,6 +45,17 @@ func TestRenewableAuthHandlerPostgres(t *testing.T) {
 		}
 		return value
 	}
+	setupStatus := func() *httptest.ResponseRecorder {
+		r := httptest.NewRequest(http.MethodGet, "/setup/status", nil)
+		w := httptest.NewRecorder()
+		mux.ServeHTTP(w, r)
+		return w
+	}
+
+	w := setupStatus()
+	if w.Code != http.StatusOK || w.Header().Get("Cache-Control") != "no-store" || decode(t, w)["required"] != true {
+		t.Fatalf("initial setup status = %d %s", w.Code, w.Body.String())
+	}
 
 	t.Run("access-only callers retain the exact session shape", func(t *testing.T) {
 		w := request("/auth/register", `{"email":"legacy@example.test","password":"password","deviceName":"Legacy"}`, "legacy-client", "")
@@ -58,6 +69,17 @@ func TestRenewableAuthHandlerPostgres(t *testing.T) {
 		w = request("/auth/login", `{"email":"legacy@example.test","password":"password"}`, "legacy-client", "")
 		if w.Code != http.StatusOK || len(decode(t, w)) != 4 {
 			t.Fatalf("access-only login = %d %s", w.Code, w.Body.String())
+		}
+		w = setupStatus()
+		if w.Code != http.StatusOK || decode(t, w)["required"] != true {
+			t.Fatalf("account-only setup status = %d %s", w.Code, w.Body.String())
+		}
+		if _, err := pool.Exec(ctx, `INSERT INTO organizations(name) VALUES('First Organization')`); err != nil {
+			t.Fatal(err)
+		}
+		w = setupStatus()
+		if w.Code != http.StatusOK || decode(t, w)["required"] != false {
+			t.Fatalf("organization setup status = %d %s", w.Code, w.Body.String())
 		}
 	})
 
