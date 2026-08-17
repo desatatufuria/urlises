@@ -204,6 +204,7 @@ npm install
 npm run build
 npm run typecheck
 npm run test:projection
+npm run package
 ```
 
 From `admin-web/`:
@@ -214,7 +215,7 @@ npm run test
 npm run build
 ```
 
-The extension build emits the service worker, popup script, and options script into `extension/dist/`.
+The extension build emits the service worker, popup script, and options script into `extension/dist/`. `npm run package` runs type checking and the full extension test/build gate, then creates `extension/release/urlises-for-chrome-<manifest-version>.zip`. The packager requires the system `zip` executable, validates the final archive allowlist, and prints its SHA-256 digest. When invoking `node scripts/package.mjs` directly, build `dist/` first.
 
 Current automated extension coverage for this slice focuses on:
 

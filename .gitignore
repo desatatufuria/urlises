@@ -4,4 +4,5 @@
 /admin-web/dist/
 /extension/node_modules/
 /extension/dist/
+/extension/release/
 /tmp/
