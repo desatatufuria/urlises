@@ -51,7 +51,7 @@ values
   ('33333333-3333-3333-3333-333333333333', '11111111-1111-1111-1111-111111111111', '$USER_ID', 'admin', now())
 on conflict do nothing;
 
-insert into workspace_members (id, workspace_id, user_id, role, created_at)
+insert into workspace_user_access (id, workspace_id, user_id, role, created_at)
 values
   ('44444444-4444-4444-4444-444444444444', '22222222-2222-2222-2222-222222222222', '$USER_ID', 'admin', now())
 on conflict do nothing;
