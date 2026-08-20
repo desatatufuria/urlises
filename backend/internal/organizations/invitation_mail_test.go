@@ -235,6 +235,15 @@ func TestNotifyInvitationLogsSendErrorReason(t *testing.T) {
 	if !strings.Contains(logOutput, "reason=send_error") {
 		t.Fatalf("log = %q, want reason=send_error", logOutput)
 	}
+	// The underlying error from mailer.Mailer.Send is safe to log: the only
+	// concrete implementation (SMTPMailer) never wraps credentials, message
+	// bodies, or raw server responses into it (see internal/mailer/smtp.go's
+	// stageError, which only ever produces "smtp <stage> failed" or a context
+	// error). Without this, an operator has no way to tell a dial failure
+	// from an auth failure from a TLS failure.
+	if !strings.Contains(logOutput, `detail="connection refused"`) {
+		t.Fatalf("log = %q, want detail=%q with the underlying error", logOutput, "connection refused")
+	}
 }
 
 // Triangulation: a successful send logs event=invitation_email_sent.

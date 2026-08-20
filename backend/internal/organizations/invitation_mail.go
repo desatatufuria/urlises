@@ -59,11 +59,17 @@ func (n *MailInvitationNotifier) NotifyInvitation(ctx context.Context, notificat
 	message := composeInvitationMessage(n.publicBaseURL, notification)
 	err := n.mailer.Send(ctx, message)
 	if err != nil {
-		reason := "send_error"
 		if errors.Is(err, mailer.ErrDisabled) {
-			reason = "disabled"
+			n.logger.Printf("event=invitation_email_failed invitation_id=%q organization_id=%q reason=disabled", notification.InvitationID, notification.OrganizationID)
+			return err
 		}
-		n.logger.Printf("event=invitation_email_failed invitation_id=%q organization_id=%q reason=%s", notification.InvitationID, notification.OrganizationID, reason)
+		// err is safe to log: the only concrete Mailer implementation
+		// (SMTPMailer) never wraps credentials, message bodies, or raw
+		// server responses into it — see internal/mailer/smtp.go's
+		// stageError, which only ever produces "smtp <stage> failed" or
+		// a context error. This detail is what lets an operator tell a
+		// dial failure from an auth failure from a TLS failure.
+		n.logger.Printf("event=invitation_email_failed invitation_id=%q organization_id=%q reason=send_error detail=%q", notification.InvitationID, notification.OrganizationID, err.Error())
 		return err
 	}
 	n.logger.Printf("event=invitation_email_sent invitation_id=%q organization_id=%q", notification.InvitationID, notification.OrganizationID)
