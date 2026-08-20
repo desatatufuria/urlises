@@ -34,14 +34,6 @@ services:
       PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-https://admin.urlises.lab.dtfuria.xyz}
     ports:
       - "${BIND_ADDR:-10.77.0.2}:${API_PORT:-8080}:8080"
-    extra_hosts:
-      # Route MAIL_SMTP_HOST over the WireGuard mesh instead of its public IP.
-      # The TLS certificate is issued for the hostname, so the hostname must
-      # stay as-is (SNI/cert validation would fail against a bare IP) — only
-      # override what address it resolves to inside this container. Set both
-      # MAIL_SMTP_HOST_IP and MAIL_SMTP_HOST to match your mail server's real
-      # WireGuard peer if it isn't publicly reachable on MAIL_SMTP_PORT.
-      - "${MAIL_SMTP_HOST:-mail.urlises.lab.dtfuria.xyz}:${MAIL_SMTP_HOST_IP:-10.77.0.3}"
     depends_on:
       postgres:
         condition: service_healthy
