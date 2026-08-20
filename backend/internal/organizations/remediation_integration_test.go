@@ -174,7 +174,7 @@ func TestInvitationSafetyScenarios(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create active invitation: %v", err)
 	}
-	if _, err := pool.Exec(ctx, `UPDATE invitations SET expires_at = NOW() - INTERVAL '1 minute' WHERE id = $1`, invitation.ID); err != nil {
+	if _, err := pool.Exec(ctx, `UPDATE invitations SET expires_at = NOW() - INTERVAL '1 minute' WHERE id = $1`, invitation.Invitation.ID); err != nil {
 		t.Fatalf("expire invitation: %v", err)
 	}
 

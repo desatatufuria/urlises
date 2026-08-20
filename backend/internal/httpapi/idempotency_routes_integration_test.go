@@ -33,7 +33,7 @@ func TestIdempotencyRoutesIsolateInvitationTargets(t *testing.T) {
 		})
 	}
 	executor := httpapi.NewIdempotencyExecutor(pool)
-	organizations.RegisterRoutes(mux, authn, organizations.NewService(pool), executor)
+	organizations.RegisterRoutes(mux, authn, organizations.NewService(pool), nil, executor)
 
 	body := `{"email":"invitee@example.com","role":"member"}`
 	first := routeRequest(mux, http.MethodPost, "/organizations/"+orgA+"/invitations", body, "shared-key")
@@ -160,7 +160,7 @@ func routesMux(userID string, pool *pgxpool.Pool) *http.ServeMux {
 		})
 	}
 	executor := httpapi.NewIdempotencyExecutor(pool)
-	organizations.RegisterRoutes(mux, authn, organizations.NewService(pool), executor)
+	organizations.RegisterRoutes(mux, authn, organizations.NewService(pool), nil, executor)
 	groups.RegisterRoutes(mux, authn, groups.NewService(pool), executor)
 	workspaces.RegisterRoutes(mux, authn, workspaces.NewService(pool, nil), executor)
 	return mux

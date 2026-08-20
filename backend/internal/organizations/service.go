@@ -98,6 +98,20 @@ type AcceptedInvitation struct {
 	Role             string `json:"role"`
 }
 
+// invitationTTL is D1: a fixed 7-day expiry, no env knob, no migration.
+const invitationTTL = 168 * time.Hour
+
+// InvitationCreation carries the created invitation plus the organization and
+// inviter context needed to compose the invitation email, without widening
+// Invitation's own serialized JSON shape.
+type InvitationCreation struct {
+	Invitation       Invitation
+	OrganizationName string
+	InviterEmail     string
+	InviterName      string
+	ExpiresAt        time.Time
+}
+
 type invitationRecord struct {
 	ID               string
 	OrganizationID   string
@@ -337,39 +351,39 @@ func (s *Service) PatchMember(ctx context.Context, requesterUserID, organization
 	return updatedMember, nil
 }
 
-func (s *Service) CreateInvitation(ctx context.Context, requesterUserID, organizationID string, input CreateInvitationInput) (Invitation, error) {
+func (s *Service) CreateInvitation(ctx context.Context, requesterUserID, organizationID string, input CreateInvitationInput) (InvitationCreation, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
-		return Invitation{}, fmt.Errorf("begin create invitation tx: %w", err)
+		return InvitationCreation{}, fmt.Errorf("begin create invitation tx: %w", err)
 	}
 	defer tx.Rollback(ctx)
-	invitation, err := s.CreateInvitationTx(ctx, tx, requesterUserID, organizationID, input)
+	created, err := s.CreateInvitationTx(ctx, tx, requesterUserID, organizationID, input)
 	if err != nil {
-		return Invitation{}, err
+		return InvitationCreation{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {
-		return Invitation{}, fmt.Errorf("commit create invitation tx: %w", err)
+		return InvitationCreation{}, fmt.Errorf("commit create invitation tx: %w", err)
 	}
-	return invitation, nil
+	return created, nil
 }
 
-func (s *Service) CreateInvitationTx(ctx context.Context, tx pgx.Tx, requesterUserID, organizationID string, input CreateInvitationInput) (Invitation, error) {
+func (s *Service) CreateInvitationTx(ctx context.Context, tx pgx.Tx, requesterUserID, organizationID string, input CreateInvitationInput) (InvitationCreation, error) {
 	email := strings.TrimSpace(strings.ToLower(input.Email))
 	parsedEmail, err := mail.ParseAddress(email)
 	if err != nil || parsedEmail.Address != email {
-		return Invitation{}, ErrInvalidInvitationEmail
+		return InvitationCreation{}, ErrInvalidInvitationEmail
 	}
 	role, err := normalizeOrganizationRole(input.Role)
 	if err != nil {
-		return Invitation{}, err
+		return InvitationCreation{}, err
 	}
 	token, err := generateInviteToken()
 	if err != nil {
-		return Invitation{}, err
+		return InvitationCreation{}, err
 	}
 
 	if err := requireOrganizationAdmin(ctx, tx, requesterUserID, organizationID); err != nil {
-		return Invitation{}, err
+		return InvitationCreation{}, err
 	}
 	if _, err := tx.Exec(ctx, `
 		UPDATE invitations
@@ -379,7 +393,7 @@ func (s *Service) CreateInvitationTx(ctx context.Context, tx pgx.Tx, requesterUs
 			AND expires_at IS NOT NULL
 			AND expires_at <= NOW()
 	`, organizationID); err != nil {
-		return Invitation{}, fmt.Errorf("expire pending invitations: %w", err)
+		return InvitationCreation{}, fmt.Errorf("expire pending invitations: %w", err)
 	}
 
 	var memberExists bool
@@ -390,10 +404,10 @@ func (s *Service) CreateInvitationTx(ctx context.Context, tx pgx.Tx, requesterUs
 			WHERE om.organization_id = $1 AND lower(u.email) = $2
 		)
 	`, organizationID, email).Scan(&memberExists); err != nil {
-		return Invitation{}, fmt.Errorf("check invitation member: %w", err)
+		return InvitationCreation{}, fmt.Errorf("check invitation member: %w", err)
 	}
 	if memberExists {
-		return Invitation{}, ErrInvitationMemberExists
+		return InvitationCreation{}, ErrInvitationMemberExists
 	}
 
 	var pendingExists bool
@@ -403,19 +417,21 @@ func (s *Service) CreateInvitationTx(ctx context.Context, tx pgx.Tx, requesterUs
 			WHERE organization_id = $1 AND lower(email) = $2 AND status = 'pending'
 		)
 	`, organizationID, email).Scan(&pendingExists); err != nil {
-		return Invitation{}, fmt.Errorf("check pending invitation: %w", err)
+		return InvitationCreation{}, fmt.Errorf("check pending invitation: %w", err)
 	}
 	if pendingExists {
-		return Invitation{}, ErrInvitationPendingExists
+		return InvitationCreation{}, ErrInvitationPendingExists
 	}
+
+	expiresAt := time.Now().UTC().Add(invitationTTL)
 
 	var invitation Invitation
 	err = tx.QueryRow(ctx, `
-		INSERT INTO invitations (organization_id, email, role, token, invited_by_user_id)
-		VALUES ($1, $2, $3, $4, $5)
+		INSERT INTO invitations (organization_id, email, role, token, invited_by_user_id, expires_at)
+		VALUES ($1, $2, $3, $4, $5, $6)
 		RETURNING id, organization_id, email, role, status, token, invited_by_user_id,
 			accepted_by_user_id, expires_at::text, accepted_at::text, created_at::text, updated_at::text
-	`, organizationID, email, role, token, requesterUserID).Scan(
+	`, organizationID, email, role, token, requesterUserID, expiresAt).Scan(
 		&invitation.ID,
 		&invitation.OrganizationID,
 		&invitation.Email,
@@ -432,11 +448,32 @@ func (s *Service) CreateInvitationTx(ctx context.Context, tx pgx.Tx, requesterUs
 	if err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
-			return Invitation{}, ErrInvitationPendingExists
+			return InvitationCreation{}, ErrInvitationPendingExists
 		}
-		return Invitation{}, fmt.Errorf("create invitation: %w", err)
+		return InvitationCreation{}, fmt.Errorf("create invitation: %w", err)
 	}
-	return invitation, nil
+
+	var organizationName, inviterEmail, inviterName string
+	err = tx.QueryRow(ctx, `
+		SELECT o.name, u.email, COALESCE(NULLIF(TRIM(u.name), ''), '')
+		FROM organizations o
+		JOIN users u ON u.id = $2
+		WHERE o.id = $1
+	`, organizationID, requesterUserID).Scan(&organizationName, &inviterEmail, &inviterName)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return InvitationCreation{}, ErrNotFound
+		}
+		return InvitationCreation{}, fmt.Errorf("load invitation context: %w", err)
+	}
+
+	return InvitationCreation{
+		Invitation:       invitation,
+		OrganizationName: organizationName,
+		InviterEmail:     inviterEmail,
+		InviterName:      inviterName,
+		ExpiresAt:        expiresAt,
+	}, nil
 }
 
 func (s *Service) AuthorizeInvitationTx(ctx context.Context, tx pgx.Tx, requesterUserID, organizationID string) error {

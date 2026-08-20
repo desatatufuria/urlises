@@ -16,7 +16,7 @@ type routeService interface {
 	CreateOrganization(context.Context, string, CreateOrganizationInput) (Membership, error)
 	ListMembers(context.Context, string, string) ([]OrganizationMember, error)
 	PatchMember(context.Context, string, string, PatchMemberInput) (OrganizationMember, error)
-	CreateInvitation(context.Context, string, string, CreateInvitationInput) (Invitation, error)
+	CreateInvitation(context.Context, string, string, CreateInvitationInput) (InvitationCreation, error)
 	ListInvitations(context.Context, string, string) ([]PendingInvitation, error)
 }
 
@@ -24,10 +24,10 @@ type creationTxService interface {
 	AuthorizeOrganizationCreationTx(context.Context, pgx.Tx, string) error
 	AuthorizeInvitationTx(context.Context, pgx.Tx, string, string) error
 	CreateOrganizationTx(context.Context, pgx.Tx, string, CreateOrganizationInput) (Membership, error)
-	CreateInvitationTx(context.Context, pgx.Tx, string, string, CreateInvitationInput) (Invitation, error)
+	CreateInvitationTx(context.Context, pgx.Tx, string, string, CreateInvitationInput) (InvitationCreation, error)
 }
 
-func RegisterRoutes(mux *http.ServeMux, authMiddleware func(http.Handler) http.Handler, service routeService, executors ...*httpapi.IdempotencyExecutor) {
+func RegisterRoutes(mux *http.ServeMux, authMiddleware func(http.Handler) http.Handler, service routeService, notifier invitationNotifier, executors ...*httpapi.IdempotencyExecutor) {
 	var executor *httpapi.IdempotencyExecutor
 	if len(executors) > 0 {
 		executor = executors[0]
@@ -160,26 +160,46 @@ func RegisterRoutes(mux *http.ServeMux, authMiddleware func(http.Handler) http.H
 				return
 			}
 			organizationID := r.PathValue("organizationId")
-			result, _, err := executor.Execute(r.Context(), idempotencyIdentity(r, principal.UserID, "POST /organizations/{organizationId}/invitations", []string{organizationID}, input), func(ctx context.Context, tx pgx.Tx) error {
-				return txService.AuthorizeInvitationTx(ctx, tx, principal.UserID, organizationID)
-			}, func(ctx context.Context, tx pgx.Tx) (httpapi.SafeResult, error) {
-				invitation, err := txService.CreateInvitationTx(ctx, tx, principal.UserID, organizationID, input)
-				return httpapi.SafeResult{Status: http.StatusCreated, Body: invitationCreation(invitation)}, err
+			identity := idempotencyIdentity(r, principal.UserID, "POST /organizations/{organizationId}/invitations", []string{organizationID}, input)
+			result, _, hook, err := executor.ExecutePrepared(r.Context(), idempotencyScope(identity), func(ctx context.Context, tx pgx.Tx) (httpapi.Prepared, error) {
+				if err := txService.AuthorizeInvitationTx(ctx, tx, principal.UserID, organizationID); err != nil {
+					return httpapi.Prepared{}, err
+				}
+				return httpapi.Prepared{Fingerprint: identity.Fingerprint, Command: func(ctx context.Context, tx pgx.Tx) (httpapi.SafeResult, httpapi.PostCommit, error) {
+					created, err := txService.CreateInvitationTx(ctx, tx, principal.UserID, organizationID, input)
+					if err != nil {
+						return httpapi.SafeResult{}, nil, err
+					}
+					var post httpapi.PostCommit
+					if notifier != nil {
+						notification := invitationNotification(created)
+						post = func(ctx context.Context) error { return notifier.NotifyInvitation(ctx, notification) }
+					}
+					return httpapi.SafeResult{Status: http.StatusCreated, Body: invitationCreation(created.Invitation)}, post, nil
+				}}, nil
 			})
 			if err != nil {
 				writeIdempotencyError(w, err, writeOrganizationError)
 				return
 			}
 			httpapi.WriteJSON(w, result.Status, result.Body)
+			if hook != nil {
+				_ = http.NewResponseController(w).Flush()
+				_ = hook(context.WithoutCancel(r.Context()))
+			}
 			return
 		}
-		invitation, err := service.CreateInvitation(r.Context(), principal.UserID, r.PathValue("organizationId"), input)
+		created, err := service.CreateInvitation(r.Context(), principal.UserID, r.PathValue("organizationId"), input)
 		if err != nil {
 			writeOrganizationError(w, err)
 			return
 		}
 
-		httpapi.WriteJSON(w, http.StatusCreated, invitation)
+		httpapi.WriteJSON(w, http.StatusCreated, created.Invitation)
+		if notifier != nil {
+			_ = http.NewResponseController(w).Flush()
+			_ = notifier.NotifyInvitation(context.WithoutCancel(r.Context()), invitationNotification(created))
+		}
 	})))
 
 	mux.Handle("GET /organizations/{organizationId}/invitations", authMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -202,6 +222,27 @@ func RegisterRoutes(mux *http.ServeMux, authMiddleware func(http.Handler) http.H
 func idempotencyIdentity(r *http.Request, principal, route string, targets []string, input any) httpapi.IdempotencyIdentity {
 	fingerprint, _ := httpapi.CanonicalTargetFingerprint(route, targets, input)
 	return httpapi.IdempotencyIdentity{PrincipalID: principal, Method: r.Method, Route: route + "|" + strings.Join(targets, ","), Key: r.Header.Get("Idempotency-Key"), Fingerprint: fingerprint}
+}
+
+// idempotencyScope reproduces exactly what Execute builds internally
+// (idempotency.go), so scope, fingerprint and route string stay
+// byte-identical to before and existing idempotency records stay valid.
+func idempotencyScope(identity httpapi.IdempotencyIdentity) httpapi.IdempotencyScope {
+	return httpapi.IdempotencyScope{PrincipalID: identity.PrincipalID, Method: identity.Method, Route: identity.Route, Key: identity.Key}
+}
+
+func invitationNotification(created InvitationCreation) InvitationNotification {
+	return InvitationNotification{
+		InvitationID:     created.Invitation.ID,
+		OrganizationID:   created.Invitation.OrganizationID,
+		OrganizationName: created.OrganizationName,
+		InviterEmail:     created.InviterEmail,
+		InviterName:      created.InviterName,
+		InviteeEmail:     created.Invitation.Email,
+		Role:             created.Invitation.Role,
+		Token:            created.Invitation.Token,
+		ExpiresAt:        created.ExpiresAt,
+	}
 }
 func writeIdempotencyError(w http.ResponseWriter, err error, writeDomain func(http.ResponseWriter, error)) {
 	switch {

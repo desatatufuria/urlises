@@ -1,15 +1,20 @@
 package organizations
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/furia/shared-bookmark-sync/backend/internal/auth"
+	"github.com/furia/shared-bookmark-sync/backend/internal/config"
 	"github.com/furia/shared-bookmark-sync/backend/internal/httpapi"
+	"github.com/furia/shared-bookmark-sync/backend/internal/mailer"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 type organizationsRouteStub struct {
@@ -20,7 +25,7 @@ type organizationsRouteStub struct {
 
 func TestCreationRoutesRequireIdempotencyKey(t *testing.T) {
 	mux := http.NewServeMux()
-	RegisterRoutes(mux, organizationPrincipal, &organizationsRouteStub{}, httpapi.NewIdempotencyExecutor(nil))
+	RegisterRoutes(mux, organizationPrincipal, &organizationsRouteStub{}, nil, httpapi.NewIdempotencyExecutor(nil))
 	for _, tc := range []struct{ path, body string }{{"/organizations", `{"name":"Org"}`}, {"/organizations/org-1/invitations", `{"email":"member@example.com","role":"member"}`}} {
 		t.Run(tc.path, func(t *testing.T) {
 			r := httptest.NewRequest(http.MethodPost, tc.path, strings.NewReader(tc.body))
@@ -51,8 +56,8 @@ func (s *organizationsRouteStub) ListMembers(context.Context, string, string) ([
 func (s *organizationsRouteStub) PatchMember(context.Context, string, string, PatchMemberInput) (OrganizationMember, error) {
 	return OrganizationMember{}, nil
 }
-func (s *organizationsRouteStub) CreateInvitation(context.Context, string, string, CreateInvitationInput) (Invitation, error) {
-	return Invitation{}, nil
+func (s *organizationsRouteStub) CreateInvitation(context.Context, string, string, CreateInvitationInput) (InvitationCreation, error) {
+	return InvitationCreation{}, nil
 }
 func (s *organizationsRouteStub) ListInvitations(_ context.Context, requester, _ string) ([]PendingInvitation, error) {
 	s.requester = requester
@@ -68,7 +73,7 @@ func organizationPrincipal(next http.Handler) http.Handler {
 func TestInvitationReadRouteEnvelopeAuthAndErrors(t *testing.T) {
 	stub := &organizationsRouteStub{invitations: []PendingInvitation{{ID: "invite-1", Email: "member@example.com", Status: "pending"}}}
 	mux := http.NewServeMux()
-	RegisterRoutes(mux, organizationPrincipal, stub)
+	RegisterRoutes(mux, organizationPrincipal, stub, nil)
 	recorder := httptest.NewRecorder()
 	mux.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/organizations/org-1/invitations", nil))
 	if recorder.Code != http.StatusOK || stub.requester != "admin-1" {
@@ -84,7 +89,7 @@ func TestInvitationReadRouteEnvelopeAuthAndErrors(t *testing.T) {
 		t.Fatalf("forbidden status=%d", recorder.Code)
 	}
 	mux = http.NewServeMux()
-	RegisterRoutes(mux, func(next http.Handler) http.Handler { return next }, stub)
+	RegisterRoutes(mux, func(next http.Handler) http.Handler { return next }, stub, nil)
 	recorder = httptest.NewRecorder()
 	mux.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/organizations/org-1/invitations", nil))
 	if recorder.Code != http.StatusUnauthorized {
@@ -114,6 +119,178 @@ func TestWriteOrganizationErrorMapsInvitationSafetyErrors(t *testing.T) {
 				t.Fatalf("response body = %q, want stable error %q", recorder.Body.String(), tc.err)
 			}
 		})
+	}
+}
+
+type countingInvitationNotifier struct {
+	mu    sync.Mutex
+	calls int
+	err   error
+}
+
+func (n *countingInvitationNotifier) NotifyInvitation(context.Context, InvitationNotification) error {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.calls++
+	return n.err
+}
+
+func (n *countingInvitationNotifier) count() int {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return n.calls
+}
+
+func invitationHandlerTestMux(userID string, pool *pgxpool.Pool, notifier invitationNotifier) *http.ServeMux {
+	mux := http.NewServeMux()
+	authn := func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			next.ServeHTTP(w, r.WithContext(auth.ContextWithPrincipal(r.Context(), auth.Principal{UserID: userID})))
+		})
+	}
+	executor := httpapi.NewIdempotencyExecutor(pool)
+	RegisterRoutes(mux, authn, NewService(pool), notifier, executor)
+	return mux
+}
+
+// 4.2 RED: a fresh command invokes a counting notifier stub exactly once.
+func TestInvitationRouteInvokesNotifierOnceOnFreshCommand(t *testing.T) {
+	ctx, pool := openOrganizationsTestPool(t, "organizations_handler_notify_test")
+	adminID := insertOrganizationsTestUser(t, ctx, pool, "notify-admin@example.com")
+	organizationID := insertOrganizationsTestOrganization(t, ctx, pool, "Notify Org")
+	insertOrganizationsTestMember(t, ctx, pool, organizationID, adminID, "admin")
+
+	notifier := &countingInvitationNotifier{}
+	mux := invitationHandlerTestMux(adminID, pool, notifier)
+
+	r := httptest.NewRequest(http.MethodPost, "/organizations/"+organizationID+"/invitations", strings.NewReader(`{"email":"fresh@example.com","role":"member"}`))
+	r.Header.Set("Idempotency-Key", "fresh-key")
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, r)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+	if notifier.count() != 1 {
+		t.Fatalf("notifier calls = %d, want 1", notifier.count())
+	}
+}
+
+// 4.2 RED: an idempotent replay invokes the notifier zero times.
+func TestInvitationRouteReplayDoesNotReinvokeNotifier(t *testing.T) {
+	ctx, pool := openOrganizationsTestPool(t, "organizations_handler_notify_test")
+	adminID := insertOrganizationsTestUser(t, ctx, pool, "replay-admin@example.com")
+	organizationID := insertOrganizationsTestOrganization(t, ctx, pool, "Replay Org")
+	insertOrganizationsTestMember(t, ctx, pool, organizationID, adminID, "admin")
+
+	notifier := &countingInvitationNotifier{}
+	mux := invitationHandlerTestMux(adminID, pool, notifier)
+	body := `{"email":"replay@example.com","role":"member"}`
+
+	for i := 0; i < 2; i++ {
+		r := httptest.NewRequest(http.MethodPost, "/organizations/"+organizationID+"/invitations", strings.NewReader(body))
+		r.Header.Set("Idempotency-Key", "replay-key")
+		w := httptest.NewRecorder()
+		mux.ServeHTTP(w, r)
+		if w.Code != http.StatusCreated {
+			t.Fatalf("attempt %d status=%d body=%s", i, w.Code, w.Body.String())
+		}
+	}
+	if notifier.count() != 1 {
+		t.Fatalf("notifier calls = %d, want 1 (replay must not re-send)", notifier.count())
+	}
+}
+
+// 4.2 RED: a notifier error still yields 201 with the created body.
+func TestInvitationRouteNotifierErrorStillReturns201(t *testing.T) {
+	ctx, pool := openOrganizationsTestPool(t, "organizations_handler_notify_test")
+	adminID := insertOrganizationsTestUser(t, ctx, pool, "erroring-admin@example.com")
+	organizationID := insertOrganizationsTestOrganization(t, ctx, pool, "Erroring Org")
+	insertOrganizationsTestMember(t, ctx, pool, organizationID, adminID, "admin")
+
+	notifier := &countingInvitationNotifier{err: errors.New("smtp down")}
+	mux := invitationHandlerTestMux(adminID, pool, notifier)
+
+	r := httptest.NewRequest(http.MethodPost, "/organizations/"+organizationID+"/invitations", strings.NewReader(`{"email":"erroring@example.com","role":"member"}`))
+	r.Header.Set("Idempotency-Key", "erroring-key")
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, r)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+	if !contains(w.Body.String(), "erroring@example.com") {
+		t.Fatalf("body=%s, want created invitation despite notifier error", w.Body.String())
+	}
+	if notifier.count() != 1 {
+		t.Fatalf("notifier calls = %d, want 1", notifier.count())
+	}
+}
+
+// 4.2 RED: a fingerprint conflict (same key, different body) sends nothing.
+func TestInvitationRouteFingerprintConflictSendsNothing(t *testing.T) {
+	ctx, pool := openOrganizationsTestPool(t, "organizations_handler_notify_test")
+	adminID := insertOrganizationsTestUser(t, ctx, pool, "conflict-admin@example.com")
+	organizationID := insertOrganizationsTestOrganization(t, ctx, pool, "Conflict Org")
+	insertOrganizationsTestMember(t, ctx, pool, organizationID, adminID, "admin")
+
+	notifier := &countingInvitationNotifier{}
+	mux := invitationHandlerTestMux(adminID, pool, notifier)
+
+	first := httptest.NewRequest(http.MethodPost, "/organizations/"+organizationID+"/invitations", strings.NewReader(`{"email":"conflict-one@example.com","role":"member"}`))
+	first.Header.Set("Idempotency-Key", "conflict-key")
+	w1 := httptest.NewRecorder()
+	mux.ServeHTTP(w1, first)
+	if w1.Code != http.StatusCreated {
+		t.Fatalf("first status=%d body=%s", w1.Code, w1.Body.String())
+	}
+
+	second := httptest.NewRequest(http.MethodPost, "/organizations/"+organizationID+"/invitations", strings.NewReader(`{"email":"conflict-two@example.com","role":"member"}`))
+	second.Header.Set("Idempotency-Key", "conflict-key")
+	w2 := httptest.NewRecorder()
+	mux.ServeHTTP(w2, second)
+	if w2.Code != http.StatusConflict {
+		t.Fatalf("second status=%d body=%s", w2.Code, w2.Body.String())
+	}
+	if notifier.count() != 1 {
+		t.Fatalf("notifier calls = %d, want 1 (conflict must send nothing)", notifier.count())
+	}
+}
+
+// 8.1: MAIL_ENABLED=false still returns mailer.ErrDisabled (logged), with
+// invitation creation otherwise unaffected — exercised through the real
+// mailer.NewSMTP + MailInvitationNotifier composition used by main.go.
+func TestInvitationRouteWithDisabledMailerStillCreatesInvitation(t *testing.T) {
+	ctx, pool := openOrganizationsTestPool(t, "organizations_handler_disabled_mail_test")
+	adminID := insertOrganizationsTestUser(t, ctx, pool, "disabled-admin@example.com")
+	organizationID := insertOrganizationsTestOrganization(t, ctx, pool, "Disabled Mail Org")
+	insertOrganizationsTestMember(t, ctx, pool, organizationID, adminID, "admin")
+
+	disabledMailer := mailer.NewSMTP(config.MailConfig{Enabled: false})
+	var logBuffer bytes.Buffer
+	notifier := NewMailInvitationNotifier(disabledMailer, "https://admin.example.com", &logBuffer)
+	mux := invitationHandlerTestMux(adminID, pool, notifier)
+
+	r := httptest.NewRequest(http.MethodPost, "/organizations/"+organizationID+"/invitations", strings.NewReader(`{"email":"disabled-mail@example.com","role":"member"}`))
+	r.Header.Set("Idempotency-Key", "disabled-mail-key")
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, r)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+	if !contains(w.Body.String(), "disabled-mail@example.com") {
+		t.Fatalf("body=%s, want created invitation despite disabled mail", w.Body.String())
+	}
+
+	logOutput := logBuffer.String()
+	if !contains(logOutput, "event=invitation_email_failed") || !contains(logOutput, "reason=disabled") {
+		t.Fatalf("log=%q, want disabled-mail failure logged", logOutput)
+	}
+
+	var storedCount int
+	if err := pool.QueryRow(ctx, `SELECT COUNT(*) FROM invitations WHERE organization_id = $1 AND email = $2`, organizationID, "disabled-mail@example.com").Scan(&storedCount); err != nil {
+		t.Fatalf("query stored invitation: %v", err)
+	}
+	if storedCount != 1 {
+		t.Fatalf("stored invitation count = %d, want 1 (creation unaffected by disabled mail)", storedCount)
 	}
 }
 

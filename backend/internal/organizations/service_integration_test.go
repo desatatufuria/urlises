@@ -30,7 +30,7 @@ func TestListInvitationsReturnsPendingInvitationsForAdminsOnly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create accepted invitation: %v", err)
 	}
-	if _, err := service.AcceptInvitation(ctx, inviteeID, acceptedInvitation.Token); err != nil {
+	if _, err := service.AcceptInvitation(ctx, inviteeID, acceptedInvitation.Invitation.Token); err != nil {
 		t.Fatalf("accept invitation: %v", err)
 	}
 
@@ -41,8 +41,8 @@ func TestListInvitationsReturnsPendingInvitationsForAdminsOnly(t *testing.T) {
 	if len(invitations) != 1 {
 		t.Fatalf("invitation count = %d, want 1", len(invitations))
 	}
-	if invitations[0].ID != pendingInvitation.ID {
-		t.Fatalf("listed invitation id = %q, want %q", invitations[0].ID, pendingInvitation.ID)
+	if invitations[0].ID != pendingInvitation.Invitation.ID {
+		t.Fatalf("listed invitation id = %q, want %q", invitations[0].ID, pendingInvitation.Invitation.ID)
 	}
 	if invitations[0].Status != "pending" {
 		t.Fatalf("listed invitation status = %q, want pending", invitations[0].Status)
@@ -97,7 +97,7 @@ func TestAcceptInvitationActivatesMembershipAndRejectsReuse(t *testing.T) {
 		t.Fatalf("create invitation: %v", err)
 	}
 
-	accepted, err := service.AcceptInvitation(ctx, inviteeID, invitation.Token)
+	accepted, err := service.AcceptInvitation(ctx, inviteeID, invitation.Invitation.Token)
 	if err != nil {
 		t.Fatalf("accept invitation: %v", err)
 	}
@@ -113,7 +113,7 @@ func TestAcceptInvitationActivatesMembershipAndRejectsReuse(t *testing.T) {
 		t.Fatalf("member role = %q, want member", memberRole)
 	}
 
-	reused, err := service.AcceptInvitation(ctx, inviteeID, invitation.Token)
+	reused, err := service.AcceptInvitation(ctx, inviteeID, invitation.Invitation.Token)
 	if err == nil {
 		t.Fatalf("expected second acceptance to fail, got %#v", reused)
 	}
@@ -144,11 +144,11 @@ func TestAcceptInvitationRejectsExpiredInvite(t *testing.T) {
 		UPDATE invitations
 		SET expires_at = $2
 		WHERE id = $1
-	`, invitation.ID, time.Now().UTC().Add(-time.Minute)); err != nil {
+	`, invitation.Invitation.ID, time.Now().UTC().Add(-time.Minute)); err != nil {
 		t.Fatalf("expire invitation: %v", err)
 	}
 
-	accepted, err := service.AcceptInvitation(ctx, inviteeID, invitation.Token)
+	accepted, err := service.AcceptInvitation(ctx, inviteeID, invitation.Invitation.Token)
 	if err == nil {
 		t.Fatalf("expected expired invitation acceptance to fail, got %#v", accepted)
 	}

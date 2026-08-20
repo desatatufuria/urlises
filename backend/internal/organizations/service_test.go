@@ -71,6 +71,78 @@ func TestPatchMemberRejectsRemovingLastOwner(t *testing.T) {
 	}
 }
 
+func TestCreateInvitationSetsExpiryAndInviterContext(t *testing.T) {
+	t.Parallel()
+
+	ctx, pool := openOrganizationsTestPool(t, "organizations_invite_expiry_test")
+	service := NewService(pool)
+	adminID := insertOrganizationsTestUser(t, ctx, pool, "admin@example.com")
+	organizationID := insertOrganizationsTestOrganization(t, ctx, pool, "Acme Corp")
+	insertOrganizationsTestMember(t, ctx, pool, organizationID, adminID, "admin")
+
+	before := time.Now().UTC()
+	created, err := service.CreateInvitation(ctx, adminID, organizationID, CreateInvitationInput{
+		Email: "invitee@example.com",
+		Role:  "member",
+	})
+	if err != nil {
+		t.Fatalf("create invitation: %v", err)
+	}
+	after := time.Now().UTC()
+
+	wantMin := before.Add(invitationTTL).Add(-time.Minute)
+	wantMax := after.Add(invitationTTL).Add(time.Minute)
+	if created.ExpiresAt.Before(wantMin) || created.ExpiresAt.After(wantMax) {
+		t.Fatalf("ExpiresAt = %v, want within [%v, %v]", created.ExpiresAt, wantMin, wantMax)
+	}
+	if created.OrganizationName != "Acme Corp" {
+		t.Fatalf("OrganizationName = %q, want %q", created.OrganizationName, "Acme Corp")
+	}
+	if created.InviterEmail != "admin@example.com" {
+		t.Fatalf("InviterEmail = %q, want %q", created.InviterEmail, "admin@example.com")
+	}
+	if created.InviterName != "" {
+		t.Fatalf("InviterName = %q, want empty for NULL users.name", created.InviterName)
+	}
+
+	var storedExpiresAt time.Time
+	if err := pool.QueryRow(ctx, `SELECT expires_at FROM invitations WHERE id = $1`, created.Invitation.ID).Scan(&storedExpiresAt); err != nil {
+		t.Fatalf("query stored expires_at: %v", err)
+	}
+	if storedExpiresAt.Before(wantMin) || storedExpiresAt.After(wantMax) {
+		t.Fatalf("stored expires_at = %v, want within [%v, %v]", storedExpiresAt, wantMin, wantMax)
+	}
+}
+
+func TestCreateInvitationInviterNamePopulatedWhenPresent(t *testing.T) {
+	t.Parallel()
+
+	ctx, pool := openOrganizationsTestPool(t, "organizations_invite_expiry_test")
+	service := NewService(pool)
+	organizationID := insertOrganizationsTestOrganization(t, ctx, pool, "Beta Org")
+
+	var adminID string
+	if err := pool.QueryRow(ctx, `
+		INSERT INTO users (email, password_hash, name)
+		VALUES ($1, $2, $3)
+		RETURNING id
+	`, "named-admin@example.com", "hash", "Ada Lovelace").Scan(&adminID); err != nil {
+		t.Fatalf("insert named user: %v", err)
+	}
+	insertOrganizationsTestMember(t, ctx, pool, organizationID, adminID, "admin")
+
+	created, err := service.CreateInvitation(ctx, adminID, organizationID, CreateInvitationInput{
+		Email: "invitee2@example.com",
+		Role:  "member",
+	})
+	if err != nil {
+		t.Fatalf("create invitation: %v", err)
+	}
+	if created.InviterName != "Ada Lovelace" {
+		t.Fatalf("InviterName = %q, want %q", created.InviterName, "Ada Lovelace")
+	}
+}
+
 func openOrganizationsTestPool(t *testing.T, prefix string) (context.Context, *pgxpool.Pool) {
 	t.Helper()
 	if testing.Short() {

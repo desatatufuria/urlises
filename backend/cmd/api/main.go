@@ -17,6 +17,7 @@ import (
 	"github.com/furia/shared-bookmark-sync/backend/internal/database"
 	"github.com/furia/shared-bookmark-sync/backend/internal/groups"
 	"github.com/furia/shared-bookmark-sync/backend/internal/httpapi"
+	"github.com/furia/shared-bookmark-sync/backend/internal/mailer"
 	"github.com/furia/shared-bookmark-sync/backend/internal/organizations"
 	syncapi "github.com/furia/shared-bookmark-sync/backend/internal/sync"
 	wsapi "github.com/furia/shared-bookmark-sync/backend/internal/websocket"
@@ -56,6 +57,8 @@ func main() {
 	authService := auth.NewService(pool, cfg.Auth)
 	accessService := access.NewService(pool)
 	organizationsService := organizations.NewService(pool)
+	invitationMailer := mailer.NewSMTP(cfg.Mail)
+	invitationNotifier := organizations.NewMailInvitationNotifier(invitationMailer, cfg.App.PublicBaseURL, os.Stdout)
 	groupsService := groups.NewService(pool)
 	workspacesService := workspaces.NewService(pool, accessService)
 	idempotencyExecutor := httpapi.NewIdempotencyExecutor(pool)
@@ -102,7 +105,7 @@ func main() {
 	})
 
 	auth.RegisterRoutes(mux, authService, invitationAccepterAdapter{service: organizationsService})
-	organizations.RegisterRoutes(mux, authService.Middleware, organizationsService, idempotencyExecutor)
+	organizations.RegisterRoutes(mux, authService.Middleware, organizationsService, invitationNotifier, idempotencyExecutor)
 	groups.RegisterRoutes(mux, authService.Middleware, groupsService, idempotencyExecutor)
 	workspaces.RegisterRoutes(mux, authService.Middleware, workspacesService, idempotencyExecutor)
 	syncapi.RegisterBookmarkRoutes(mux, authService.Middleware, syncService, idempotencyExecutor)
