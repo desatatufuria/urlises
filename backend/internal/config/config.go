@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"net/mail"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -15,7 +16,27 @@ type Config struct {
 	Auth     AuthConfig
 	Database DatabaseConfig
 	Mail     MailConfig
+	App      AppConfig
 	CORS     CORSConfig
+}
+
+type AppConfig struct {
+	PublicBaseURL string
+}
+
+func (c AppConfig) Validate(mailEnabled bool) error {
+	if c.PublicBaseURL == "" {
+		if mailEnabled {
+			return fmt.Errorf("PUBLIC_BASE_URL is required when mail is enabled")
+		}
+		return nil
+	}
+	parsed, err := url.Parse(c.PublicBaseURL)
+	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") ||
+		parsed.Host == "" || parsed.RawQuery != "" || parsed.Fragment != "" {
+		return fmt.Errorf("PUBLIC_BASE_URL must be an absolute http(s) URL without query or fragment")
+	}
+	return nil
 }
 
 type ServerConfig struct {
@@ -176,6 +197,11 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 
+	appConfig := AppConfig{PublicBaseURL: strings.TrimRight(envString("PUBLIC_BASE_URL", ""), "/")}
+	if err := appConfig.Validate(mailConfig.Enabled); err != nil {
+		return Config{}, err
+	}
+
 	return Config{
 		Server: ServerConfig{
 			Addr: envString("SERVER_ADDR", ":8080"),
@@ -193,6 +219,7 @@ func Load() (Config, error) {
 			AutoMigrate:   autoMigrate,
 		},
 		Mail: mailConfig,
+		App:  appConfig,
 		CORS: CORSConfig{
 			AllowedOrigins: envStringSlice("CORS_ALLOWED_ORIGINS", []string{"http://localhost:5173", "http://127.0.0.1:5173"}),
 		},

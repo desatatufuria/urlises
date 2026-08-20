@@ -38,6 +38,7 @@ services:
       DATABASE_MIGRATIONS_DIR: migrations
       DATABASE_MAX_CONNS: "10"
       DATABASE_MIN_CONNS: "1"
+      PUBLIC_BASE_URL: http://localhost:5173
       MAIL_ENABLED: "true"
       MAIL_SMTP_HOST: mailpit
       MAIL_SMTP_PORT: "1025"

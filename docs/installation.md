@@ -86,8 +86,15 @@ Open `chrome://extensions`, enable Developer mode, choose **Load unpacked**, and
 | `MAIL_TLS_MODE` | `starttls` | `none`, `starttls`, or `tls` |
 | `MAIL_AUTH_MODE` | `none` | `none` or `plain`; plain requires TLS and credentials |
 | `MAIL_FROM_ADDRESS` | none | Required when mail is enabled |
+| `PUBLIC_BASE_URL` | none | Absolute `http(s)` origin used to build invitation accept links; required when `MAIL_ENABLED=true` |
 | `ADMIN_WEB_HOST_PORT` | dynamic | Compose host port for Nginx |
 | `MAILPIT_SMTP_HOST_PORT` / `MAILPIT_UI_HOST_PORT` | `11025` / `18025` | Loopback-only Mailpit ports |
+
+## Manual invitation email check
+
+With `MAIL_ENABLED=true` and `PUBLIC_BASE_URL` set (both are the compose defaults), create an
+organization invitation, open the received message at `http://127.0.0.1:18025` (Mailpit UI), and
+follow the accept link with no existing account: register, and land as a member.
 
 ## Troubleshooting
 

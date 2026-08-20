@@ -39,6 +39,11 @@ built with `VITE_API_BASE_URL` baked in at build time, so the admin panel
 calls the API subdomain directly from the browser instead of going through
 the dev-only nginx proxy.
 
+`PUBLIC_BASE_URL` (the admin-web origin, e.g. `https://admin.urlises.lab.dtfuria.xyz`)
+is **required whenever `MAIL_ENABLED=true`**: it is embedded in every invitation
+accept link, and `config.Load` fails fast at startup if it is unset or malformed
+while mail is enabled.
+
 After Traefik is configured (see below), copy `deploy/traefik/urlises.yml` to
 `/opt/traefik/dynamic/urlises.yml` on the VPS.
 
