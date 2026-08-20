@@ -6,10 +6,6 @@ import (
 )
 
 var (
-	defaultAllowedOrigins = map[string]struct{}{
-		"http://localhost:5173": {},
-		"http://127.0.0.1:5173": {},
-	}
 	defaultAllowedHeaders = []string{
 		"Accept",
 		"Authorization",
@@ -33,7 +29,16 @@ var (
 	}
 )
 
-func NewDevelopmentCORS(next http.Handler) http.Handler {
+func NewCORS(next http.Handler, allowedOrigins []string) http.Handler {
+	allowedOriginSet := make(map[string]struct{}, len(allowedOrigins))
+	for _, allowedOrigin := range allowedOrigins {
+		trimmed := strings.TrimSpace(allowedOrigin)
+		if trimmed == "" {
+			continue
+		}
+		allowedOriginSet[trimmed] = struct{}{}
+	}
+
 	allowHeaders := strings.Join(defaultAllowedHeaders, ", ")
 	exposeHeaders := strings.Join(defaultExposedHeaders, ", ")
 	allowMethods := strings.Join(defaultAllowedMethods, ", ")
@@ -49,7 +54,7 @@ func NewDevelopmentCORS(next http.Handler) http.Handler {
 		w.Header().Add("Vary", "Access-Control-Request-Method")
 		w.Header().Add("Vary", "Access-Control-Request-Headers")
 
-		if _, ok := defaultAllowedOrigins[origin]; !ok {
+		if _, ok := allowedOriginSet[origin]; !ok {
 			next.ServeHTTP(w, r)
 			return
 		}

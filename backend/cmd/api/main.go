@@ -111,7 +111,7 @@ func main() {
 
 	server := &http.Server{
 		Addr:              cfg.Server.Addr,
-		Handler:           httpapi.NewDevelopmentCORS(httpapi.NewErrorMiddleware(mux, os.Stderr)),
+		Handler:           httpapi.NewCORS(httpapi.NewErrorMiddleware(mux, os.Stderr), cfg.CORS.AllowedOrigins),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 

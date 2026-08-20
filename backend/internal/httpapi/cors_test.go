@@ -7,10 +7,10 @@ import (
 	"testing"
 )
 
-func TestDevelopmentCORSHandlesAllowedPreflight(t *testing.T) {
-	handler := NewDevelopmentCORS(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+func TestCORSHandlesAllowedPreflight(t *testing.T) {
+	handler := NewCORS(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Fatalf("preflight should not reach next handler")
-	}))
+	}), []string{"http://localhost:5173", "http://127.0.0.1:5173"})
 
 	request := httptest.NewRequest(http.MethodOptions, "/auth/login", nil)
 	request.Header.Set("Origin", "http://localhost:5173")
@@ -43,10 +43,10 @@ func TestDevelopmentCORSHandlesAllowedPreflight(t *testing.T) {
 	}
 }
 
-func TestDevelopmentCORSAddsHeadersToAllowedRequest(t *testing.T) {
-	handler := NewDevelopmentCORS(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+func TestCORSAddsHeadersToAllowedRequest(t *testing.T) {
+	handler := NewCORS(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		WriteJSON(w, http.StatusOK, map[string]string{"status": "ok"})
-	}))
+	}), []string{"http://localhost:5173", "http://127.0.0.1:5173"})
 
 	request := httptest.NewRequest(http.MethodGet, "/healthz", nil)
 	request.Header.Set("Origin", "http://127.0.0.1:5173")
@@ -72,12 +72,12 @@ func TestDevelopmentCORSAddsHeadersToAllowedRequest(t *testing.T) {
 	}
 }
 
-func TestDevelopmentCORSDoesNotAllowUnknownOrigin(t *testing.T) {
+func TestCORSDoesNotAllowUnknownOrigin(t *testing.T) {
 	nextCalled := false
-	handler := NewDevelopmentCORS(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := NewCORS(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		nextCalled = true
 		w.WriteHeader(http.StatusTeapot)
-	}))
+	}), []string{"http://localhost:5173", "http://127.0.0.1:5173"})
 
 	request := httptest.NewRequest(http.MethodOptions, "/auth/login", nil)
 	request.Header.Set("Origin", "http://malicious.example")

@@ -15,6 +15,7 @@ type Config struct {
 	Auth     AuthConfig
 	Database DatabaseConfig
 	Mail     MailConfig
+	CORS     CORSConfig
 }
 
 type ServerConfig struct {
@@ -33,6 +34,10 @@ type DatabaseConfig struct {
 	MinConns      int32
 	MigrationsDir string
 	AutoMigrate   bool
+}
+
+type CORSConfig struct {
+	AllowedOrigins []string
 }
 
 type TLSMode string
@@ -188,6 +193,9 @@ func Load() (Config, error) {
 			AutoMigrate:   autoMigrate,
 		},
 		Mail: mailConfig,
+		CORS: CORSConfig{
+			AllowedOrigins: envStringSlice("CORS_ALLOWED_ORIGINS", []string{"http://localhost:5173", "http://127.0.0.1:5173"}),
+		},
 	}, nil
 }
 
@@ -207,6 +215,25 @@ func envString(key, fallback string) string {
 	}
 
 	return value
+}
+
+func envStringSlice(key string, fallback []string) []string {
+	value := strings.TrimSpace(os.Getenv(key))
+	if value == "" {
+		return fallback
+	}
+
+	parts := strings.Split(value, ",")
+	result := make([]string, 0, len(parts))
+	for _, part := range parts {
+		trimmed := strings.TrimSpace(part)
+		if trimmed == "" {
+			continue
+		}
+		result = append(result, trimmed)
+	}
+
+	return result
 }
 
 func envInt32(key string, fallback int32) (int32, error) {
