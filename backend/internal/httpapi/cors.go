@@ -10,6 +10,7 @@ var (
 		"Accept",
 		"Authorization",
 		"Content-Type",
+		"Idempotency-Key",
 		"X-Client-Id",
 		"X-Sync-Base-Cursor",
 		"X-Sync-Event-Id",

@@ -29,7 +29,7 @@ func TestCORSHandlesAllowedPreflight(t *testing.T) {
 	if got := response.Header.Get("Access-Control-Allow-Origin"); got != "http://localhost:5173" {
 		t.Fatalf("expected allow origin header, got %q", got)
 	}
-	if got := response.Header.Get("Access-Control-Allow-Headers"); got != "Accept, Authorization, Content-Type, X-Client-Id, X-Sync-Base-Cursor, X-Sync-Event-Id" {
+	if got := response.Header.Get("Access-Control-Allow-Headers"); got != "Accept, Authorization, Content-Type, Idempotency-Key, X-Client-Id, X-Sync-Base-Cursor, X-Sync-Event-Id" {
 		t.Fatalf("unexpected allow headers %q", got)
 	}
 	if got := response.Header.Get("Access-Control-Allow-Methods"); got != "DELETE, GET, OPTIONS, PATCH, POST, PUT" {
