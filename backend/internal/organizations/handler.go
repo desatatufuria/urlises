@@ -18,6 +18,7 @@ type routeService interface {
 	PatchMember(context.Context, string, string, PatchMemberInput) (OrganizationMember, error)
 	CreateInvitation(context.Context, string, string, CreateInvitationInput) (InvitationCreation, error)
 	ListInvitations(context.Context, string, string) ([]PendingInvitation, error)
+	ResendInvitation(ctx context.Context, requesterUserID, organizationID, invitationID string) (InvitationCreation, error)
 }
 
 type creationTxService interface {
@@ -217,6 +218,26 @@ func RegisterRoutes(mux *http.ServeMux, authMiddleware func(http.Handler) http.H
 
 		httpapi.WriteJSON(w, http.StatusOK, map[string]any{"invitations": invitations})
 	})))
+
+	mux.Handle("POST /organizations/{organizationId}/invitations/{invitationId}/resend", authMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		principal, ok := auth.PrincipalFromContext(r.Context())
+		if !ok {
+			httpapi.WriteError(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+
+		resent, err := service.ResendInvitation(r.Context(), principal.UserID, r.PathValue("organizationId"), r.PathValue("invitationId"))
+		if err != nil {
+			writeOrganizationError(w, err)
+			return
+		}
+
+		httpapi.WriteJSON(w, http.StatusOK, pendingInvitationView(resent.Invitation))
+		if notifier != nil {
+			_ = http.NewResponseController(w).Flush()
+			_ = notifier.NotifyInvitation(context.WithoutCancel(r.Context()), invitationNotification(resent))
+		}
+	})))
 }
 
 func idempotencyIdentity(r *http.Request, principal, route string, targets []string, input any) httpapi.IdempotencyIdentity {
@@ -260,6 +281,19 @@ func organizationCreation(m Membership) map[string]string {
 func invitationCreation(i Invitation) map[string]any {
 	return map[string]any{"id": i.ID, "organizationId": i.OrganizationID, "email": i.Email, "role": i.Role, "status": i.Status, "invitedByUserId": i.InvitedByUserID, "acceptedByUserId": i.AcceptedByUserID, "expiresAt": i.ExpiresAt, "acceptedAt": i.AcceptedAt, "createdAt": i.CreatedAt, "updatedAt": i.UpdatedAt}
 }
+func pendingInvitationView(i Invitation) PendingInvitation {
+	return PendingInvitation{
+		ID:              i.ID,
+		OrganizationID:  i.OrganizationID,
+		Email:           i.Email,
+		Role:            i.Role,
+		Status:          i.Status,
+		InvitedByUserID: i.InvitedByUserID,
+		ExpiresAt:       i.ExpiresAt,
+		CreatedAt:       i.CreatedAt,
+		UpdatedAt:       i.UpdatedAt,
+	}
+}
 
 func writeOrganizationError(w http.ResponseWriter, err error) {
 	switch {
@@ -275,6 +309,8 @@ func writeOrganizationError(w http.ResponseWriter, err error) {
 		httpapi.WriteError(w, http.StatusConflict, ErrInvitationMemberExists.Error())
 	case errors.Is(err, ErrInvitationPendingExists), err.Error() == ErrInvitationPendingExists.Error():
 		httpapi.WriteError(w, http.StatusConflict, ErrInvitationPendingExists.Error())
+	case errors.Is(err, ErrInvitationNotPending), err.Error() == ErrInvitationNotPending.Error():
+		httpapi.WriteError(w, http.StatusBadRequest, ErrInvitationNotPending.Error())
 	default:
 		httpapi.WriteError(w, http.StatusInternalServerError, "internal server error")
 	}

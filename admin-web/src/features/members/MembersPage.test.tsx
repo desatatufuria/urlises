@@ -168,6 +168,83 @@ describe("members page", () => {
     await waitFor(() => expect(screen.getByLabelText(/role for owner@example.com/i)).toHaveValue("owner"));
   });
 
+  it("resends a pending invitation and shows a confirmation notice", async () => {
+    const invitation = {
+      id: "invite-1",
+      organizationId: "org-1",
+      email: "pending@example.com",
+      role: "member",
+      status: "pending",
+      invitedByUserId: "user-1",
+      invitedByEmail: "owner@example.com",
+      createdAt: "2026-07-03T22:00:00Z",
+      expiresAt: "2026-07-10T22:00:00Z",
+    };
+    let resendCalls = 0;
+
+    fetchMock.mockImplementation((input, init) => {
+      const url = String(input);
+      const method = init?.method ?? "GET";
+
+      if (url.endsWith("/organizations/org-1/members")) {
+        return jsonResponse({ members: [] });
+      }
+      if (url.endsWith("/organizations/org-1/invitations") && method === "GET") {
+        return jsonResponse({ invitations: [invitation] });
+      }
+      if (url.endsWith("/organizations/org-1/invitations/invite-1/resend") && method === "POST") {
+        resendCalls += 1;
+        return jsonResponse({ ...invitation, expiresAt: "2026-07-17T22:00:00Z" });
+      }
+      return jsonResponse({ error: "not found" }, 404);
+    });
+
+    renderAppRoute("/members");
+
+    await screen.findByText("pending@example.com");
+    await userEvent.click(screen.getByRole("button", { name: /resend invitation to pending@example.com/i }));
+
+    expect(await screen.findByText(/invitation resent/i)).toBeInTheDocument();
+    expect(resendCalls).toBe(1);
+  });
+
+  it("shows an error notice when resending an invitation fails", async () => {
+    const invitation = {
+      id: "invite-2",
+      organizationId: "org-1",
+      email: "stuck@example.com",
+      role: "member",
+      status: "pending",
+      invitedByUserId: "user-1",
+      invitedByEmail: "owner@example.com",
+      createdAt: "2026-07-03T22:00:00Z",
+      expiresAt: "2026-07-10T22:00:00Z",
+    };
+
+    fetchMock.mockImplementation((input, init) => {
+      const url = String(input);
+      const method = init?.method ?? "GET";
+
+      if (url.endsWith("/organizations/org-1/members")) {
+        return jsonResponse({ members: [] });
+      }
+      if (url.endsWith("/organizations/org-1/invitations") && method === "GET") {
+        return jsonResponse({ invitations: [invitation] });
+      }
+      if (url.endsWith("/organizations/org-1/invitations/invite-2/resend") && method === "POST") {
+        return jsonResponse({ error: "invitation is not pending" }, 400);
+      }
+      return jsonResponse({ error: "not found" }, 404);
+    });
+
+    renderAppRoute("/members");
+
+    await screen.findByText("stuck@example.com");
+    await userEvent.click(screen.getByRole("button", { name: /resend invitation to stuck@example.com/i }));
+
+    expect(await screen.findByText(/resend failed/i)).toBeInTheDocument();
+  });
+
   it("revokes the current operator shell immediately after self-demotion", async () => {
     fetchMock.mockImplementation((input, init) => {
       const url = String(input); const method = init?.method ?? "GET";

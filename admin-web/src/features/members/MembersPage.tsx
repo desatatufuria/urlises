@@ -8,7 +8,7 @@ import { Table } from "../../lib/ui/components/Table";
 import type { OrganizationRole } from "../../lib/api/types";
 import { InviteMemberForm } from "./InviteMemberForm";
 import { ContextPanel } from "../../lib/ui/components/ContextPanel";
-import { useInviteMemberMutation, useUpdateMemberRoleMutation } from "./mutations";
+import { useInviteMemberMutation, useResendInvitationMutation, useUpdateMemberRoleMutation } from "./mutations";
 import { useOrganizationInvitations, useOrganizationMembers } from "./queries";
 
 const roleOptions: OrganizationRole[] = ["owner", "admin", "member"];
@@ -27,6 +27,7 @@ export function MembersPage() {
   const { activeOrganization } = useOrganization();
   const [notice, setNotice] = useState<{ tone: "neutral" | "danger"; title: string; description: string } | null>(null);
   const [updatingUserId, setUpdatingUserId] = useState<string | null>(null);
+  const [resendingInvitationId, setResendingInvitationId] = useState<string | null>(null);
 
   const organizationId = activeOrganization?.organizationId;
   const token = session?.accessToken;
@@ -34,6 +35,7 @@ export function MembersPage() {
   const invitationsQuery = useOrganizationInvitations(token, organizationId);
   const inviteMutation = useInviteMemberMutation(token, organizationId);
   const updateRoleMutation = useUpdateMemberRoleMutation(token, organizationId);
+  const resendInvitationMutation = useResendInvitationMutation(token, organizationId);
 
   const [searchParams, setSearchParams] = useSearchParams();
   const inviteOpen = searchParams.get("panel") === "invite";
@@ -151,7 +153,7 @@ export function MembersPage() {
         ) : null}
 
         {!invitationsQuery.isPending && !invitationsQuery.isError && invitations.length > 0 ? (
-          <Table columns={["Invitee", "Role", "Status", "Expires"]}>
+          <Table columns={["Invitee", "Role", "Status", "Expires", "Actions"]}>
             {invitations.map((invitation) => (
               <tr key={invitation.invitationId}>
                 <td>
@@ -167,6 +169,37 @@ export function MembersPage() {
                   <Badge tone={invitation.status === "pending" ? "accent" : "neutral"}>{invitation.status}</Badge>
                 </td>
                 <td>{formatTimestamp(invitation.expiresAt)}</td>
+                <td>
+                  <button
+                    className="ui-button ui-button-secondary"
+                    type="button"
+                    disabled={resendingInvitationId === invitation.invitationId}
+                    aria-label={`Resend invitation to ${invitation.email}`}
+                    onClick={() => {
+                      setNotice(null);
+                      setResendingInvitationId(invitation.invitationId);
+                      void resendInvitationMutation
+                        .mutateAsync({ invitationId: invitation.invitationId })
+                        .then(() => {
+                          setNotice({
+                            tone: "neutral",
+                            title: "Invitation resent",
+                            description: `${invitation.email} was sent a fresh invitation link.`,
+                          });
+                        })
+                        .catch((error) => {
+                          setNotice({
+                            tone: "danger",
+                            title: "Resend failed",
+                            description: error instanceof Error ? error.message : "The invitation could not be resent.",
+                          });
+                        })
+                        .finally(() => setResendingInvitationId(null));
+                    }}
+                  >
+                    {resendingInvitationId === invitation.invitationId ? "Resending…" : "Resend"}
+                  </button>
+                </td>
               </tr>
             ))}
           </Table>

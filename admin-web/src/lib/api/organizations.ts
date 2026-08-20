@@ -62,6 +62,13 @@ export function createOrganizationInvitation(token: string, organizationId: stri
   }).then(normalizeInvitation);
 }
 
+export function resendOrganizationInvitation(token: string, organizationId: string, invitationId: string) {
+  return apiRequest<RawInvitation>(`/organizations/${organizationId}/invitations/${invitationId}/resend`, {
+    method: "POST",
+    token,
+  }).then(normalizeInvitation);
+}
+
 export function patchOrganizationMember(
   token: string,
   organizationId: string,

@@ -202,3 +202,75 @@ Revert `admin-web/src/lib/api/{types.ts,invitations.ts}`, `admin-web/src/app/rou
 ## Status
 
 10/12 assigned frontend tasks complete as originally enumerated (5.1, 5.2, 6.1–6.8, 7.2 = 11 tasks done; 8.2 recorded = 12 total). 7.3 intentionally left unchecked (manual, requires a live stack this sandbox does not have — explicitly called out, not silently skipped). Combined with PR 1's 20/20 backend tasks, the change is functionally complete pending only the manual Mailpit end-to-end check. Ready for PR 2 review; PR 2 targets PR 1's branch per the resolved `feature-branch-chain` strategy.
+
+---
+
+# Apply Progress Addendum: Invitation Resend (out-of-band, post Phase 8)
+
+**Why this is out-of-band**: The original `design.md`/`tasks.md` for this change never covered resending an invitation. While manually testing real invitation emails against a live SMTP server, the user hit `CreateInvitationTx`'s existing (and correct) anti-spam guard — `ErrInvitationPendingExists` — which blocks creating a second pending invitation to the same email/org. That guard has no bypass, so every manual test run required a brand-new email address. This addendum adds a `POST /organizations/{organizationId}/invitations/{invitationId}/resend` endpoint plus a frontend "Resend" action so the same pending invitation (same token/link) can be re-sent instead. Per the user's explicit instruction, this was scoped small enough that a `tasks.md` Phase 9 + this note stand in for a full spec/design cycle — `design.md` was intentionally left untouched.
+
+**Scope**: Additive only. Did not touch `CreateInvitationTx`'s duplicate-block, its `ExecutePrepared`/idempotency wiring, rate-limiting (explicitly out of scope), or any deployment/compose/env files.
+
+## Files Changed
+
+| File | Action | What Was Done |
+|---|---|---|
+| `backend/internal/organizations/service.go` | Modified | `Service.ResendInvitation` — admin-gated, refreshes `expires_at` on a `status='pending'` invitation scoped to `id + organization_id`, keeps the token, re-reads org/inviter context for the resending admin, single begin/commit tx. |
+| `backend/internal/organizations/service_integration_test.go` | Modified | 4 new DB-backed tests (expiry refresh/token-kept, non-pending rejection, non-admin rejection, cross-tenant not-found). |
+| `backend/internal/organizations/handler.go` | Modified | New route `POST /organizations/{organizationId}/invitations/{invitationId}/resend`; `routeService.ResendInvitation` added to the interface; `pendingInvitationView` helper (response matches `ListInvitations`'s `PendingInvitation` shape); `writeOrganizationError` gained an `ErrInvitationNotPending` → 400 case. |
+| `backend/internal/organizations/handler_test.go` | Modified | 3 new DB-backed handler tests (notify-once, non-pending 400, non-admin 403); `ErrInvitationNotPending` case added to `TestWriteOrganizationErrorMapsInvitationSafetyErrors`; `ResendInvitation` stub added to `organizationsRouteStub`. |
+| `admin-web/src/lib/api/organizations.ts` | Modified | `resendOrganizationInvitation(token, organizationId, invitationId)`. |
+| `admin-web/src/features/members/mutations.ts` | Modified | `useResendInvitationMutation`. |
+| `admin-web/src/features/members/MembersPage.tsx` | Modified | "Actions" column with a per-row Resend button on the pending-invitations table, wired to the mutation, success/failure notices reusing the existing `notice` state pattern. |
+| `admin-web/src/features/members/MembersPage.test.tsx` | Modified | 2 new tests (resend success shows confirmation, resend failure shows error notice). |
+| `openspec/changes/invitation-email-delivery/tasks.md` | Modified | Appended Phase 9 documenting this addition. |
+
+## TDD Cycle Evidence
+
+| Task | Test File | Layer | RED | GREEN | TRIANGULATE |
+|---|---|---|---|---|---|
+| 9.1/9.3 | `service_integration_test.go` | Integration (Postgres) | ✅ confirmed via `go vet` compile failure (`service.ResendInvitation undefined`) before implementation | ✅ all 4 pass against a real ephemeral Postgres | ✅ 4 cases (refresh/token-kept, non-pending, non-admin, cross-tenant not-found) |
+| 9.2/9.4 | `handler_test.go` | Integration (Postgres), DB-backed per this package's existing convention for this boundary | ✅ same compile-fail RED (interface + route did not exist) | ✅ all 3 pass, plus the updated `TestWriteOrganizationErrorMapsInvitationSafetyErrors` case | ✅ 3 cases (notify-once, 400 non-pending, 403 non-admin) |
+| 9.7/9.8 | `MembersPage.test.tsx` | Integration (fetch-mocked, matching this codebase's established convention — see PR 2's own deviation note above) | ✅ ran the 2 new tests against pre-change `MembersPage.tsx`; both failed (`getByRole("button", { name: /resend .../ })` not found) | ✅ both pass after adding the Resend button + mutation | ✅ 2 cases (success notice, failure notice) |
+
+## Evidence
+
+### Backend focused command (real ephemeral Postgres)
+```
+cd backend && go test ./internal/organizations -run Resend -v -p 1 -parallel 1
+```
+Result: all 7 new tests **PASS** (`TestResendInvitationRouteRefreshesExpiryAndNotifiesOnce`, `TestResendInvitationRouteRejectsNonPending`, `TestResendInvitationRouteRequiresAdmin`, `TestResendInvitationRefreshesExpiryButKeepsToken`, `TestResendInvitationRejectsNonPending`, `TestResendInvitationRejectsNonAdmin`, `TestResendInvitationNotFoundForWrongOrganization`).
+
+### Backend full suite (real ephemeral Postgres)
+```
+cd backend && go test ./... -p 1 -parallel 1
+```
+Result: all 12 packages **PASS** (`access`, `auth`, `bookmarks`, `config`, `database`, `groups`, `httpapi`, `mailer`, `organizations`, `sync`, `websocket`, `workspaces`). Postgres was a temporary `postgres:16-alpine` container spun up on the sandbox's `dtf-netwok` bridge for this run and removed afterward — no persistent DB dependency added.
+
+`gofmt -l internal/organizations/*.go` and `go vet ./...`: clean, no output.
+
+### Frontend focused command
+```
+cd admin-web && npx vitest run src/features/members/MembersPage.test.tsx
+```
+Result: **8 tests, all PASS** (6 pre-existing + 2 new).
+
+### Frontend full suite
+```
+cd admin-web && npm test -- --run
+```
+Result: **9 test files, 51 tests, all PASS** (49 pre-existing + 2 new). No pre-existing test broken.
+
+`npx tsc --noEmit`: clean, no output.
+
+## Deviations from the (informal) scope
+
+None. Implementation matches the user's scope note exactly: no `ExecutePrepared`/idempotency machinery, same token/link preserved, single simpler transaction, best-effort post-commit notify reusing the existing `MailInvitationNotifier` error-swallowing contract, response shaped like `PendingInvitation` (not the token-bearing creation shape), no rate-limiting added, no deployment/compose/env files touched.
+
+## Rollback Boundary
+
+Revert `backend/internal/organizations/{service.go,handler.go}` (+ their two test files) and `admin-web/src/{lib/api/organizations.ts,features/members/{mutations.ts,MembersPage.tsx,MembersPage.test.tsx}}`. No migration, no schema change — `expires_at`/`token`/`status` columns already existed. Reverting removes the resend route and button with nothing to undo server-side.
+
+## Status
+
+9/9 addendum tasks (9.1–9.9) complete. Not committed — left in the working tree per instruction.

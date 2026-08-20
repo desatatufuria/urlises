@@ -476,6 +476,93 @@ func (s *Service) CreateInvitationTx(ctx context.Context, tx pgx.Tx, requesterUs
 	}, nil
 }
 
+// ResendInvitation refreshes a pending invitation's expiry and returns the
+// same InvitationCreation shape as CreateInvitation so the caller can reuse
+// the existing invitationNotifier machinery to re-send the email. Unlike
+// CreateInvitationTx, this is not wired through ExecutePrepared/idempotency:
+// resending twice by mistake only means an extra email, not a data-integrity
+// problem, so a single begin/commit transaction is enough.
+func (s *Service) ResendInvitation(ctx context.Context, requesterUserID, organizationID, invitationID string) (InvitationCreation, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return InvitationCreation{}, fmt.Errorf("begin resend invitation tx: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	if err := requireOrganizationAdmin(ctx, tx, requesterUserID, organizationID); err != nil {
+		return InvitationCreation{}, err
+	}
+
+	var status string
+	if err := tx.QueryRow(ctx, `
+		SELECT status
+		FROM invitations
+		WHERE id = $1 AND organization_id = $2
+		FOR UPDATE
+	`, invitationID, organizationID).Scan(&status); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return InvitationCreation{}, ErrNotFound
+		}
+		return InvitationCreation{}, fmt.Errorf("load invitation for resend: %w", err)
+	}
+	if status != "pending" {
+		return InvitationCreation{}, ErrInvitationNotPending
+	}
+
+	expiresAt := time.Now().UTC().Add(invitationTTL)
+
+	var invitation Invitation
+	err = tx.QueryRow(ctx, `
+		UPDATE invitations
+		SET expires_at = $2, updated_at = NOW()
+		WHERE id = $1
+		RETURNING id, organization_id, email, role, status, token, invited_by_user_id,
+			accepted_by_user_id, expires_at::text, accepted_at::text, created_at::text, updated_at::text
+	`, invitationID, expiresAt).Scan(
+		&invitation.ID,
+		&invitation.OrganizationID,
+		&invitation.Email,
+		&invitation.Role,
+		&invitation.Status,
+		&invitation.Token,
+		&invitation.InvitedByUserID,
+		&invitation.AcceptedByUserID,
+		&invitation.ExpiresAt,
+		&invitation.AcceptedAt,
+		&invitation.CreatedAt,
+		&invitation.UpdatedAt,
+	)
+	if err != nil {
+		return InvitationCreation{}, fmt.Errorf("resend invitation: %w", err)
+	}
+
+	var organizationName, inviterEmail, inviterName string
+	err = tx.QueryRow(ctx, `
+		SELECT o.name, u.email, COALESCE(NULLIF(TRIM(u.name), ''), '')
+		FROM organizations o
+		JOIN users u ON u.id = $2
+		WHERE o.id = $1
+	`, organizationID, requesterUserID).Scan(&organizationName, &inviterEmail, &inviterName)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return InvitationCreation{}, ErrNotFound
+		}
+		return InvitationCreation{}, fmt.Errorf("load resend invitation context: %w", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return InvitationCreation{}, fmt.Errorf("commit resend invitation tx: %w", err)
+	}
+
+	return InvitationCreation{
+		Invitation:       invitation,
+		OrganizationName: organizationName,
+		InviterEmail:     inviterEmail,
+		InviterName:      inviterName,
+		ExpiresAt:        expiresAt,
+	}, nil
+}
+
 func (s *Service) AuthorizeInvitationTx(ctx context.Context, tx pgx.Tx, requesterUserID, organizationID string) error {
 	return requireOrganizationAdmin(ctx, tx, requesterUserID, organizationID)
 }

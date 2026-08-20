@@ -3,12 +3,14 @@ package organizations
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/furia/shared-bookmark-sync/backend/internal/auth"
 	"github.com/furia/shared-bookmark-sync/backend/internal/config"
@@ -63,6 +65,9 @@ func (s *organizationsRouteStub) ListInvitations(_ context.Context, requester, _
 	s.requester = requester
 	return s.invitations, s.err
 }
+func (s *organizationsRouteStub) ResendInvitation(context.Context, string, string, string) (InvitationCreation, error) {
+	return InvitationCreation{}, nil
+}
 
 func organizationPrincipal(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -108,6 +113,7 @@ func TestWriteOrganizationErrorMapsInvitationSafetyErrors(t *testing.T) {
 		{name: "invalid invitation email", err: errors.New("invalid_invitation_email"), wantStatus: http.StatusBadRequest},
 		{name: "existing member", err: errors.New("invitation_member_exists"), wantStatus: http.StatusConflict},
 		{name: "pending invitation", err: errors.New("invitation_pending_exists"), wantStatus: http.StatusConflict},
+		{name: "invitation not pending", err: errors.New("invitation is not pending"), wantStatus: http.StatusBadRequest},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			recorder := httptest.NewRecorder()
@@ -291,6 +297,127 @@ func TestInvitationRouteWithDisabledMailerStillCreatesInvitation(t *testing.T) {
 	}
 	if storedCount != 1 {
 		t.Fatalf("stored invitation count = %d, want 1 (creation unaffected by disabled mail)", storedCount)
+	}
+}
+
+// Phase 9: Invitation Resend — RED: resend refreshes expires_at and
+// triggers exactly one notifier call, mirroring
+// TestInvitationRouteInvokesNotifierOnceOnFreshCommand's style.
+func TestResendInvitationRouteRefreshesExpiryAndNotifiesOnce(t *testing.T) {
+	ctx, pool := openOrganizationsTestPool(t, "organizations_handler_resend_test")
+	adminID := insertOrganizationsTestUser(t, ctx, pool, "resend-admin@example.com")
+	organizationID := insertOrganizationsTestOrganization(t, ctx, pool, "Resend Route Org")
+	insertOrganizationsTestMember(t, ctx, pool, organizationID, adminID, "admin")
+
+	notifier := &countingInvitationNotifier{}
+	mux := invitationHandlerTestMux(adminID, pool, notifier)
+
+	createReq := httptest.NewRequest(http.MethodPost, "/organizations/"+organizationID+"/invitations", strings.NewReader(`{"email":"resend-target@example.com","role":"member"}`))
+	createReq.Header.Set("Idempotency-Key", "resend-create-key")
+	createW := httptest.NewRecorder()
+	mux.ServeHTTP(createW, createReq)
+	if createW.Code != http.StatusCreated {
+		t.Fatalf("create status=%d body=%s", createW.Code, createW.Body.String())
+	}
+	if notifier.count() != 1 {
+		t.Fatalf("notifier calls after create = %d, want 1", notifier.count())
+	}
+
+	var created struct {
+		ID        string  `json:"id"`
+		ExpiresAt *string `json:"expiresAt"`
+	}
+	if err := json.Unmarshal(createW.Body.Bytes(), &created); err != nil {
+		t.Fatalf("decode created invitation: %v", err)
+	}
+
+	if _, err := pool.Exec(ctx, `UPDATE invitations SET expires_at = $2 WHERE id = $1`, created.ID, time.Now().UTC().Add(-time.Minute)); err != nil {
+		t.Fatalf("force past expiry: %v", err)
+	}
+
+	resendReq := httptest.NewRequest(http.MethodPost, "/organizations/"+organizationID+"/invitations/"+created.ID+"/resend", nil)
+	resendW := httptest.NewRecorder()
+	mux.ServeHTTP(resendW, resendReq)
+	if resendW.Code != http.StatusOK {
+		t.Fatalf("resend status=%d body=%s", resendW.Code, resendW.Body.String())
+	}
+	if !contains(resendW.Body.String(), "resend-target@example.com") {
+		t.Fatalf("resend body=%s, want the invitation", resendW.Body.String())
+	}
+	if notifier.count() != 2 {
+		t.Fatalf("notifier calls after resend = %d, want 2", notifier.count())
+	}
+
+	var resent struct {
+		ExpiresAt *string `json:"expiresAt"`
+	}
+	if err := json.Unmarshal(resendW.Body.Bytes(), &resent); err != nil {
+		t.Fatalf("decode resent invitation: %v", err)
+	}
+	if resent.ExpiresAt == nil || created.ExpiresAt == nil || *resent.ExpiresAt == *created.ExpiresAt {
+		t.Fatalf("resent expiresAt = %v, want refreshed from %v", resent.ExpiresAt, created.ExpiresAt)
+	}
+}
+
+// Phase 9: Invitation Resend — RED: resend on a non-pending invitation
+// (already accepted) is rejected and sends nothing.
+func TestResendInvitationRouteRejectsNonPending(t *testing.T) {
+	ctx, pool := openOrganizationsTestPool(t, "organizations_handler_resend_test")
+	adminID := insertOrganizationsTestUser(t, ctx, pool, "resend-admin2@example.com")
+	inviteeID := insertOrganizationsTestUser(t, ctx, pool, "resend-invitee2@example.com")
+	organizationID := insertOrganizationsTestOrganization(t, ctx, pool, "Resend Route Org 2")
+	insertOrganizationsTestMember(t, ctx, pool, organizationID, adminID, "admin")
+
+	service := NewService(pool)
+	created, err := service.CreateInvitation(ctx, adminID, organizationID, CreateInvitationInput{Email: "resend-invitee2@example.com", Role: "member"})
+	if err != nil {
+		t.Fatalf("create invitation: %v", err)
+	}
+	if _, err := service.AcceptInvitation(ctx, inviteeID, created.Invitation.Token); err != nil {
+		t.Fatalf("accept invitation: %v", err)
+	}
+
+	notifier := &countingInvitationNotifier{}
+	mux := invitationHandlerTestMux(adminID, pool, notifier)
+
+	resendReq := httptest.NewRequest(http.MethodPost, "/organizations/"+organizationID+"/invitations/"+created.Invitation.ID+"/resend", nil)
+	resendW := httptest.NewRecorder()
+	mux.ServeHTTP(resendW, resendReq)
+	if resendW.Code != http.StatusBadRequest {
+		t.Fatalf("resend status=%d body=%s, want 400", resendW.Code, resendW.Body.String())
+	}
+	if notifier.count() != 0 {
+		t.Fatalf("notifier calls = %d, want 0", notifier.count())
+	}
+}
+
+// Phase 9: Invitation Resend — RED: resend requires org admin auth, same as
+// creation.
+func TestResendInvitationRouteRequiresAdmin(t *testing.T) {
+	ctx, pool := openOrganizationsTestPool(t, "organizations_handler_resend_test")
+	adminID := insertOrganizationsTestUser(t, ctx, pool, "resend-admin3@example.com")
+	memberID := insertOrganizationsTestUser(t, ctx, pool, "resend-member3@example.com")
+	organizationID := insertOrganizationsTestOrganization(t, ctx, pool, "Resend Route Org 3")
+	insertOrganizationsTestMember(t, ctx, pool, organizationID, adminID, "admin")
+	insertOrganizationsTestMember(t, ctx, pool, organizationID, memberID, "member")
+
+	service := NewService(pool)
+	created, err := service.CreateInvitation(ctx, adminID, organizationID, CreateInvitationInput{Email: "resend-target3@example.com", Role: "member"})
+	if err != nil {
+		t.Fatalf("create invitation: %v", err)
+	}
+
+	notifier := &countingInvitationNotifier{}
+	mux := invitationHandlerTestMux(memberID, pool, notifier)
+
+	resendReq := httptest.NewRequest(http.MethodPost, "/organizations/"+organizationID+"/invitations/"+created.Invitation.ID+"/resend", nil)
+	resendW := httptest.NewRecorder()
+	mux.ServeHTTP(resendW, resendReq)
+	if resendW.Code != http.StatusForbidden {
+		t.Fatalf("resend status=%d body=%s, want 403", resendW.Code, resendW.Body.String())
+	}
+	if notifier.count() != 0 {
+		t.Fatalf("notifier calls = %d, want 0", notifier.count())
 	}
 }
 
