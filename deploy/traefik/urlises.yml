@@ -1,0 +1,33 @@
+# Copy this file to /opt/traefik/dynamic/urlises.yml on the VPS.
+# Traefik's file provider reloads it automatically — no restart needed.
+# Replace 10.77.0.2 with the LAN IP (e.g. 192.168.1.33) only if WireGuard-bound
+# publishing isn't used (see docs/deployment.md).
+
+http:
+  routers:
+    urlises-api:
+      rule: "Host(`api.urlises.lab.dtfuria.xyz`)"
+      entryPoints:
+        - websecure
+      service: urlises-api
+      tls:
+        certResolver: letsencrypt
+
+    urlises-admin:
+      rule: "Host(`admin.urlises.lab.dtfuria.xyz`)"
+      entryPoints:
+        - websecure
+      service: urlises-admin
+      tls:
+        certResolver: letsencrypt
+
+  services:
+    urlises-api:
+      loadBalancer:
+        servers:
+          - url: "http://10.77.0.2:8080"
+
+    urlises-admin:
+      loadBalancer:
+        servers:
+          - url: "http://10.77.0.2:8082"
