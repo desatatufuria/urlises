@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from "react";
-import { Link, Navigate } from "react-router-dom";
+import { Link, Navigate, useSearchParams } from "react-router-dom";
 import { useAuth } from "../providers/AuthProvider";
 import { AppShell } from "../../lib/ui/components/AppShell";
 import { DataState } from "../../lib/ui/components/DataState";
@@ -8,12 +8,18 @@ import type { LoginPayload } from "../../lib/api/types";
 
 export function LoginPage() {
   const { status, signIn } = useAuth();
-  const [form, setForm] = useState<LoginPayload>({ email: "", password: "", deviceName: "URLises Control" });
+  const [searchParams] = useSearchParams();
+  const invitation = searchParams.get("invitation");
+  const invitedEmail = searchParams.get("email");
+  const returnTo = invitation
+    ? `/invitations/${encodeURIComponent(invitation)}${invitedEmail ? `?email=${encodeURIComponent(invitedEmail)}` : ""}`
+    : "/";
+  const [form, setForm] = useState<LoginPayload>({ email: invitedEmail ?? "", password: "", deviceName: "URLises Control" });
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
   if (status === "authenticated") {
-    return <Navigate to="/" replace />;
+    return <Navigate to={returnTo} replace />;
   }
 
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
@@ -67,7 +73,13 @@ export function LoginPage() {
           </button>
           {error ? <DataState tone="danger" title="Sign-in failed" description={error} compact /> : null}
         </form>
-        {status === "setupRequired" ? <p className="ui-copy"><Link to="/register">Create the first owner account</Link></p> : null}
+        {status === "setupRequired" || invitation ? (
+          <p className="ui-copy">
+            <Link to={{ pathname: "/register", search: searchParams.toString() }}>
+              {invitation ? "Create an account to accept this invitation" : "Create the first owner account"}
+            </Link>
+          </p>
+        ) : null}
         </section>
       </AppShell>
     </div>

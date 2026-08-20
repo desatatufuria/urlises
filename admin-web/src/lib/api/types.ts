@@ -44,6 +44,12 @@ export interface OrganizationMember {
   role: OrganizationRole;
 }
 
+export interface AcceptedInvitation {
+  organizationId: string;
+  organizationName: string;
+  role: OrganizationRole;
+}
+
 export interface PendingInvitation {
   invitationId: string;
   organizationId: string;

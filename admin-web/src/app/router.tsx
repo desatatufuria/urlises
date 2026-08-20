@@ -12,6 +12,7 @@ import { LoginPage } from "./views/LoginPage";
 import { OrganizationSetupPage } from "./views/OrganizationSetupPage";
 import { OrganizationCreatePage } from "./views/OrganizationCreatePage";
 import { RegisterPage } from "./views/RegisterPage";
+import { InvitationAcceptPage } from "./views/InvitationAcceptPage";
 
 function LoadingScreen() {
   return <DataState tone="neutral" title="Restoring operator session" description="Checking your admin session and organization scope." />;
@@ -67,6 +68,10 @@ export const appRoutes: RouteObject[] = [
   {
     path: "/register",
     element: <RegisterPage />,
+  },
+  {
+    path: "/invitations/:token",
+    element: <InvitationAcceptPage />,
   },
   {
     path: "/",

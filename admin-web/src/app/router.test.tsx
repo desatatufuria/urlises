@@ -35,6 +35,16 @@ describe("admin router", () => {
     expect(await screen.findByRole("heading", { name: /sign in to urlises control/i })).toBeInTheDocument();
   });
 
+  it("resolves /invitations/:token as its own public route instead of the catch-all", async () => {
+    fetchMock.mockImplementation((input) => (String(input).endsWith("/setup/status") ? jsonResponse({ required: false }) : jsonResponse({ error: "not found" }, 404)));
+
+    const { router } = renderAppRoute("/invitations/abc123?email=invitee%40example.com", null);
+
+    expect(await screen.findByRole("heading", { name: /sign in to urlises control/i })).toBeInTheDocument();
+    expect(router.state.location.pathname).toBe("/login");
+    expect(router.state.location.search).toBe("?invitation=abc123&email=invitee%40example.com");
+  });
+
   it("onboards the first owner and organization, then closes first-run registration", async () => {
     fetchMock.mockImplementation((input, init) => {
       const url = String(input);
