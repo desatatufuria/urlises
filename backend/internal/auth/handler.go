@@ -121,6 +121,44 @@ func RegisterRoutes(mux *http.ServeMux, service *Service, invitations invitation
 		httpapi.WriteJSON(w, http.StatusOK, principal)
 	})))
 
+	mux.Handle("GET /me/preferences", service.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		principal, ok := PrincipalFromContext(r.Context())
+		if !ok {
+			httpapi.WriteError(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+
+		prefs, err := service.GetPreferences(r.Context(), principal.UserID)
+		if err != nil {
+			writeAuthError(w, err)
+			return
+		}
+		httpapi.WriteJSON(w, http.StatusOK, prefs)
+	})))
+
+	mux.Handle("PUT /me/preferences", service.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		principal, ok := PrincipalFromContext(r.Context())
+		if !ok {
+			httpapi.WriteError(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+
+		var input struct {
+			UITheme string `json:"uiTheme"`
+		}
+		if err := httpapi.DecodeJSON(r, &input); err != nil {
+			httpapi.WriteError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+
+		prefs, err := service.UpdatePreferences(r.Context(), principal.UserID, input.UITheme)
+		if err != nil {
+			writeAuthError(w, err)
+			return
+		}
+		httpapi.WriteJSON(w, http.StatusOK, prefs)
+	})))
+
 	mux.Handle("POST /auth/ws-ticket", service.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		principal, ok := PrincipalFromContext(r.Context())
 		if !ok {
@@ -176,6 +214,8 @@ func writeAuthError(w http.ResponseWriter, err error) {
 		httpapi.WriteError(w, http.StatusServiceUnavailable, "unavailable")
 	case errors.Is(err, ErrTicketUnavailable):
 		httpapi.WriteError(w, http.StatusServiceUnavailable, "unavailable")
+	case errors.Is(err, ErrInvalidUITheme):
+		httpapi.WriteError(w, http.StatusBadRequest, err.Error())
 	default:
 		httpapi.WriteError(w, http.StatusBadRequest, err.Error())
 	}

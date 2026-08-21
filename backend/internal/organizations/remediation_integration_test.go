@@ -90,6 +90,7 @@ func TestMigrationFrom000002ReconcilesLegacyPendingInvitations(t *testing.T) {
 		"000006_refresh_sessions.sql",
 		"000007_ws_tickets.sql",
 		"000008_sync_patch_idempotency.sql",
+		"000009_user_ui_theme.sql",
 	})
 	migrateDirectory(t, ctx, pool, productionMigrationsDirectory(t))
 	assertRecordedMigrations(t, ctx, pool, []string{
@@ -101,6 +102,7 @@ func TestMigrationFrom000002ReconcilesLegacyPendingInvitations(t *testing.T) {
 		"000006_refresh_sessions.sql",
 		"000007_ws_tickets.sql",
 		"000008_sync_patch_idempotency.sql",
+		"000009_user_ui_theme.sql",
 	})
 }
 
@@ -141,6 +143,7 @@ func TestRecorded000003FixForwardExpiresPendingInvitation(t *testing.T) {
 		"000006_refresh_sessions.sql",
 		"000007_ws_tickets.sql",
 		"000008_sync_patch_idempotency.sql",
+		"000009_user_ui_theme.sql",
 	})
 	var appliedAfter0003, appliedAfter0004 time.Time
 	if err := pool.QueryRow(ctx, `SELECT applied_at FROM schema_migrations WHERE filename = '000003_admin_remediation.sql'`).Scan(&appliedAfter0003); err != nil {
