@@ -242,6 +242,7 @@ import {
   handleBookmarkRemoved,
   logout,
   markActivitySeen,
+  markSecretReadSeen,
   projectionTestHooks,
   rebuildWorkspace,
   retryWorkspace,
@@ -904,6 +905,115 @@ test("live remote activity updates revision metadata and markActivitySeen acknow
   await markActivitySeen();
   state = await getState();
   assert.equal(state.activitySignal?.lastSeenRevision, 1);
+});
+
+test("a secret_read frame dispatches to onSecretRead only, never to onEvent, and records a read confirmation keyed off the local secret record", async () => {
+  await setState({
+    ...createRuntimeState({ lastCursor: 7, socketConnected: true }),
+    secretRecords: [{ id: "secret-1", token: "tok-abc123", createdAt: "2026-08-01T00:00:00.000Z" }],
+    secretReadConfirmations: [],
+    secretReadSignal: { revision: 0, lastSeenRevision: 0 },
+  });
+
+  await projectionTestHooks.connectWorkspace("workspace-1");
+  await MockWebSocket.instances[0].emitMessage({ type: "ack", currentCursor: 7 });
+  await MockWebSocket.instances[0].emitMessage({
+    type: "secret_read",
+    secretId: "secret-1",
+    readAt: "2026-08-01T01:00:00.000Z",
+  });
+
+  const state = await getState();
+  assert.deepEqual(state.secretReadConfirmations, [{ secretId: "secret-1", readAt: "2026-08-01T01:00:00.000Z" }]);
+  assert.equal(state.secretReadSignal?.revision, 1);
+  assert.equal(state.secretReadSignal?.lastSeenRevision, 0);
+
+  // Never routed through onEvent/applyRemoteEnvelope: the workspace
+  // projection's cursor and activity metadata are untouched by a
+  // secret_read frame.
+  const projection = state.projectionsByWorkspaceId["workspace-1"];
+  assert.equal(projection.lastCursor, 7);
+  assert.equal(projection.activityRevision ?? 0, 0);
+});
+
+test("a secret_read frame for an unknown secretId is ignored (no local record to key off)", async () => {
+  await setState({
+    ...createRuntimeState({ lastCursor: 7, socketConnected: true }),
+    secretRecords: [],
+    secretReadConfirmations: [],
+    secretReadSignal: { revision: 0, lastSeenRevision: 0 },
+  });
+
+  await projectionTestHooks.connectWorkspace("workspace-1");
+  await MockWebSocket.instances[0].emitMessage({ type: "ack", currentCursor: 7 });
+  await MockWebSocket.instances[0].emitMessage({
+    type: "secret_read",
+    secretId: "unknown-secret",
+    readAt: "2026-08-01T01:00:00.000Z",
+  });
+
+  const state = await getState();
+  assert.deepEqual(state.secretReadConfirmations, []);
+  assert.equal(state.secretReadSignal?.revision, 0);
+});
+
+test("markSecretReadSeen acknowledges the current revision without disturbing activitySignal", async () => {
+  await setState({
+    ...createRuntimeState(),
+    secretRecords: [{ id: "secret-1", token: "tok-abc123", createdAt: "2026-08-01T00:00:00.000Z" }],
+    secretReadConfirmations: [{ secretId: "secret-1", readAt: "2026-08-01T01:00:00.000Z" }],
+    secretReadSignal: { revision: 1, lastSeenRevision: 0 },
+    activitySignal: { revision: 3, lastSeenRevision: 1 },
+  });
+
+  await markSecretReadSeen();
+  const state = await getState();
+  assert.equal(state.secretReadSignal?.lastSeenRevision, 1);
+  assert.equal(state.activitySignal?.revision, 3);
+  assert.equal(state.activitySignal?.lastSeenRevision, 1);
+});
+
+test("connectWorkspaceSocket dispatches a secret_read frame to onSecretRead only, never onEvent", async () => {
+  const events = [];
+  const secretReads = [];
+  // Every message (including secret_read) unconditionally re-arms the real
+  // 20s keepalive timer, regardless of "open" — close() must be called so
+  // this test does not leave a live timer behind.
+  const close = connectWorkspaceSocket("http://localhost:8081", "workspace-1", "ticket-1", {
+    onAck: async () => {},
+    onEvent: async (event) => { events.push(event); },
+    onSecretRead: async (secretId, readAt) => { secretReads.push({ secretId, readAt }); },
+    onResyncRequired: async () => {},
+    onClose: async () => {},
+    onError: async () => {},
+  });
+  const socket = MockWebSocket.instances[0];
+
+  try {
+    await socket.emitMessage({ type: "secret_read", secretId: "secret-1", readAt: "2026-08-01T01:00:00.000Z" });
+
+    assert.deepEqual(secretReads, [{ secretId: "secret-1", readAt: "2026-08-01T01:00:00.000Z" }]);
+    assert.deepEqual(events, []);
+  } finally {
+    close();
+  }
+});
+
+test("connectWorkspaceSocket tolerates a missing onSecretRead callback (backward compatible)", async () => {
+  const close = connectWorkspaceSocket("http://localhost:8081", "workspace-1", "ticket-1", {
+    onAck: async () => {},
+    onEvent: async () => {},
+    onResyncRequired: async () => {},
+    onClose: async () => {},
+    onError: async () => {},
+  });
+  const socket = MockWebSocket.instances[0];
+
+  try {
+    await assert.doesNotReject(() => socket.emitMessage({ type: "secret_read", secretId: "secret-1", readAt: "2026-08-01T01:00:00.000Z" }));
+  } finally {
+    close();
+  }
 });
 
 test("replay gap pauses the workspace without destructive resync", async () => {

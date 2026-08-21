@@ -1,5 +1,6 @@
 import { registerBookmarkListeners } from "./bookmark-listeners.js";
 import {
+  createSecret,
   getUiState,
   handleBookmarkChanged,
   handleBookmarkCreated,
@@ -9,6 +10,7 @@ import {
   loadOptionsState,
   login,
   markActivitySeen,
+  markSecretReadSeen,
   logout,
   rebuildWorkspace,
   resyncAll,
@@ -66,6 +68,12 @@ chrome.runtime.onMessage.addListener((message: { type: string; payload?: unknown
         return;
       case "ui/mark-activity-seen":
         sendResponse(await markActivitySeen());
+        return;
+      case "ui/mark-secret-read-seen":
+        sendResponse(await markSecretReadSeen());
+        return;
+      case "secrets/create":
+        sendResponse(await createSecret(message.payload as never));
         return;
       case "preferences/set-theme":
         sendResponse(await setUiTheme((message.payload as { uiTheme: "slate" | "indigo" | "teal" }).uiTheme));

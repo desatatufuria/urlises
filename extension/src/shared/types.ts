@@ -112,6 +112,11 @@ export interface MutationAck {
 export interface BackendSettings {
   backendUrl: string;
   clientId: string;
+  /** Cached from GET /config/public (best-effort, fetched once per session
+   * start/login). Undefined when never fetched or the backend doesn't
+   * support the endpoint yet — callers must fall back to
+   * DEFAULT_PUBLIC_BASE_URL in that case. */
+  publicBaseUrl?: string;
 }
 
 export interface DiagnosticEntry {
@@ -125,6 +130,29 @@ export interface ActivitySignal {
   revision: number;
   lastSeenRevision: number;
 }
+
+/** A secret the local user created, persisted so an incoming `secret_read`
+ * frame's bare `secretId` can be resolved back to a share the popup once
+ * created — the frame itself never carries the token (see design.md's
+ * "Read-confirmation frame payload" decision). */
+export interface SecretRecord {
+  id: string;
+  token: string;
+  createdAt: string;
+}
+
+/** A read confirmation for a locally-created secret, recorded either from a
+ * live `secret_read` socket frame or (implicitly) surfaced on next popup
+ * open when no live delivery occurred while the secret was burned. */
+export interface SecretReadConfirmation {
+  secretId: string;
+  readAt: string;
+}
+
+/** Same {revision, lastSeenRevision} shape as ActivitySignal, tracked as an
+ * independent signal so a "Secret read" pill never gets silently folded
+ * into (or cleared by) the unrelated "New updates" activity pill. */
+export type SecretReadSignal = ActivitySignal;
 
 export interface ProjectionActivityDetail {
   entityType: "workspace" | "folder" | "bookmark";
@@ -221,6 +249,9 @@ export interface ExtensionState {
   activitySignal?: ActivitySignal;
   statusOverview?: StatusOverview;
   uiTheme?: UITheme;
+  secretRecords?: SecretRecord[];
+  secretReadConfirmations?: SecretReadConfirmation[];
+  secretReadSignal?: SecretReadSignal;
 }
 
 export interface LoginRequest {

@@ -1,4 +1,5 @@
-import { DEFAULT_BACKEND_URL } from "../shared/runtime.js";
+import { DEFAULT_BACKEND_URL, DEFAULT_PUBLIC_BASE_URL } from "../shared/runtime.js";
+import { deriveWrappingKey, encrypt, exportContentKey, generateContentKey, wrapKey } from "../shared/crypto.js";
 import { getPopupStatusModel } from "../shared/ui/status.js";
 import type { ExtensionState, LoginRequest, UiState } from "../shared/types.js";
 import { nextAdvancedToggleState } from "./advanced-toggle.js";
@@ -21,7 +22,19 @@ const deviceNameInput = document.querySelector<HTMLInputElement>("#device-name")
 const toggleAdvancedButton = document.querySelector<HTMLButtonElement>("#toggle-advanced")!;
 const advancedPanel = document.querySelector<HTMLElement>("#advanced-panel")!;
 const advancedChevron = toggleAdvancedButton.querySelector<SVGElement>(".ui-chevron")!;
+
+const toggleCreateSecretButton = document.querySelector<HTMLButtonElement>("#toggle-create-secret")!;
+const createSecretPanel = document.querySelector<HTMLElement>("#create-secret-panel")!;
+const createSecretChevron = toggleCreateSecretButton.querySelector<SVGElement>(".ui-chevron")!;
+const createSecretForm = document.querySelector<HTMLFormElement>("#create-secret-form")!;
+const secretContentInput = document.querySelector<HTMLTextAreaElement>("#secret-content")!;
+const secretPassphraseInput = document.querySelector<HTMLInputElement>("#secret-passphrase")!;
+const secretLinkResult = document.querySelector<HTMLElement>("#secret-link-result")!;
+const secretLinkOutput = document.querySelector<HTMLInputElement>("#secret-link-output")!;
+const secretCreateError = document.querySelector<HTMLElement>("#secret-create-error")!;
+
 let lastAcknowledgedRevision = 0;
+let lastAcknowledgedSecretReadRevision = 0;
 
 document.querySelector<HTMLFormElement>("#login-form")!.addEventListener("submit", (event) => {
   event.preventDefault();
@@ -42,6 +55,19 @@ toggleAdvancedButton.addEventListener("click", () => {
   advancedPanel.classList.toggle("hidden", !next.expanded);
   advancedChevron.classList.toggle("ui-chevron--open", next.expanded);
   toggleAdvancedButton.setAttribute("aria-expanded", next.ariaExpanded);
+});
+
+toggleCreateSecretButton.addEventListener("click", () => {
+  const isExpanded = toggleCreateSecretButton.getAttribute("aria-expanded") === "true";
+  const next = nextAdvancedToggleState(isExpanded);
+  createSecretPanel.classList.toggle("hidden", !next.expanded);
+  createSecretChevron.classList.toggle("ui-chevron--open", next.expanded);
+  toggleCreateSecretButton.setAttribute("aria-expanded", next.ariaExpanded);
+});
+
+createSecretForm.addEventListener("submit", (event) => {
+  event.preventDefault();
+  void runCreateSecret().catch(showSecretCreateError);
 });
 
 void bootstrap().catch(showError);
@@ -65,6 +91,57 @@ async function runLogin(): Promise<void> {
   };
   const ui = await sendMessage<UiState>({ type: "auth/login", payload: request });
   render(ui);
+}
+
+async function runCreateSecret(): Promise<void> {
+  clearSecretCreateError();
+  const content = secretContentInput.value;
+  if (!content) {
+    return;
+  }
+  const passphrase = secretPassphraseInput.value;
+
+  const contentKey = await generateContentKey();
+  const { ciphertext, iv } = await encrypt(contentKey, content);
+
+  let wrappedContentKey: string | undefined;
+  let passphraseSalt: string | undefined;
+  let kdfIterations: number | undefined;
+  let fragmentKey: string | undefined;
+
+  if (passphrase) {
+    const wrapping = await deriveWrappingKey(passphrase);
+    wrappedContentKey = await wrapKey(wrapping.key, contentKey);
+    passphraseSalt = wrapping.salt;
+    kdfIterations = wrapping.iterations;
+  } else {
+    fragmentKey = await exportContentKey(contentKey);
+  }
+
+  const response = await sendMessage<UiState & { secret: { id: string; token: string; createdAt: string; expiresAt: string } }>({
+    type: "secrets/create",
+    payload: { ciphertext, iv, wrappedContentKey, passphraseSalt, kdfIterations },
+  });
+
+  render(response);
+  const publicBaseUrl = response.state.settings.publicBaseUrl ?? DEFAULT_PUBLIC_BASE_URL;
+  renderSecretLink(response.secret.token, publicBaseUrl, fragmentKey);
+  createSecretForm.reset();
+}
+
+function renderSecretLink(token: string, publicBaseUrl: string, fragmentKey?: string): void {
+  const link = `${publicBaseUrl}/s/${token}${fragmentKey ? `#k=${encodeURIComponent(fragmentKey)}` : ""}`;
+  secretLinkOutput.value = link;
+  secretLinkResult.classList.remove("hidden");
+}
+
+function showSecretCreateError(error: unknown): void {
+  secretCreateError.textContent = error instanceof Error ? error.message : "Could not create this secret";
+}
+
+function clearSecretCreateError(): void {
+  secretCreateError.textContent = "";
+  secretLinkResult.classList.add("hidden");
 }
 
 function render(ui: UiState): void {
@@ -95,6 +172,7 @@ function render(ui: UiState): void {
   renderLastActivity(statusModel);
   renderRecentActivity(statusModel);
   acknowledgeActivityIfNeeded(state);
+  acknowledgeSecretReadIfNeeded(state);
 }
 
 function showError(error: unknown): void {
@@ -110,6 +188,9 @@ function renderIndicators(model: ReturnType<typeof getPopupStatusModel>): void {
   statusIndicators.appendChild(createPill(model.statusLabel, model.tone));
   if (model.showNewActivity) {
     statusIndicators.appendChild(createIndicator("New updates", "ui-activity-dot", true));
+  }
+  if (model.showSecretReadConfirmation) {
+    statusIndicators.appendChild(createIndicator("Secret read", "ui-activity-dot", true));
   }
 }
 
@@ -145,6 +226,20 @@ function acknowledgeActivityIfNeeded(state: ExtensionState): void {
   queueMicrotask(() => {
     void sendMessage<UiState>({ type: "ui/mark-activity-seen" }).catch(() => {
       lastAcknowledgedRevision = Math.min(lastAcknowledgedRevision, lastSeen);
+    });
+  });
+}
+
+function acknowledgeSecretReadIfNeeded(state: ExtensionState): void {
+  const revision = state.secretReadSignal?.revision ?? 0;
+  const lastSeen = state.secretReadSignal?.lastSeenRevision ?? 0;
+  if (revision === 0 || revision <= lastSeen || revision <= lastAcknowledgedSecretReadRevision) {
+    return;
+  }
+  lastAcknowledgedSecretReadRevision = revision;
+  queueMicrotask(() => {
+    void sendMessage<UiState>({ type: "ui/mark-secret-read-seen" }).catch(() => {
+      lastAcknowledgedSecretReadRevision = Math.min(lastAcknowledgedSecretReadRevision, lastSeen);
     });
   });
 }

@@ -97,14 +97,14 @@ Each unit is developed, tested, and merged into `develop` before the next unit's
 
 ## Phase 7: Extension — Crypto Helper, Create UI, Read Confirmation
 
-- [ ] 7.1 RED: `extension/tests/crypto.test.mjs` (or vitest equivalent) — same round-trip/PBKDF2/wrong-passphrase cases as 6.1, confirming wire-format parity with `admin-web/src/lib/crypto.ts`.
-- [ ] 7.2 GREEN: `extension/src/shared/crypto.ts` — same helper set as 6.2 (`generateContentKey`, `encrypt`, `decrypt`, `deriveWrappingKey`, `wrapKey`, `unwrapKey`, base64 helpers).
-- [ ] 7.3 `extension/src/shared/api.ts` — add `createSecret(backendUrl, session, input)` following the existing `createBookmark`-style call shape.
-- [ ] 7.4 RED: `extension/tests/projection-behavior.test.mjs` — a `type === "secret_read"` frame dispatches to a new `onSecretRead` callback only, never to `onEvent`; the frame's `secretId` is used to look up the locally-persisted `{id, token, createdAt}` record.
-- [ ] 7.5 GREEN: `extension/src/shared/websocket.ts` — add an `onSecretRead` callback option, branch on `type === "secret_read"` before the existing `onEvent`/`ack`/`resync_required` handling.
-- [ ] 7.6 GREEN: `extension/src/background/projection.ts` — wire the `onSecretRead` handler to persist a read-confirmation notification (activitySignal-style, via `extension/src/shared/storage.ts`), keyed off the locally-persisted secret record from creation.
-- [ ] 7.7 RED: `extension/tests/status-ui.test.mjs` (or popup equivalent) — an offline-created read confirmation is rendered as a distinct pill on next popup open and is cleared (does not resurface) once acknowledged.
-- [ ] 7.8 GREEN: `extension/src/popup/popup.ts`, `extension/src/popup/popup.html` — create-secret form (content + optional passphrase), on submit: `crypto.ts` generate/encrypt (and wrap if passphrase set) → `api.ts createSecret` → render shareable link (`{PUBLIC_BASE_URL}/s/{token}[#k=...]`), persist `{id, token, createdAt}` locally; render/clear the read-confirmation pill from persisted state.
+- [x] 7.1 RED: `extension/tests/crypto.test.mjs` (or vitest equivalent) — same round-trip/PBKDF2/wrong-passphrase cases as 6.1, confirming wire-format parity with `admin-web/src/lib/crypto.ts`.
+- [x] 7.2 GREEN: `extension/src/shared/crypto.ts` — same helper set as 6.2 (`generateContentKey`, `encrypt`, `decrypt`, `deriveWrappingKey`, `wrapKey`, `unwrapKey`, base64 helpers).
+- [x] 7.3 `extension/src/shared/api.ts` — add `createSecret(backendUrl, session, input)` following the existing `createBookmark`-style call shape.
+- [x] 7.4 RED: `extension/tests/projection-behavior.test.mjs` — a `type === "secret_read"` frame dispatches to a new `onSecretRead` callback only, never to `onEvent`; the frame's `secretId` is used to look up the locally-persisted `{id, token, createdAt}` record.
+- [x] 7.5 GREEN: `extension/src/shared/websocket.ts` — add an `onSecretRead` callback option, branch on `type === "secret_read"` before the existing `onEvent`/`ack`/`resync_required` handling.
+- [x] 7.6 GREEN: `extension/src/background/projection.ts` — wire the `onSecretRead` handler to persist a read-confirmation notification (activitySignal-style, via `extension/src/shared/storage.ts`), keyed off the locally-persisted secret record from creation.
+- [x] 7.7 RED: `extension/tests/status-ui.test.mjs` (or popup equivalent) — an offline-created read confirmation is rendered as a distinct pill on next popup open and is cleared (does not resurface) once acknowledged.
+- [x] 7.8 GREEN: `extension/src/popup/popup.ts`, `extension/src/popup/popup.html` — create-secret form (content + optional passphrase), on submit: `crypto.ts` generate/encrypt (and wrap if passphrase set) → `api.ts createSecret` → render shareable link (`{PUBLIC_BASE_URL}/s/{token}[#k=...]`), persist `{id, token, createdAt}` locally; render/clear the read-confirmation pill from persisted state.
 
 ## Phase 8: Verification
 

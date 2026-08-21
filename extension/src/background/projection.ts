@@ -1,10 +1,12 @@
 import {
   createBookmark as apiCreateBookmark,
   createFolder as apiCreateFolder,
+  createSecret as apiCreateSecret,
   deleteBookmark as apiDeleteBookmark,
   deleteFolder as apiDeleteFolder,
   getOrganizations,
   getPreferences as apiGetPreferences,
+  getPublicConfig as apiGetPublicConfig,
   getWorkspaceTree,
   getWorkspaces,
   login as apiLogin,
@@ -16,6 +18,7 @@ import {
   updateFolder as apiUpdateFolder,
   updatePreferences as apiUpdatePreferences,
   ApiError,
+  type CreateSecretInput,
 } from "../shared/api.js";
 import { pushDiagnostic } from "../shared/diagnostics.js";
 import { addExclusion, isExcluded, pruneExclusions, removeExclusions } from "../shared/exclusions.js";
@@ -40,6 +43,7 @@ import type {
   LoginRequest,
   ProjectionActivityDetail,
   ProjectionState,
+  SecretRecord,
   SessionData,
   StatusOverview,
   SyncEnvelope,
@@ -138,6 +142,7 @@ export async function initializeBackground(): Promise<void> {
   const state = await getState();
   if (state.session) {
     await refreshPreferences(state.session, state.settings.backendUrl);
+    await refreshPublicConfig(state.settings.backendUrl);
   }
   if (!state.session || state.selectedWorkspaceIds.length === 0) {
     return;
@@ -152,6 +157,7 @@ export async function login(request: LoginRequest): Promise<UiState> {
   await saveSession(session);
   await refreshWorkspaceCatalog(session, request.backendUrl);
   await refreshPreferences(session, request.backendUrl);
+  await refreshPublicConfig(request.backendUrl);
   await log("auth", `signed in as ${session.user.email}`, "info");
   await syncSelectedWorkspaces("login");
   return getUiState();
@@ -167,6 +173,26 @@ async function refreshPreferences(session: SessionData, backendUrl: string): Pro
     await updateState((state) => ({ ...state, uiTheme: preferences.uiTheme as UITheme }));
   } catch {
     // best-effort: keep the last persisted theme rather than failing sign-in.
+  }
+}
+
+// refreshPublicConfig fetches the server's unauthenticated config-bootstrap
+// value (currently just publicBaseUrl, used to build shareable secret
+// links) once per session start/login and caches it in settings. It is
+// best-effort, mirroring refreshPreferences above: on failure — an older
+// backend without this endpoint yet, a network error, anything — it leaves
+// whatever publicBaseUrl (if any) is already persisted untouched.
+// popup.ts falls back to DEFAULT_PUBLIC_BASE_URL when nothing was ever
+// persisted, so a failed fetch here never breaks the create-secret flow.
+async function refreshPublicConfig(backendUrl: string): Promise<void> {
+  try {
+    const publicConfig = await apiGetPublicConfig(backendUrl);
+    await updateState((state) => ({
+      ...state,
+      settings: { ...state.settings, publicBaseUrl: publicConfig.publicBaseUrl },
+    }));
+  } catch {
+    // best-effort: keep whatever publicBaseUrl is already persisted (or none).
   }
 }
 
@@ -217,6 +243,41 @@ export async function markActivitySeen(): Promise<UiState> {
     };
   });
   return getUiState();
+}
+
+export async function markSecretReadSeen(): Promise<UiState> {
+  await updateState((state) => {
+    const revision = state.secretReadSignal?.revision ?? 0;
+    return {
+      ...state,
+      secretReadSignal: {
+        revision,
+        lastSeenRevision: revision,
+      },
+    };
+  });
+  return getUiState();
+}
+
+// createSecret encrypts nothing itself — the caller (popup.ts) already
+// encrypted content client-side via shared/crypto.ts before this is called,
+// so this function only ever sees already-opaque ciphertext/wrappedKey
+// material, matching the zero-knowledge requirement end to end.
+export async function createSecret(input: CreateSecretInput): Promise<UiState & { secret: SecretRecord & { expiresAt: string } }> {
+  const state = await getState();
+  if (!state.session) {
+    throw new Error("sign in required to create a secret");
+  }
+
+  const created = await apiCreateSecret(state.settings.backendUrl, state.session, input);
+  const record: SecretRecord = { id: created.id, token: created.token, createdAt: created.createdAt };
+  await updateState((current) => ({
+    ...current,
+    secretRecords: [...(current.secretRecords ?? []), record],
+  }));
+
+  const ui = await getUiState();
+  return { ...ui, secret: { ...record, expiresAt: created.expiresAt } };
 }
 
 export async function setSelectedWorkspaces(workspaceIds: string[]): Promise<UiState> {
@@ -689,6 +750,12 @@ async function connectWorkspaceNow(workspaceId: string): Promise<void> {
       }
       await enqueueLiveRemoteEnvelope(workspaceId, event);
     },
+    onSecretRead: async (secretId, readAt) => {
+      if (!isActiveSocket()) {
+        return;
+      }
+      await recordSecretRead(secretId, readAt);
+    },
     onResyncRequired: async (reason) => {
       if (!isActiveSocket()) {
         return;
@@ -811,12 +878,14 @@ function describeError(error: unknown): string {
 
 function buildUiState(state: ExtensionState): UiState {
   const activitySignal = ensureActivitySignal(state);
+  const secretReadSignal = ensureSecretReadSignal(state);
   const statusOverview = buildStatusOverview(state);
   return {
     state: {
       ...state,
       session: state.session ? { ...state.session, accessToken: "" } : null,
       activitySignal,
+      secretReadSignal,
       statusOverview,
     },
   };
@@ -830,6 +899,17 @@ function ensureActivitySignal(state: Pick<ExtensionState, "activitySignal" | "pr
   return {
     revision,
     lastSeenRevision: Math.min(state.activitySignal?.lastSeenRevision ?? 0, revision),
+  };
+}
+
+// Unlike activitySignal, secretReadSignal has no per-workspace projection to
+// derive a revision floor from — recordSecretRead is its only writer — so
+// this is a plain clamp, not a max-merge across projections.
+function ensureSecretReadSignal(state: Pick<ExtensionState, "secretReadSignal">): ActivitySignal {
+  const revision = state.secretReadSignal?.revision ?? 0;
+  return {
+    revision,
+    lastSeenRevision: Math.min(state.secretReadSignal?.lastSeenRevision ?? 0, revision),
   };
 }
 
@@ -1734,6 +1814,33 @@ async function recordActivity(
       projectionsByWorkspaceId: {
         ...state.projectionsByWorkspaceId,
         [workspaceId]: projection,
+      },
+    };
+  });
+}
+
+// recordSecretRead persists a read confirmation for a secret_read frame,
+// keyed off the locally-persisted secretRecords entry from creation (the
+// frame itself only ever carries secretId, never the token — see
+// design.md's "Read-confirmation frame payload" decision). Frames for a
+// secretId with no matching local record, or one already confirmed
+// (PublishToUser can deliver the same frame to more than one of the
+// creator's open workspace sockets), are silently ignored.
+async function recordSecretRead(secretId: string, readAt: string): Promise<void> {
+  await updateState((state) => {
+    const record = (state.secretRecords ?? []).find((candidate) => candidate.id === secretId);
+    const alreadyConfirmed = (state.secretReadConfirmations ?? []).some((confirmation) => confirmation.secretId === secretId);
+    if (!record || alreadyConfirmed) {
+      return state;
+    }
+    const currentSignal = ensureSecretReadSignal(state);
+    const nextRevision = currentSignal.revision + 1;
+    return {
+      ...state,
+      secretReadConfirmations: [...(state.secretReadConfirmations ?? []), { secretId, readAt }],
+      secretReadSignal: {
+        revision: nextRevision,
+        lastSeenRevision: currentSignal.lastSeenRevision,
       },
     };
   });
