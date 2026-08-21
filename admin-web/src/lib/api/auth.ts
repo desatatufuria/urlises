@@ -14,6 +14,7 @@ export function register(input: RegistrationPayload & { clientId: string }) {
       name: input.name,
       password: input.password,
       deviceName: input.deviceName ?? "URLises Control",
+      ...(input.invitationToken ? { invitationToken: input.invitationToken } : {}),
     },
   });
 }

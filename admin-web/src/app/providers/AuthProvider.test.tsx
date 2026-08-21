@@ -45,6 +45,25 @@ function SignUpOnMount() {
   return <div data-testid="status">{status}</div>;
 }
 
+function SignUpWithInvitationOnMount() {
+  const { signUp, status } = useAuth();
+  const attempted = useRef(false);
+
+  useEffect(() => {
+    if (status === "anonymous" && !attempted.current) {
+      attempted.current = true;
+      void signUp({
+        name: "Invitee",
+        email: "invitee@example.com",
+        password: "correct horse battery staple",
+        invitationToken: "invite-token-123",
+      });
+    }
+  }, [signUp, status]);
+
+  return <div data-testid="status">{status}</div>;
+}
+
 function CreateOrganizationProbe() {
   const { createOwnerOrganization, organizations } = useAuth();
   const created = useRef(false);
@@ -225,6 +244,49 @@ describe("AuthProvider client id propagation", () => {
     expect(registerClientIds[0]).toBe("stale-client-from-another-account");
     expect(registerClientIds[1]).not.toBe("stale-client-from-another-account");
     expect(window.localStorage.getItem(CLIENT_ID_STORAGE_KEY)).toBe(registerClientIds[1]);
+  });
+
+  it("forwards the invitation token to POST /auth/register when present", async () => {
+    fetchMock.mockImplementation((input) => {
+      const url = String(input);
+
+      if (url.endsWith("/auth/register")) {
+        return jsonResponse({
+          accessToken: "token-register-invited",
+          clientId: "client-invited",
+          expiresAt: "2099-01-01T00:00:00Z",
+          user: { id: "user-1", email: "invitee@example.com", name: "Invitee" },
+        });
+      }
+
+      if (url.endsWith("/setup/status")) {
+        return jsonResponse({ required: false });
+      }
+
+      if (url.endsWith("/me")) {
+        return jsonResponse({ userId: "user-1", email: "invitee@example.com", name: "Invitee", clientId: "client-invited" });
+      }
+
+      if (url.endsWith("/organizations")) {
+        return jsonResponse({ organizations: [] });
+      }
+
+      return jsonResponse({ error: "not found" }, 404);
+    });
+
+    render(
+      <AuthProvider>
+        <SignUpWithInvitationOnMount />
+      </AuthProvider>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId("status")).toHaveTextContent("authenticated");
+    });
+
+    const registerRequest = fetchMock.mock.calls.find(([input]) => String(input).endsWith("/auth/register"));
+    expect(registerRequest).toBeDefined();
+    expect(JSON.parse(String(registerRequest?.[1]?.body)).invitationToken).toBe("invite-token-123");
   });
 
   it("returns and persists the exact created owner membership", async () => {

@@ -29,6 +29,7 @@ export interface LoginPayload {
 
 export interface RegistrationPayload extends LoginPayload {
   name: string;
+  invitationToken?: string;
 }
 
 export interface OrganizationMembership {

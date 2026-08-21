@@ -39,7 +39,7 @@ export function RegisterPage() {
     }
     setSubmitting(true);
     try {
-      await signUp(form);
+      await signUp(invitation ? { ...form, invitationToken: invitation } : form);
       navigate(returnTo, { replace: true });
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Unable to create the owner account.");
