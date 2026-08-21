@@ -58,6 +58,7 @@ async function runLogin(): Promise<void> {
 
 function render(ui: UiState): void {
   const { state } = ui;
+  document.documentElement.dataset.theme = state.uiTheme ?? "slate";
   const statusModel = getPopupStatusModel(state);
   const signedInActive = Boolean(state.session);
   signedOut.classList.toggle("hidden", signedInActive);

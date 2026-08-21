@@ -1,4 +1,4 @@
-import type { ExtensionState, StatusOverview, UiState } from "../shared/types.js";
+import type { ExtensionState, StatusOverview, UiState, UITheme } from "../shared/types.js";
 import { formatUiTimestamp, getStatusOverview, getWorkspaceStatusModel } from "../shared/ui/status.js";
 
 const summary = document.querySelector<HTMLElement>("#summary")!;
@@ -7,7 +7,14 @@ const liveSyncStatusNode = document.querySelector<HTMLElement>("#live-sync-statu
 const liveSyncStatusTextNode = document.querySelector<HTMLElement>("#live-sync-status-text")!;
 const diagnosticsNode = document.querySelector<HTMLElement>("#diagnostics")!;
 const overviewMetrics = document.querySelector<HTMLElement>("#overview-metrics")!;
+const themeSwatches = document.querySelector<HTMLElement>("#theme-swatches")!;
 let lastAcknowledgedRevision = 0;
+
+const THEME_OPTIONS: Array<{ value: UITheme; label: string; background: string; accent: string }> = [
+  { value: "slate", label: "Slate Professional", background: "#14161c", accent: "#6c8ef2" },
+  { value: "indigo", label: "Deep Indigo", background: "#0e0f1a", accent: "#7c7ff0" },
+  { value: "teal", label: "Graphite & Teal", background: "#14181a", accent: "#3fb5b0" },
+];
 
 document.querySelector<HTMLButtonElement>("#save-selection")!.addEventListener("click", () => {
   const selected = Array.from(document.querySelectorAll<HTMLInputElement>("input[data-workspace-id]:checked")).map((input) => input.dataset.workspaceId!);
@@ -25,6 +32,8 @@ async function load(): Promise<void> {
 
 function render(ui: UiState): void {
   const state = ui.state;
+  document.documentElement.dataset.theme = state.uiTheme ?? "slate";
+  renderAppearance(state.uiTheme ?? "slate");
   const overview = state.statusOverview ?? getStatusOverview(state);
   if (!state.session) {
     summary.textContent = "Sign in from the popup before selecting workspaces.";
@@ -148,6 +157,42 @@ function showError(error: unknown): void {
     scope: "options",
     message: error instanceof Error ? error.message : "Unexpected options error",
   }]);
+}
+
+function renderAppearance(activeTheme: UITheme): void {
+  themeSwatches.replaceChildren();
+  for (const theme of THEME_OPTIONS) {
+    const isActive = theme.value === activeTheme;
+    const swatch = document.createElement("button");
+    swatch.type = "button";
+    swatch.className = `ui-theme-swatch${isActive ? " ui-theme-swatch--active" : ""}`;
+    swatch.style.background = theme.background;
+    swatch.setAttribute("aria-pressed", String(isActive));
+    swatch.addEventListener("click", () => {
+      void sendMessage<UiState>({ type: "preferences/set-theme", payload: { uiTheme: theme.value } })
+        .then(render)
+        .catch(showError);
+    });
+
+    const chip = document.createElement("span");
+    chip.className = "ui-theme-swatch__chip";
+    chip.style.background = theme.accent;
+    swatch.appendChild(chip);
+
+    const label = document.createElement("span");
+    label.className = "ui-theme-swatch__label";
+    label.textContent = theme.label;
+    swatch.appendChild(label);
+
+    if (isActive) {
+      const check = document.createElement("span");
+      check.className = "ui-theme-swatch__check";
+      check.textContent = "✓";
+      swatch.appendChild(check);
+    }
+
+    themeSwatches.appendChild(swatch);
+  }
 }
 
 function renderOverviewMetrics(overview: StatusOverview): void {

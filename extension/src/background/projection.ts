@@ -4,6 +4,7 @@ import {
   deleteBookmark as apiDeleteBookmark,
   deleteFolder as apiDeleteFolder,
   getOrganizations,
+  getPreferences as apiGetPreferences,
   getWorkspaceTree,
   getWorkspaces,
   login as apiLogin,
@@ -13,6 +14,7 @@ import {
   replayEvents,
   updateBookmark as apiUpdateBookmark,
   updateFolder as apiUpdateFolder,
+  updatePreferences as apiUpdatePreferences,
   ApiError,
 } from "../shared/api.js";
 import { pushDiagnostic } from "../shared/diagnostics.js";
@@ -43,6 +45,7 @@ import type {
   SyncEnvelope,
   TreeResponse,
   UiState,
+  UITheme,
   WorkspaceAccess,
 } from "../shared/types.js";
 import {
@@ -133,6 +136,9 @@ export async function initializeBackground(): Promise<void> {
   setSessionPauseHandler(closeAllSockets);
   await restoreSession();
   const state = await getState();
+  if (state.session) {
+    await refreshPreferences(state.session, state.settings.backendUrl);
+  }
   if (!state.session || state.selectedWorkspaceIds.length === 0) {
     return;
   }
@@ -145,8 +151,32 @@ export async function login(request: LoginRequest): Promise<UiState> {
   await setBackendUrl(request.backendUrl);
   await saveSession(session);
   await refreshWorkspaceCatalog(session, request.backendUrl);
+  await refreshPreferences(session, request.backendUrl);
   await log("auth", `signed in as ${session.user.email}`, "info");
   await syncSelectedWorkspaces("login");
+  return getUiState();
+}
+
+// refreshPreferences fetches the caller's account-level UI theme once and
+// stores it in local state. It is best-effort: on failure it leaves whatever
+// theme is already persisted locally untouched (or "slate" if nothing was
+// ever persisted), matching the fallback the UI applies at render time.
+async function refreshPreferences(session: SessionData, backendUrl: string): Promise<void> {
+  try {
+    const preferences = await apiGetPreferences(backendUrl, session);
+    await updateState((state) => ({ ...state, uiTheme: preferences.uiTheme as UITheme }));
+  } catch {
+    // best-effort: keep the last persisted theme rather than failing sign-in.
+  }
+}
+
+export async function setUiTheme(uiTheme: UITheme): Promise<UiState> {
+  const state = await getState();
+  if (!state.session) {
+    throw new Error("not authenticated");
+  }
+  const preferences = await apiUpdatePreferences(state.settings.backendUrl, state.session, uiTheme);
+  await updateState((current) => ({ ...current, uiTheme: preferences.uiTheme as UITheme }));
   return getUiState();
 }
 

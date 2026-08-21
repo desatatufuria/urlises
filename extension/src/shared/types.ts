@@ -203,6 +203,12 @@ export interface ProjectionState {
   convergenceJournal?: ConvergenceJournal;
 }
 
+export type UITheme = "slate" | "indigo" | "teal";
+
+export interface Preferences {
+  uiTheme: string;
+}
+
 export interface ExtensionState {
   settings: BackendSettings;
   session: SessionData | null;
@@ -214,6 +220,7 @@ export interface ExtensionState {
   diagnostics: DiagnosticEntry[];
   activitySignal?: ActivitySignal;
   statusOverview?: StatusOverview;
+  uiTheme?: UITheme;
 }
 
 export interface LoginRequest {

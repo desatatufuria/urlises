@@ -14,6 +14,7 @@ import type {
   LoginRequest,
   MutationAck,
   OrganizationMembership,
+  Preferences,
   ReplayResult,
   SessionData,
   RenewableSession,
@@ -86,6 +87,18 @@ export async function replayEvents(backendUrl: string, session: SessionData, wor
 
 export function createWSTicket(backendUrl: string, session: SessionData): Promise<WSTicket> {
   return requestJSON<WSTicket>(backendUrl, "/auth/ws-ticket", { method: "POST", headers: authHeaders(session) });
+}
+
+export function getPreferences(backendUrl: string, session: SessionData): Promise<Preferences> {
+  return requestJSON<Preferences>(backendUrl, "/me/preferences", { headers: authHeaders(session) });
+}
+
+export function updatePreferences(backendUrl: string, session: SessionData, uiTheme: string): Promise<Preferences> {
+  return requestJSON<Preferences>(backendUrl, "/me/preferences", {
+    method: "PUT",
+    headers: authHeaders(session),
+    body: { uiTheme },
+  });
 }
 
 export async function createFolder(

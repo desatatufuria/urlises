@@ -14,6 +14,7 @@ import {
   resyncAll,
   retryWorkspace,
   setSelectedWorkspaces,
+  setUiTheme,
 } from "./projection.js";
 import { STORAGE_KEY } from "../shared/runtime.js";
 import { getState } from "../shared/storage.js";
@@ -65,6 +66,9 @@ chrome.runtime.onMessage.addListener((message: { type: string; payload?: unknown
         return;
       case "ui/mark-activity-seen":
         sendResponse(await markActivitySeen());
+        return;
+      case "preferences/set-theme":
+        sendResponse(await setUiTheme((message.payload as { uiTheme: "slate" | "indigo" | "teal" }).uiTheme));
         return;
       default:
         sendResponse({ error: `unsupported message type ${message.type}` });
