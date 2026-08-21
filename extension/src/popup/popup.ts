@@ -1,9 +1,13 @@
-import { DEFAULT_BACKEND_URL } from "../shared/runtime.js";
+import { CREATE_SECRET_WINDOW_ID_KEY, DEFAULT_BACKEND_URL } from "../shared/runtime.js";
 import { sendMessage } from "../shared/messaging.js";
 import { getPopupStatusModel } from "../shared/ui/status.js";
 import type { ExtensionState, LoginRequest, UiState } from "../shared/types.js";
+import { computeCenteredWindowPosition } from "../shared/window-geometry.js";
 import { nextAdvancedToggleState } from "./advanced-toggle.js";
 import { shouldShowStatusDetail } from "./status-detail.js";
+
+const CREATE_SECRET_WINDOW_WIDTH = 420;
+const CREATE_SECRET_WINDOW_HEIGHT = 500;
 
 const signedOut = document.querySelector<HTMLElement>("#signed-out")!;
 const signedIn = document.querySelector<HTMLElement>("#signed-in")!;
@@ -50,15 +54,59 @@ toggleAdvancedButton.addEventListener("click", () => {
 });
 
 openCreateSecretButton.addEventListener("click", () => {
-  chrome.windows.create({
-    url: chrome.runtime.getURL("src/create-secret/create-secret.html"),
-    type: "popup",
-    width: 480,
-    height: 640,
-  });
+  void openOrFocusCreateSecretWindow().catch(showError);
 });
 
 void bootstrap().catch(showError);
+
+// Idempotent open: reuses the already-open create-secret window (tracked in
+// chrome.storage.session, see shared/runtime.ts's CREATE_SECRET_WINDOW_ID_KEY)
+// if one is still alive, instead of letting repeated clicks pile up popups.
+// chrome.windows.update() rejecting (the tracked window was closed by the
+// user, so the stored id is stale) is the self-healing fallback path into
+// creating a fresh window — chrome.windows.onRemoved in the service worker
+// also clears the stored id, but this catch keeps the flow correct even if
+// that listener never ran (e.g. the worker was asleep).
+async function openOrFocusCreateSecretWindow(): Promise<void> {
+  const stored = await getStoredCreateSecretWindowId();
+  if (stored !== undefined && (await tryFocusWindow(stored))) {
+    return;
+  }
+  await createCreateSecretWindow();
+}
+
+async function getStoredCreateSecretWindowId(): Promise<number | undefined> {
+  const result = await chrome.storage.session.get<Record<string, unknown>>(CREATE_SECRET_WINDOW_ID_KEY);
+  const value = result[CREATE_SECRET_WINDOW_ID_KEY];
+  return typeof value === "number" ? value : undefined;
+}
+
+async function tryFocusWindow(windowId: number): Promise<boolean> {
+  try {
+    await chrome.windows.update(windowId, { focused: true });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function createCreateSecretWindow(): Promise<void> {
+  const current = await chrome.windows.getCurrent();
+  const position = computeCenteredWindowPosition(
+    { left: current.left, top: current.top, width: current.width, height: current.height },
+    { width: CREATE_SECRET_WINDOW_WIDTH, height: CREATE_SECRET_WINDOW_HEIGHT },
+  );
+  const created = await chrome.windows.create({
+    url: chrome.runtime.getURL("src/create-secret/create-secret.html"),
+    type: "popup",
+    width: CREATE_SECRET_WINDOW_WIDTH,
+    height: CREATE_SECRET_WINDOW_HEIGHT,
+    ...position,
+  });
+  if (created?.id !== undefined) {
+    await chrome.storage.session.set({ [CREATE_SECRET_WINDOW_ID_KEY]: created.id });
+  }
+}
 
 async function bootstrap(): Promise<void> {
   backendUrlInput.value = DEFAULT_BACKEND_URL;

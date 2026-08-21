@@ -40,20 +40,32 @@
         </div>
       </section>
 
-      <section class="ui-surface ui-panel ui-grid">
-        <div class="ui-grid ui-grid--compact">
-          <h2 class="ui-card-title">Secret history</h2>
-          <p class="ui-card-copy">A quick record of secrets you've created — created time and whether they were read, never their content or link.</p>
+      <section class="ui-surface ui-panel ui-panel--compact ui-grid">
+        <button id="toggle-secret-history" class="ui-button-ghost ui-advanced-toggle" type="button" aria-expanded="false">
+          <span class="ui-advanced-toggle__left">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+            <span>Secret history</span>
+          </span>
+          <svg class="ui-chevron" width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M4 6l4 4 4-4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+        <div id="secret-history-panel" class="ui-advanced-panel hidden">
+          <p class="ui-advanced-hint">A quick record of secrets you've created — created time and whether they were read, never their content or link.</p>
+          <div id="secret-history" class="ui-log"></div>
         </div>
-        <div id="secret-history" class="ui-log"></div>
       </section>
 
-      <section class="ui-surface ui-panel ui-grid">
-        <div class="ui-grid ui-grid--compact">
-          <h2 class="ui-card-title">Log</h2>
-          <p class="ui-card-copy">Recent events stay readable and explicit.</p>
+      <section class="ui-surface ui-panel ui-panel--compact ui-grid">
+        <button id="toggle-log" class="ui-button-ghost ui-advanced-toggle" type="button" aria-expanded="false">
+          <span class="ui-advanced-toggle__left">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16v16H4z"/><line x1="8" y1="9" x2="16" y2="9"/><line x1="8" y1="13" x2="16" y2="13"/><line x1="8" y1="17" x2="12" y2="17"/></svg>
+            <span>Log</span>
+          </span>
+          <svg class="ui-chevron" width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M4 6l4 4 4-4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+        <div id="log-panel" class="ui-advanced-panel hidden">
+          <p class="ui-advanced-hint">Recent events stay readable and explicit.</p>
+          <div id="diagnostics" class="ui-log" role="log" aria-live="polite"></div>
         </div>
-        <div id="diagnostics" class="ui-log" role="log" aria-live="polite"></div>
       </section>
     </div>
 

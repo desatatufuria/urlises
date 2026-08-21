@@ -13,6 +13,12 @@ export const DEFAULT_BACKEND_URL = "http://localhost:8081";
 export const DEFAULT_PUBLIC_BASE_URL = "http://localhost:5173";
 export const STORAGE_KEY = "sharedBookmarkSyncState";
 export const ACCESS_TOKEN_STORAGE_KEY = "sharedBookmarkSyncAccessToken";
+// chrome.storage.session key tracking the currently-open create-secret
+// popup window's id, so the popup's "Create a secret" button can focus the
+// existing window instead of opening a duplicate. Read/written by
+// popup/popup.ts and cleared by background/service-worker.ts's
+// chrome.windows.onRemoved listener when the user closes it directly.
+export const CREATE_SECRET_WINDOW_ID_KEY = "createSecretWindowId";
 export const DIAGNOSTIC_LIMIT = 50;
 export const CLIENT_ID_HEADER = "X-Client-Id";
 export const SESSION_CAPABILITY_HEADER = "X-Session-Capability";

@@ -1,6 +1,7 @@
 import type { SecretHistoryEntry } from "../shared/api.js";
 import type { ExtensionState, StatusOverview, UiState, UITheme } from "../shared/types.js";
 import { formatUiTimestamp, getStatusOverview, getWorkspaceStatusModel } from "../shared/ui/status.js";
+import { nextAdvancedToggleState } from "../popup/advanced-toggle.js";
 import { formatSecretHistoryEntry, type FormattedSecretHistoryEntry } from "./secret-history.js";
 
 const summary = document.querySelector<HTMLElement>("#summary")!;
@@ -11,6 +12,12 @@ const diagnosticsNode = document.querySelector<HTMLElement>("#diagnostics")!;
 const secretHistoryNode = document.querySelector<HTMLElement>("#secret-history")!;
 const overviewMetrics = document.querySelector<HTMLElement>("#overview-metrics")!;
 const themeSwatches = document.querySelector<HTMLElement>("#theme-swatches")!;
+
+const toggleSecretHistoryButton = document.querySelector<HTMLButtonElement>("#toggle-secret-history")!;
+const secretHistoryPanel = document.querySelector<HTMLElement>("#secret-history-panel")!;
+const toggleLogButton = document.querySelector<HTMLButtonElement>("#toggle-log")!;
+const logPanel = document.querySelector<HTMLElement>("#log-panel")!;
+
 let lastAcknowledgedRevision = 0;
 
 const THEME_OPTIONS: Array<{ value: UITheme; label: string; background: string; accent: string }> = [
@@ -26,7 +33,26 @@ document.querySelector<HTMLButtonElement>("#save-selection")!.addEventListener("
     .catch(showError);
 });
 
+// Both start collapsed by default — the Log and Secret history sections
+// take up too much space to leave expanded. Data fetching/population
+// (loadSecretHistory, renderDiagnostics) is not gated on this: it keeps
+// running in the background exactly as before, so content is already
+// there the instant the user expands a panel.
+wireCollapsibleSection(toggleSecretHistoryButton, secretHistoryPanel);
+wireCollapsibleSection(toggleLogButton, logPanel);
+
 void load();
+
+function wireCollapsibleSection(button: HTMLButtonElement, panel: HTMLElement): void {
+  const chevron = button.querySelector<SVGElement>(".ui-chevron")!;
+  button.addEventListener("click", () => {
+    const isExpanded = button.getAttribute("aria-expanded") === "true";
+    const next = nextAdvancedToggleState(isExpanded);
+    panel.classList.toggle("hidden", !next.expanded);
+    chevron.classList.toggle("ui-chevron--open", next.expanded);
+    button.setAttribute("aria-expanded", next.ariaExpanded);
+  });
+}
 
 async function load(): Promise<void> {
   const ui = await sendMessage<UiState>({ type: "options/load" });

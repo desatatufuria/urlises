@@ -20,7 +20,7 @@ import {
   setSelectedWorkspaces,
   setUiTheme,
 } from "./projection.js";
-import { STORAGE_KEY } from "../shared/runtime.js";
+import { CREATE_SECRET_WINDOW_ID_KEY, STORAGE_KEY } from "../shared/runtime.js";
 import { getState } from "../shared/storage.js";
 import { getToolbarBadgeModel } from "../shared/ui/status.js";
 
@@ -36,6 +36,19 @@ chrome.storage.onChanged.addListener((changes, areaName) => {
     return;
   }
   void refreshToolbarBadge();
+});
+
+// Keeps the popup's idempotent-open tracking (CREATE_SECRET_WINDOW_ID_KEY,
+// see popup/popup.ts) honest when the user closes the create-secret window
+// directly rather than via the popup — without this, a stale id would
+// linger in session storage until the next click's update()-then-catch
+// fallback discovers it's gone.
+chrome.windows.onRemoved.addListener((windowId) => {
+  void chrome.storage.session.get<Record<string, unknown>>(CREATE_SECRET_WINDOW_ID_KEY).then((result) => {
+    if (result[CREATE_SECRET_WINDOW_ID_KEY] === windowId) {
+      return chrome.storage.session.remove(CREATE_SECRET_WINDOW_ID_KEY);
+    }
+  });
 });
 
 chrome.runtime.onMessage.addListener((message: { type: string; payload?: unknown }, _sender, sendResponse) => {
