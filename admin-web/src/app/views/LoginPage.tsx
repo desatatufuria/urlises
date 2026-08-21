@@ -45,15 +45,8 @@ export function LoginPage() {
           <p className="ui-eyebrow">{invitation ? "Invitation" : "URLises operator access"}</p>
           <h1 className="ui-page-title">{invitation ? "You're invited to join URLises" : "Sign in to URLises Control"}</h1>
           <p className="ui-copy">
-            {invitation ? "Create your account to accept the invitation." : "Restrained controls for organization admins only."}
+            {invitation ? "Sign in if you already have an account, or create one below to accept the invitation." : "Restrained controls for organization admins only."}
           </p>
-          {invitation ? (
-            <p className="ui-copy">
-              <Link className="ui-button ui-button-primary" to={{ pathname: "/register", search: searchParams.toString() }}>
-                Create an account to accept this invitation
-              </Link>
-            </p>
-          ) : null}
           <form className="ui-form" onSubmit={handleSubmit}>
           <FormRow label="Email">
             <input
@@ -81,14 +74,16 @@ export function LoginPage() {
               onChange={(event) => setForm((current) => ({ ...current, deviceName: event.target.value }))}
             />
           </FormRow>
-          <button className={invitation ? "ui-button ui-button-secondary" : "ui-button ui-button-primary"} disabled={submitting} type="submit">
-            {submitting ? "Signing in…" : invitation ? "Already have an account? Sign in" : "Sign in"}
+          <button className="ui-button ui-button-primary" disabled={submitting} type="submit">
+            {submitting ? "Signing in…" : "Sign in"}
           </button>
           {error ? <DataState tone="danger" title="Sign-in failed" description={error} compact /> : null}
         </form>
-        {status === "setupRequired" && !invitation ? (
+        {status === "setupRequired" || invitation ? (
           <p className="ui-copy">
-            <Link to={{ pathname: "/register", search: searchParams.toString() }}>Create the first owner account</Link>
+            <Link to={{ pathname: "/register", search: searchParams.toString() }}>
+              {invitation ? "Create an account to accept this invitation" : "Create the first owner account"}
+            </Link>
           </p>
         ) : null}
         </section>

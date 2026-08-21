@@ -25,16 +25,18 @@ describe("LoginPage", () => {
     window.localStorage.clear();
   });
 
-  it("promotes account creation over sign-in when arriving via an invitation", async () => {
+  it("keeps sign-in as the primary action and shows a discreet account-creation link below it when arriving via an invitation", async () => {
     renderAppRoute("/login?invitation=abc123&email=invitee%40example.com", null);
 
     expect(await screen.findByRole("heading", { name: /you're invited to join urlises/i })).toBeInTheDocument();
 
-    const createAccountLink = screen.getByRole("link", { name: /create an account to accept this invitation/i });
-    expect(createAccountLink).toHaveClass("ui-button-primary");
+    const signInButton = screen.getByRole("button", { name: "Sign in" });
+    expect(signInButton).toHaveClass("ui-button-primary");
 
-    const signInButton = screen.getByRole("button", { name: /already have an account\? sign in/i });
-    expect(signInButton).toHaveClass("ui-button-secondary");
+    const createAccountLink = screen.getByRole("link", { name: /create an account to accept this invitation/i });
+    expect(createAccountLink).not.toHaveClass("ui-button-primary");
+    expect(createAccountLink).not.toHaveClass("ui-button-secondary");
+    expect(signInButton.compareDocumentPosition(createAccountLink) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
   it("keeps the plain sign-in form as the primary action outside of an invitation", async () => {
