@@ -41,6 +41,18 @@ export function getStoredClientId() {
   return next;
 }
 
+// Mints a fresh device/client ID and persists it, replacing whatever was
+// stored before. Used when a brand-new account registration is rejected
+// because this browser's stored client ID is already bound to a different
+// user (e.g. testing multiple accounts from the same browser) — a new
+// account can never legitimately own an existing binding, so the stale ID
+// must be swapped out rather than retried as-is.
+export function regenerateStoredClientId() {
+  const next = safeRandomId();
+  setStoredClientId(next);
+  return next;
+}
+
 export function setStoredClientId(clientId: string) {
   if (typeof window === "undefined") {
     return;

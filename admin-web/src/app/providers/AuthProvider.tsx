@@ -1,8 +1,10 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type PropsWithChildren } from "react";
 import { getMe, getSetupStatus, login, logout as apiLogout, register } from "../../lib/api/auth";
 import { createOrganization, listOrganizations } from "../../lib/api/organizations";
-import { getStoredClientId, setStoredClientId } from "../../lib/api/client";
+import { ApiError, getStoredClientId, regenerateStoredClientId, setStoredClientId } from "../../lib/api/client";
 import type { AdminPrincipal, AdminSession, LoginPayload, OrganizationMembership, RegistrationPayload } from "../../lib/api/types";
+
+const CLIENT_ALREADY_BOUND_MESSAGE = "client ID is already bound to another user";
 
 const STORAGE_KEY = "admin-web/session";
 
@@ -115,11 +117,21 @@ export function AuthProvider({ children, initialSnapshot }: PropsWithChildren<{ 
   }, []);
 
   const signUp = useCallback(async (payload: RegistrationPayload) => {
-    const session = await register({
-      ...payload,
-      clientId: getStoredClientId(),
-      deviceName: payload.deviceName?.trim() || "URLises Control",
-    });
+    const deviceName = payload.deviceName?.trim() || "URLises Control";
+    let session: AdminSession;
+    try {
+      session = await register({ ...payload, clientId: getStoredClientId(), deviceName });
+    } catch (caught) {
+      if (caught instanceof ApiError && caught.status === 409 && caught.message === CLIENT_ALREADY_BOUND_MESSAGE) {
+        // A brand-new account can't legitimately own this browser's stored
+        // device binding — it must be stale from a different account. Mint
+        // a fresh client ID and retry once rather than surfacing a
+        // confusing error for something the user has no way to fix.
+        session = await register({ ...payload, clientId: regenerateStoredClientId(), deviceName });
+      } else {
+        throw caught;
+      }
+    }
     const nextSnapshot = await loadSessionSnapshot(session);
     setSnapshot(nextSnapshot);
     persistSnapshot(nextSnapshot);

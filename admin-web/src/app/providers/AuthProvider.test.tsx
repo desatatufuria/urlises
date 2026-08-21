@@ -31,6 +31,20 @@ function SignInOnMount() {
   return <div data-testid="status">{status}</div>;
 }
 
+function SignUpOnMount() {
+  const { signUp, status } = useAuth();
+  const attempted = useRef(false);
+
+  useEffect(() => {
+    if (status === "anonymous" && !attempted.current) {
+      attempted.current = true;
+      void signUp({ name: "Invitee", email: "invitee@example.com", password: "correct horse battery staple" });
+    }
+  }, [signUp, status]);
+
+  return <div data-testid="status">{status}</div>;
+}
+
 function CreateOrganizationProbe() {
   const { createOwnerOrganization, organizations } = useAuth();
   const created = useRef(false);
@@ -158,6 +172,59 @@ describe("AuthProvider client id propagation", () => {
     const loginRequest = fetchMock.mock.calls.find(([input]) => String(input).endsWith("/auth/login"));
     expect(JSON.parse(String(loginRequest?.[1]?.body)).deviceName).toBe("URLises Control");
     expect(fetchMock).toHaveBeenCalledTimes(4);
+  });
+
+  it("retries registration with a fresh client id when the stored one is already bound to another user", async () => {
+    window.localStorage.setItem(CLIENT_ID_STORAGE_KEY, "stale-client-from-another-account");
+
+    const registerClientIds: string[] = [];
+
+    fetchMock.mockImplementation((input, init) => {
+      const url = String(input);
+
+      if (url.endsWith("/auth/register")) {
+        const clientId = new Headers(init?.headers).get("X-Client-Id") ?? "";
+        registerClientIds.push(clientId);
+        if (clientId === "stale-client-from-another-account") {
+          return jsonResponse({ error: "client ID is already bound to another user" }, 409);
+        }
+        return jsonResponse({
+          accessToken: "token-register",
+          clientId,
+          expiresAt: "2099-01-01T00:00:00Z",
+          user: { id: "user-1", email: "invitee@example.com", name: "Invitee" },
+        });
+      }
+
+      if (url.endsWith("/setup/status")) {
+        return jsonResponse({ required: false });
+      }
+
+      if (url.endsWith("/me")) {
+        return jsonResponse({ userId: "user-1", email: "invitee@example.com", name: "Invitee", clientId: registerClientIds[registerClientIds.length - 1] });
+      }
+
+      if (url.endsWith("/organizations")) {
+        return jsonResponse({ organizations: [] });
+      }
+
+      return jsonResponse({ error: "not found" }, 404);
+    });
+
+    render(
+      <AuthProvider>
+        <SignUpOnMount />
+      </AuthProvider>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId("status")).toHaveTextContent("authenticated");
+    });
+
+    expect(registerClientIds).toHaveLength(2);
+    expect(registerClientIds[0]).toBe("stale-client-from-another-account");
+    expect(registerClientIds[1]).not.toBe("stale-client-from-another-account");
+    expect(window.localStorage.getItem(CLIENT_ID_STORAGE_KEY)).toBe(registerClientIds[1]);
   });
 
   it("returns and persists the exact created owner membership", async () => {
