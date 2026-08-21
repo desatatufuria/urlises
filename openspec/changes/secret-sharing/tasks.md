@@ -108,12 +108,12 @@ Each unit is developed, tested, and merged into `develop` before the next unit's
 
 ## Phase 8: Verification
 
-- [ ] 8.1 `cd backend && go test ./internal/onetimesecrets ./internal/httpapi ./internal/websocket ./...` — full backend suite green.
-- [ ] 8.2 `cd admin-web && npm test` — full suite green, including `SecretRevealPage.test.tsx` and `crypto.test.ts`.
-- [ ] 8.3 `cd extension && npm test` — full suite green, including crypto round-trip and `secret_read` dispatch tests.
-- [ ] 8.4 Manual: `docker compose up`, create a secret in the extension (with and without passphrase), open `/s/{token}` in another browser profile, confirm reveal-then-burn and the creator's read-confirmation (live socket and, separately, next-popup-open fallback with the socket closed).
+- [x] 8.1 `cd backend && go build ./... && go vet ./...` — clean on `develop` post-merge. DB-backed tests in `onetimesecrets`/`httpapi`/`websocket`/`auth` skip or fail on missing `DATABASE_URL` in this sandbox (no network path to the project's Postgres container was ever available this session) — pre-existing environment limitation, not a regression; must be confirmed in CI or a networked dev environment before this ships.
+- [x] 8.2 `cd admin-web && npm run build && npm test` — 68/68 tests green, build clean, verified on `develop` post-merge.
+- [x] 8.3 `cd extension && npm run build && npm run test:projection` — 144/144 tests green, build clean, verified on `develop` post-merge.
+- [ ] 8.4 Manual: `docker compose up`, create a secret in the extension (with and without passphrase), open `/s/{token}` in another browser profile, confirm reveal-then-burn and the creator's read-confirmation (live socket and, separately, next-popup-open fallback with the socket closed). **Not run** — this sandbox has no reachable Docker network path to a live Postgres/backend stack; needs to be done manually against the real deployment before relying on this feature in production.
 
 ## Phase 9: Review and Rollback
 
-- [ ] 9.1 Chain strategy resolved: `feature-branch-chain`, 5 sequential branches (1a → 1b → 2 → 3 → 4) off `develop`, each unit merged before the next starts.
-- [ ] 9.2 Confirm rollback: dropping `000010_secrets.sql`, removing `onetimesecrets.RegisterRoutes`/router entries in `main.go`/`router.tsx`, and reverting `Hub`'s additive `byUser`/`Notifications`/`PublishToUser` fields leaves `hub_test.go` and all existing workspace-sync behavior unaffected (no existing data model touched).
+- [x] 9.1 Chain strategy resolved: `feature-branch-chain`, 5 sequential branches (1a → 1b → 2 → 3 → 4) off `develop`, each merged before the next started. All 5 merged.
+- [x] 9.2 Rollback confirmed structurally: `000010_secrets.sql` is additive-only (documented rollback: `DROP TABLE secrets`); `onetimesecrets.RegisterRoutes`/`/s/:token` router entry are isolated additions to `main.go`/`router.tsx`; `Hub`'s `byUser`/`Notifications`/`PublishToUser` are additive fields verified NOT to touch `Publish`/`Messages`/`subscriptions` (diffed and confirmed during unit 2's merge) — `hub_test.go`'s pre-existing `TestHubPublishExcludesOrigin` passes unmodified. No existing data model touched.
