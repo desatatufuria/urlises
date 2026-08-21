@@ -30,6 +30,8 @@ export function SecretRevealPage() {
   const [plaintext, setPlaintext] = useState<string | null>(null);
   const [passphrase, setPassphrase] = useState("");
   const [decryptError, setDecryptError] = useState<string | null>(null);
+  const [visible, setVisible] = useState(false);
+  const [copied, setCopied] = useState(false);
   const attempted = useRef(false);
   const burned = useRef(false);
 
@@ -80,6 +82,21 @@ export function SecretRevealPage() {
       // The recipient already has the plaintext locally; a failed burn
       // acknowledgement is best-effort and must not block the reveal.
     }
+  }
+
+  async function copyPlaintext() {
+    if (plaintext === null) {
+      return;
+    }
+
+    try {
+      await navigator.clipboard.writeText(plaintext);
+    } catch {
+      return;
+    }
+
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
   }
 
   async function attemptFragmentDecrypt(fetchedBlob: SecretBlob) {
@@ -135,7 +152,15 @@ export function SecretRevealPage() {
           {status === "revealed" && plaintext !== null ? (
             <>
               <DataState tone="neutral" title="Secret revealed" description="This secret has now been burned and cannot be viewed again." compact />
-              <pre className="ui-copy">{plaintext}</pre>
+              <pre className={visible ? "ui-copy" : "ui-copy ui-secret-mask"}>{plaintext}</pre>
+              <div className="ui-actions">
+                <button className="ui-button ui-button-secondary" type="button" onClick={() => setVisible((current) => !current)}>
+                  {visible ? "Hide" : "Reveal"}
+                </button>
+                <button className="ui-button ui-button-secondary" type="button" onClick={() => void copyPlaintext()}>
+                  {copied ? "Copied" : "Copy"}
+                </button>
+              </div>
             </>
           ) : null}
 

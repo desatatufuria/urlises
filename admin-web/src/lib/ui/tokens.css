@@ -42,6 +42,7 @@ a { color: inherit; text-decoration: none; }
 .ui-button-primary { background: var(--ui-accent); border-color: var(--ui-accent); color: white; }
 .ui-button-primary:hover { background: #28483d; }
 .ui-button-secondary { background: transparent; }
+.ui-secret-mask { filter: blur(6px); user-select: none; }
 .ui-badge { display: inline-flex; align-items: center; padding: .22rem .48rem; border: 1px solid var(--ui-rule); font-size: .76rem; text-transform: capitalize; }
 .ui-badge--accent { color: var(--ui-accent); border-color: #9eb6a8; background: var(--ui-accent-soft); }
 .ui-badge--danger { color: var(--ui-danger); border-color: #d8aaa2; background: var(--ui-danger-soft); }
