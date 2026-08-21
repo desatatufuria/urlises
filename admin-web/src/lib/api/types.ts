@@ -45,6 +45,14 @@ export interface OrganizationMember {
   role: OrganizationRole;
 }
 
+export interface SecretBlob {
+  ciphertext: string;
+  iv: string;
+  wrappedContentKey: string | null;
+  passphraseSalt: string | null;
+  kdfIterations: number | null;
+}
+
 export interface AcceptedInvitation {
   organizationId: string;
   organizationName: string;
