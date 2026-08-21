@@ -89,6 +89,49 @@ export function createWSTicket(backendUrl: string, session: SessionData): Promis
   return requestJSON<WSTicket>(backendUrl, "/auth/ws-ticket", { method: "POST", headers: authHeaders(session) });
 }
 
+export interface CreateSecretInput {
+  ciphertext: string;
+  iv: string;
+  wrappedContentKey?: string;
+  passphraseSalt?: string;
+  kdfIterations?: number;
+  ttlSeconds?: number;
+}
+
+export interface CreatedSecret {
+  id: string;
+  token: string;
+  createdAt: string;
+  expiresAt: string;
+}
+
+// createSecret is a plain authenticated write, not a workspace mutation: it
+// carries no baseCursor/eventId (mutationHeaders' Idempotency-Key precursor)
+// because the backend deliberately skips IdempotencyExecutor for secrets —
+// a duplicate secret is cheap and self-expiring. It follows createWSTicket's
+// shape (authHeaders only) rather than createBookmark's (mutationHeaders),
+// since there is no sync cursor to advance.
+export function createSecret(backendUrl: string, session: SessionData, input: CreateSecretInput): Promise<CreatedSecret> {
+  return requestJSON<CreatedSecret>(backendUrl, "/secrets", {
+    method: "POST",
+    headers: authHeaders(session),
+    body: input,
+  });
+}
+
+export interface PublicConfig {
+  publicBaseUrl: string;
+}
+
+// getPublicConfig hits the backend's unauthenticated config-bootstrap route
+// (GET /config/public) — no session/auth headers, matching the fact that
+// this endpoint is public by design. It exposes only the one safe value
+// (PublicBaseURL) needed to build correct share links, never a full config
+// dump. See backend/internal/config/config.go's AppConfig.PublicBaseURL.
+export function getPublicConfig(backendUrl: string): Promise<PublicConfig> {
+  return requestJSON<PublicConfig>(backendUrl, "/config/public", {});
+}
+
 export function getPreferences(backendUrl: string, session: SessionData): Promise<Preferences> {
   return requestJSON<Preferences>(backendUrl, "/me/preferences", { headers: authHeaders(session) });
 }

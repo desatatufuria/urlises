@@ -25,6 +25,20 @@ import (
 	"github.com/furia/shared-bookmark-sync/backend/internal/workspaces"
 )
 
+// publicConfigHandler serves the safe subset of server config that clients
+// (e.g. the browser extension) need before they're authenticated — today
+// just the canonical PublicBaseURL used to build shareable links. It never
+// exposes the rest of AppConfig or any other config section, mirroring
+// OIDC's /.well-known/openid-configuration and Mattermost's
+// /api/v4/config/client.
+func publicConfigHandler(cfg config.AppConfig) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		httpapi.WriteJSON(w, http.StatusOK, map[string]string{
+			"publicBaseUrl": cfg.PublicBaseURL,
+		})
+	}
+}
+
 type invitationAccepterAdapter struct {
 	service *organizations.Service
 }
@@ -115,6 +129,7 @@ func main() {
 			"service": "shared-bookmark-sync-api",
 		})
 	})
+	mux.HandleFunc("GET /config/public", publicConfigHandler(cfg.App))
 	mux.HandleFunc("/readyz", func(w http.ResponseWriter, r *http.Request) {
 		pingCtx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 		defer cancel()

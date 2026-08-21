@@ -59,6 +59,31 @@
         </div>
         <ul id="recent-activity-list" class="ui-list"></ul>
       </section>
+
+      <section class="ui-surface ui-panel ui-grid ui-grid--compact">
+        <button id="toggle-create-secret" class="ui-button-ghost ui-advanced-toggle" type="button" aria-expanded="false">
+          <span class="ui-advanced-toggle__left">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="10" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+            <span>Create a secret</span>
+          </span>
+          <svg class="ui-chevron" width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M4 6l4 4 4-4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+        <div id="create-secret-panel" class="ui-advanced-panel hidden">
+          <p class="ui-advanced-hint">Content is encrypted in this browser before it ever leaves it. The link works once — after it's opened, the secret is gone.</p>
+          <form id="create-secret-form" class="ui-form">
+            <label class="ui-field-label">Content<textarea id="secret-content" rows="3" placeholder="Paste the secret to share" required></textarea></label>
+            <label class="ui-field-label">Passphrase (optional)<input id="secret-passphrase" type="password" placeholder="Leave blank for a link-only secret" /></label>
+            <div class="ui-actions">
+              <button class="ui-button-primary" type="submit">Create link</button>
+            </div>
+          </form>
+          <div id="secret-link-result" class="ui-grid ui-grid--compact hidden">
+            <p class="ui-card-copy">Share this link — it can only be opened once.</p>
+            <input id="secret-link-output" class="ui-copy" type="text" readonly />
+          </div>
+          <p id="secret-create-error" class="ui-error" role="alert"></p>
+        </div>
+      </section>
     </section>
 
     <p id="error" class="ui-error" role="alert"></p>

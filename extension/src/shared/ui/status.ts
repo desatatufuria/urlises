@@ -14,6 +14,10 @@ export interface PopupStatusModel {
   degradedWorkspaceCount: number;
   showOnline: boolean;
   showNewActivity: boolean;
+  /** True only for an unseen secret_read confirmation — a distinct pill
+   * from showNewActivity, driven by its own secretReadSignal so neither
+   * clears the other. */
+  showSecretReadConfirmation: boolean;
   lastActivityLabel?: string;
   recentActivity: WorkspaceActivityModel[];
 }
@@ -182,6 +186,7 @@ export function getPopupStatusModel(state: ExtensionState): PopupStatusModel {
       degradedWorkspaceCount: overview.degradedWorkspaceCount,
       showOnline: overview.liveWorkspaceCount > 0,
       showNewActivity: hasUnseenActivity(state.activitySignal),
+      showSecretReadConfirmation: hasUnseenActivity(state.secretReadSignal),
       lastActivityLabel: formatUiTimestamp(latestActivity),
       recentActivity,
     };
@@ -199,6 +204,7 @@ export function getPopupStatusModel(state: ExtensionState): PopupStatusModel {
       degradedWorkspaceCount: 0,
       showOnline: false,
       showNewActivity: false,
+      showSecretReadConfirmation: hasUnseenActivity(state.secretReadSignal),
       recentActivity: [],
     };
   }
@@ -216,6 +222,7 @@ export function getPopupStatusModel(state: ExtensionState): PopupStatusModel {
     degradedWorkspaceCount: 0,
     showOnline: overview.liveWorkspaceCount > 0,
     showNewActivity: hasUnseenActivity(state.activitySignal),
+    showSecretReadConfirmation: hasUnseenActivity(state.secretReadSignal),
     lastActivityLabel: formatUiTimestamp(latestActivity),
     recentActivity,
   };

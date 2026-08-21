@@ -201,6 +201,29 @@ test("activity formatting keeps workspace and item summaries lightweight", () =>
   }), "Bookmark updated · Remote Bookmark in Docs");
 });
 
+test("popup status model surfaces an unseen secret read confirmation as a distinct pill from New updates", () => {
+  const state = createState({
+    activitySignal: { revision: 0, lastSeenRevision: 0 },
+    secretReadSignal: { revision: 1, lastSeenRevision: 0 },
+    secretReadConfirmations: [{ secretId: "secret-1", readAt: "2026-08-01T01:00:00.000Z" }],
+  });
+
+  const model = getPopupStatusModel(state);
+  assert.equal(model.showSecretReadConfirmation, true);
+  // Distinct from the unrelated activity pill — neither drives the other.
+  assert.equal(model.showNewActivity, false);
+});
+
+test("popup status model clears the secret read pill once acknowledged and it does not resurface", () => {
+  const state = createState({
+    secretReadSignal: { revision: 1, lastSeenRevision: 1 },
+    secretReadConfirmations: [{ secretId: "secret-1", readAt: "2026-08-01T01:00:00.000Z" }],
+  });
+
+  const model = getPopupStatusModel(state);
+  assert.equal(model.showSecretReadConfirmation, false);
+});
+
 test("fresh workspace activity is sorted by newest revision", () => {
   const state = createState({
     activitySignal: { revision: 4, lastSeenRevision: 2 },

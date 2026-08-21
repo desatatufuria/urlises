@@ -6,6 +6,11 @@ const KEEPALIVE_PAYLOAD = JSON.stringify({ type: "keepalive" });
 export interface SyncSocketCallbacks {
   onAck: (currentCursor: number) => void | Promise<void>;
   onEvent: (event: SyncEnvelope) => void | Promise<void>;
+  /** Optional: a `secret_read` frame (raw, no `{type:"event",...}` wrapper —
+   * see design.md's "Hub delivery channel" decision) dispatches here only,
+   * never to onEvent. Optional so existing callers/tests that construct
+   * SyncSocketCallbacks without it keep working. */
+  onSecretRead?: (secretId: string, readAt: string) => void | Promise<void>;
   onResyncRequired: (reason: string) => void | Promise<void>;
   onClose: () => void | Promise<void>;
   onError: (message: string) => void | Promise<void>;
@@ -61,7 +66,11 @@ export function connectWorkspaceSocket(
   socket.addEventListener("message", async (event) => {
     scheduleKeepalive();
     try {
-      const payload = JSON.parse(String(event.data)) as { type: string; currentCursor?: number; event?: SyncEnvelope; reason?: string };
+      const payload = JSON.parse(String(event.data)) as { type: string; currentCursor?: number; event?: SyncEnvelope; reason?: string; secretId?: string; readAt?: string };
+      if (payload.type === "secret_read" && payload.secretId && payload.readAt) {
+        await callbacks.onSecretRead?.(payload.secretId, payload.readAt);
+        return;
+      }
       if (payload.type === "ack") {
         await callbacks.onAck(payload.currentCursor ?? 0);
         return;

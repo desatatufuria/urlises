@@ -1,5 +1,5 @@
 import { DEFAULT_BACKEND_URL, STORAGE_KEY } from "./runtime.js";
-import type { ActivitySignal, ExtensionState, ProjectionState } from "./types.js";
+import type { ActivitySignal, ExtensionState, ProjectionState, SecretReadSignal } from "./types.js";
 import { normalizeJournal } from "../background/convergence.js";
 
 let stateMutationQueue: Promise<unknown> = Promise.resolve();
@@ -17,6 +17,9 @@ function defaultState(): ExtensionState {
     projectionsByWorkspaceId: {},
     diagnostics: [],
     activitySignal: defaultActivitySignal(),
+    secretRecords: [],
+    secretReadConfirmations: [],
+    secretReadSignal: defaultSecretReadSignal(),
   };
 }
 
@@ -33,6 +36,9 @@ export async function getState(): Promise<ExtensionState> {
       ...next,
       projectionsByWorkspaceId,
     }),
+    secretRecords: next.secretRecords ?? [],
+    secretReadConfirmations: next.secretReadConfirmations ?? [],
+    secretReadSignal: normalizeSecretReadSignal(next.secretReadSignal),
   };
 }
 
@@ -89,6 +95,22 @@ function defaultActivitySignal(): ActivitySignal {
     revision: 0,
     lastSeenRevision: 0,
   };
+}
+
+function defaultSecretReadSignal(): SecretReadSignal {
+  return {
+    revision: 0,
+    lastSeenRevision: 0,
+  };
+}
+
+// Unlike activitySignal, secretReadSignal has no per-workspace projection to
+// derive a revision floor from — it is a flat counter incremented only by
+// recordSecretRead — so normalization here is just a clamp, not a max-merge.
+function normalizeSecretReadSignal(signal?: SecretReadSignal): SecretReadSignal {
+  const revision = signal?.revision ?? 0;
+  const lastSeenRevision = Math.min(Math.max(signal?.lastSeenRevision ?? 0, 0), revision);
+  return { revision, lastSeenRevision };
 }
 
 function normalizeActivitySignal(state: Pick<ExtensionState, "activitySignal" | "projectionsByWorkspaceId">): ActivitySignal {
