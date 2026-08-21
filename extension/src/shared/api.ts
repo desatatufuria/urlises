@@ -119,6 +119,30 @@ export function createSecret(backendUrl: string, session: SessionData, input: Cr
   });
 }
 
+export interface SendSecretEmailInput {
+  recipientEmail: string;
+  fragment?: string;
+}
+
+// sendSecretEmail asks the backend to email the share link for an
+// already-created secret. The server reconstructs the full link itself from
+// its own trusted PublicBaseURL — the client only ever sends recipientEmail
+// and, when present, the exact fragment used to build the Copy-button link.
+// There is deliberately no "link"/"url" field: see
+// backend/internal/secrethide/send_email.go's allowedSendSecretLinkFields.
+export function sendSecretEmail(
+  backendUrl: string,
+  session: SessionData,
+  token: string,
+  input: SendSecretEmailInput,
+): Promise<{ status: string }> {
+  return requestJSON<{ status: string }>(backendUrl, `/secrets/${encodeURIComponent(token)}/send-email`, {
+    method: "POST",
+    headers: authHeaders(session),
+    body: input,
+  });
+}
+
 export interface PublicConfig {
   publicBaseUrl: string;
 }

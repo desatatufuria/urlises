@@ -14,6 +14,7 @@ import {
   parseBookmarkDeletePayload,
   parseFolderDeletePayload,
   replayEvents,
+  sendSecretEmail as apiSendSecretEmail,
   updateBookmark as apiUpdateBookmark,
   updateFolder as apiUpdateFolder,
   updatePreferences as apiUpdatePreferences,
@@ -278,6 +279,49 @@ export async function createSecret(input: CreateSecretInput): Promise<UiState & 
 
   const ui = await getUiState();
   return { ...ui, secret: { ...record, expiresAt: created.expiresAt } };
+}
+
+export interface SendSecretEmailRequest {
+  token: string;
+  recipientEmail: string;
+  fragment?: string;
+}
+
+// sendSecretEmail follows createSecret's shape (require a session, call the
+// API, resolve with getUiState()) but additionally translates the
+// send-email endpoint's deliberately generic status codes (see
+// backend/internal/secrethide/handler.go) into copy the create-secret page
+// can show directly, rather than surfacing a raw HTTP status to the user.
+export async function sendSecretEmail(input: SendSecretEmailRequest): Promise<UiState> {
+  const state = await getState();
+  if (!state.session) {
+    throw new Error("sign in required to send a secret link");
+  }
+
+  try {
+    await apiSendSecretEmail(state.settings.backendUrl, state.session, input.token, {
+      recipientEmail: input.recipientEmail,
+      fragment: input.fragment,
+    });
+  } catch (error) {
+    throw new Error(describeSendSecretEmailError(error));
+  }
+
+  return getUiState();
+}
+
+// describeSendSecretEmailError maps the send-email endpoint's collapsed
+// 404 (unknown token, not the owner, or not pending — indistinguishable by
+// design for security) and 502/503 (mail delivery failure/unavailable)
+// responses to actionable copy.
+function describeSendSecretEmailError(error: unknown): string {
+  if (error instanceof ApiError && error.status === 404) {
+    return "This link is no longer valid to send — it may have already been read or expired.";
+  }
+  if (error instanceof ApiError && (error.status === 502 || error.status === 503)) {
+    return "Couldn't send the email right now. Try again in a moment.";
+  }
+  return describeError(error);
 }
 
 export async function setSelectedWorkspaces(workspaceIds: string[]): Promise<UiState> {

@@ -15,6 +15,7 @@ import {
   rebuildWorkspace,
   resyncAll,
   retryWorkspace,
+  sendSecretEmail,
   setSelectedWorkspaces,
   setUiTheme,
 } from "./projection.js";
@@ -74,6 +75,9 @@ chrome.runtime.onMessage.addListener((message: { type: string; payload?: unknown
         return;
       case "secrets/create":
         sendResponse(await createSecret(message.payload as never));
+        return;
+      case "secrets/send-email":
+        sendResponse(await sendSecretEmail(message.payload as never));
         return;
       case "preferences/set-theme":
         sendResponse(await setUiTheme((message.payload as { uiTheme: "slate" | "indigo" | "teal" }).uiTheme));
