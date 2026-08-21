@@ -60,17 +60,17 @@ Each unit is developed, tested, and merged into `develop` before the next unit's
 
 ## Phase 2: Backend Handler — Validation, Field Allow-List, Content Limit
 
-- [ ] 2.1 RED: `backend/internal/onetimesecrets/handler_test.go` — `POST /secrets` rejects a body containing `plaintext` or `passphrase` fields (400, no row persisted); rejects `ciphertext` over 64KB base64 (400, checked before further unmarshal); persists `wrappedContentKey`/`passphraseSalt`/`kdfIterations` verbatim when supplied.
-- [ ] 2.2 RED: same file — `GET /secrets/{token}` returns 200+blob and leaves `status` unchanged, repeatable; unknown token → 404; expired token → 410 with no ciphertext body; already-read token → 410.
-- [ ] 2.3 RED: same file — `POST /secrets/{token}/burn` after fetch sets `status='read'`; a repeated burn call responds without error and does not change the original `read_at`.
-- [ ] 2.4 GREEN: `backend/internal/onetimesecrets/handler.go` — `RegisterRoutes(mux, authMiddleware, routeService, notifier secretReadNotifier)`; `POST /secrets` behind `authMiddleware`; unauthenticated `GET /secrets/{token}` and `POST /secrets/{token}/burn`; decode into `map[string]json.RawMessage` first, reject any key outside `{ciphertext,iv,wrappedContentKey,passphraseSalt,kdfIterations,ttlSeconds}` with 400; check raw base64 `ciphertext` length against 64KB before further unmarshalling; map service errors to 404/410/429 per status.
-- [ ] 2.5 GREEN: same file — after `Burn` succeeds and `!alreadyRead`, `httpapi.WriteJSON(w, 200, ...)` → `http.NewResponseController(w).Flush()` → `notifier.NotifySecretRead(context.WithoutCancel(ctx), creatorUserID, secretID)` (unexported `secretReadNotifier` port, matching the `invitationNotifier` shape).
+- [x] 2.1 RED: `backend/internal/onetimesecrets/handler_test.go` — `POST /secrets` rejects a body containing `plaintext` or `passphrase` fields (400, no row persisted); rejects `ciphertext` over 64KB base64 (400, checked before further unmarshal); persists `wrappedContentKey`/`passphraseSalt`/`kdfIterations` verbatim when supplied.
+- [x] 2.2 RED: same file — `GET /secrets/{token}` returns 200+blob and leaves `status` unchanged, repeatable; unknown token → 404; expired token → 410 with no ciphertext body; already-read token → 410.
+- [x] 2.3 RED: same file — `POST /secrets/{token}/burn` after fetch sets `status='read'`; a repeated burn call responds without error and does not change the original `read_at`.
+- [x] 2.4 GREEN: `backend/internal/onetimesecrets/handler.go` — `RegisterRoutes(mux, authMiddleware, routeService, notifier secretReadNotifier)`; `POST /secrets` behind `authMiddleware`; unauthenticated `GET /secrets/{token}` and `POST /secrets/{token}/burn`; decode into `map[string]json.RawMessage` first, reject any key outside `{ciphertext,iv,wrappedContentKey,passphraseSalt,kdfIterations,ttlSeconds}` with 400; check raw base64 `ciphertext` length against 64KB before further unmarshalling; map service errors to 404/410/429 per status.
+- [x] 2.5 GREEN: same file — after `Burn` succeeds and `!alreadyRead`, `httpapi.WriteJSON(w, 200, ...)` → `http.NewResponseController(w).Flush()` → `notifier.NotifySecretRead(context.WithoutCancel(ctx), creatorUserID, secretID)` (unexported `secretReadNotifier` port, matching the `invitationNotifier` shape).
 
 ## Phase 3: Rate Limiting Middleware
 
-- [ ] 3.1 RED: `backend/internal/httpapi/ratelimit_test.go` — 30 requests/minute from one IP allowed, 31st denied (429) with a fake clock; independent buckets per IP; a request over the limit does not touch secret state (asserted at the middleware layer via a spy handler).
-- [ ] 3.2 RED: same file — `ClientIP(r)` returns the first `X-Forwarded-For` entry when present, else `SplitHostPort(r.RemoteAddr)`.
-- [ ] 3.3 GREEN: `backend/internal/httpapi/ratelimit.go` — `IPRateLimiter{buckets map[string]*bucket, mu sync.Mutex}`, `bucket{tokens float64, lastRefill time.Time}`, capacity 30, refill 0.5 tok/s, lazy per-request refill, opportunistic eviction of entries idle > 2 minutes; `ClientIP(r *http.Request) string` helper; wrap `GET /secrets/{token}` and `POST /secrets/{token}/burn` in this middleware in `onetimesecrets.RegisterRoutes` (2.4).
+- [x] 3.1 RED: `backend/internal/httpapi/ratelimit_test.go` — 30 requests/minute from one IP allowed, 31st denied (429) with a fake clock; independent buckets per IP; a request over the limit does not touch secret state (asserted at the middleware layer via a spy handler).
+- [x] 3.2 RED: same file — `ClientIP(r)` returns the first `X-Forwarded-For` entry when present, else `SplitHostPort(r.RemoteAddr)`.
+- [x] 3.3 GREEN: `backend/internal/httpapi/ratelimit.go` — `IPRateLimiter{buckets map[string]*bucket, mu sync.Mutex}`, `bucket{tokens float64, lastRefill time.Time}`, capacity 30, refill 0.5 tok/s, lazy per-request refill, opportunistic eviction of entries idle > 2 minutes; `ClientIP(r *http.Request) string` helper; wrap `GET /secrets/{token}` and `POST /secrets/{token}/burn` in this middleware in `onetimesecrets.RegisterRoutes` (2.4).
 
 ## Phase 4: WebSocket Hub — Per-User Index and PublishToUser
 

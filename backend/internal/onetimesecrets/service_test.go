@@ -190,7 +190,7 @@ func TestRevealAlreadyReadTokenReturnsGone(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create secret: %v", err)
 	}
-	if _, _, err := service.Burn(ctx, created.Token); err != nil {
+	if _, _, _, err := service.Burn(ctx, created.Token); err != nil {
 		t.Fatalf("burn secret: %v", err)
 	}
 
@@ -216,7 +216,7 @@ func TestBurnSetsStatusReadAndReturnsCreatorUserID(t *testing.T) {
 		t.Fatalf("create secret: %v", err)
 	}
 
-	creatorUserID, alreadyRead, err := service.Burn(ctx, created.Token)
+	creatorUserID, secretID, alreadyRead, err := service.Burn(ctx, created.Token)
 	if err != nil {
 		t.Fatalf("burn secret: %v", err)
 	}
@@ -225,6 +225,9 @@ func TestBurnSetsStatusReadAndReturnsCreatorUserID(t *testing.T) {
 	}
 	if creatorUserID != userID {
 		t.Fatalf("creatorUserID = %q, want %q", creatorUserID, userID)
+	}
+	if secretID != created.ID {
+		t.Fatalf("secretID = %q, want %q", secretID, created.ID)
 	}
 
 	status, readAt := loadOnetimesecretsTestStatusAndReadAt(t, ctx, pool, created.ID)
@@ -251,7 +254,7 @@ func TestBurnIsIdempotentOnRepeat(t *testing.T) {
 		t.Fatalf("create secret: %v", err)
 	}
 
-	if _, alreadyRead, err := service.Burn(ctx, created.Token); err != nil || alreadyRead {
+	if _, _, alreadyRead, err := service.Burn(ctx, created.Token); err != nil || alreadyRead {
 		t.Fatalf("first burn: alreadyRead=%v err=%v, want false/nil", alreadyRead, err)
 	}
 	_, firstReadAt := loadOnetimesecretsTestStatusAndReadAt(t, ctx, pool, created.ID)
@@ -259,7 +262,7 @@ func TestBurnIsIdempotentOnRepeat(t *testing.T) {
 		t.Fatal("read_at is nil after first burn")
 	}
 
-	creatorUserID, alreadyRead, err := service.Burn(ctx, created.Token)
+	creatorUserID, secretID, alreadyRead, err := service.Burn(ctx, created.Token)
 	if err != nil {
 		t.Fatalf("second burn: %v", err)
 	}
@@ -268,6 +271,9 @@ func TestBurnIsIdempotentOnRepeat(t *testing.T) {
 	}
 	if creatorUserID != userID {
 		t.Fatalf("creatorUserID on second burn = %q, want %q", creatorUserID, userID)
+	}
+	if secretID != created.ID {
+		t.Fatalf("secretID on second burn = %q, want %q", secretID, created.ID)
 	}
 
 	status, secondReadAt := loadOnetimesecretsTestStatusAndReadAt(t, ctx, pool, created.ID)
