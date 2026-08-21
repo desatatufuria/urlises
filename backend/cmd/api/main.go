@@ -18,6 +18,7 @@ import (
 	"github.com/furia/shared-bookmark-sync/backend/internal/groups"
 	"github.com/furia/shared-bookmark-sync/backend/internal/httpapi"
 	"github.com/furia/shared-bookmark-sync/backend/internal/mailer"
+	"github.com/furia/shared-bookmark-sync/backend/internal/onetimesecrets"
 	"github.com/furia/shared-bookmark-sync/backend/internal/organizations"
 	syncapi "github.com/furia/shared-bookmark-sync/backend/internal/sync"
 	wsapi "github.com/furia/shared-bookmark-sync/backend/internal/websocket"
@@ -38,6 +39,24 @@ type invitationValidatorAdapter struct {
 
 func (a invitationValidatorAdapter) ValidatePendingInvitation(ctx context.Context, token, email string) error {
 	return a.service.ValidatePendingInvitation(ctx, token, email)
+}
+
+// hubSecretReadNotifierAdapter adapts *wsapi.Hub to onetimesecrets'
+// unexported secretReadNotifier port so the handler package never depends
+// on internal/websocket directly, mirroring invitationAccepterAdapter's
+// shape above. It calls Hub.PublishToUser under the hood, addressing the
+// secret's creator by UserID with a flat "secret_read" frame — the same
+// frame shape hub_integration_test.go asserts on.
+type hubSecretReadNotifierAdapter struct {
+	hub *wsapi.Hub
+}
+
+func (a hubSecretReadNotifierAdapter) NotifySecretRead(ctx context.Context, creatorUserID, secretID string) error {
+	return a.hub.PublishToUser(ctx, creatorUserID, map[string]any{
+		"type":     "secret_read",
+		"secretId": secretID,
+		"readAt":   time.Now().UTC().Format(time.RFC3339),
+	})
 }
 
 func main() {
@@ -88,6 +107,7 @@ func main() {
 	bookmarksService := bookmarks.NewService(pool, accessService)
 	websocketHub := wsapi.NewHub()
 	syncService := syncapi.NewService(syncapi.NewPostgresStore(pool, bookmarksService, workspacesService, websocketHub))
+	onetimesecretsService := onetimesecrets.NewService(pool)
 
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		httpapi.WriteJSON(w, http.StatusOK, map[string]string{
@@ -120,6 +140,7 @@ func main() {
 	syncapi.RegisterBookmarkRoutes(mux, authService.Middleware, syncService, idempotencyExecutor)
 	syncapi.RegisterRoutes(mux, authService.Middleware, syncService)
 	wsapi.RegisterRoutes(mux, authService, workspacesService, syncService, websocketHub)
+	onetimesecrets.RegisterRoutes(mux, authService.Middleware, onetimesecretsService, hubSecretReadNotifierAdapter{hub: websocketHub})
 
 	server := &http.Server{
 		Addr:              cfg.Server.Addr,

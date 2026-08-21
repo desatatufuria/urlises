@@ -52,7 +52,7 @@ func RegisterRoutes(mux *http.ServeMux, authService *auth.Service, workspaceServ
 		}
 		defer connection.Close()
 
-		subscription := hub.Subscribe(workspaceID, principal.ClientID)
+		subscription := hub.Subscribe(workspaceID, principal.UserID, principal.ClientID)
 		defer subscription.Close()
 
 		currentCursor, err := cursors.CurrentCursor(r.Context(), workspaceID)
@@ -80,6 +80,14 @@ func RegisterRoutes(mux *http.ServeMux, authService *auth.Service, workspaceServ
 				}
 				_ = connection.SetWriteDeadline(time.Now().Add(5 * time.Second))
 				if err := connection.WriteJSON(map[string]any{"type": "event", "event": event}); err != nil {
+					return
+				}
+			case msg, ok := <-subscription.Notifications:
+				if !ok {
+					return
+				}
+				_ = connection.SetWriteDeadline(time.Now().Add(5 * time.Second))
+				if err := connection.WriteJSON(msg); err != nil {
 					return
 				}
 			}
