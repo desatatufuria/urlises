@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log"
 	"net/http"
 	"time"
 
@@ -40,6 +41,7 @@ type routeService interface {
 	Burn(ctx context.Context, token string) (creatorUserID string, secretID string, alreadyRead bool, err error)
 	LoadOwned(ctx context.Context, token, userID string) (Secret, error)
 	ListOwned(ctx context.Context, userID string) ([]Secret, error)
+	RecordEmailSent(ctx context.Context, secretID, recipientEmail string) error
 }
 
 // secretReadNotifier is a narrow, consumer-defined port so this package
@@ -169,6 +171,14 @@ func RegisterRoutes(mux *http.ServeMux, authMiddleware func(http.Handler) http.H
 			return
 		}
 
+		// Best-effort: the email genuinely was sent, so a failure recording
+		// the recipient in the micro-registry must never turn a successful
+		// send into a failed response — only log it, mirroring mail.go's
+		// safe-logging precedent (never the token, fragment, or link).
+		if err := service.RecordEmailSent(r.Context(), secret.ID, input.RecipientEmail); err != nil {
+			log.Printf("event=secret_email_recipient_record_failed secret_id=%q reason=%q", secret.ID, err.Error())
+		}
+
 		httpapi.WriteJSON(w, http.StatusOK, map[string]string{"status": "sent"})
 	})))
 }
@@ -226,19 +236,22 @@ func secretCreationView(secret Secret) map[string]any {
 }
 
 // secretHistoryView builds the metadata-only micro-registry response for GET
-// /secrets: one entry per secret with an id, timestamps, and a computed
-// status — never the token, ciphertext, iv, or any key/passphrase-related
-// field, since this registry must never be usable to re-fetch or re-derive
-// a secret's content or link.
+// /secrets: one entry per secret with an id, timestamps, a computed status,
+// and — a deliberate, narrow exception to this registry's "metadata only"
+// rule — the most recent send-email recipient, since the caller already
+// knows and typed that address themselves. It never includes the token,
+// ciphertext, iv, or any key/passphrase-related field, since this registry
+// must never be usable to re-fetch or re-derive a secret's content or link.
 func secretHistoryView(secrets []Secret, now time.Time) []map[string]any {
 	entries := make([]map[string]any, 0, len(secrets))
 	for _, secret := range secrets {
 		entries = append(entries, map[string]any{
-			"id":        secret.ID,
-			"createdAt": secret.CreatedAt,
-			"expiresAt": secret.ExpiresAt,
-			"status":    secretHistoryStatus(secret, now),
-			"readAt":    secret.ReadAt,
+			"id":          secret.ID,
+			"createdAt":   secret.CreatedAt,
+			"expiresAt":   secret.ExpiresAt,
+			"status":      secretHistoryStatus(secret, now),
+			"readAt":      secret.ReadAt,
+			"sentToEmail": secret.SentToEmail,
 		})
 	}
 	return entries

@@ -496,6 +496,96 @@ func TestListOwnedCapsAtFiftyResults(t *testing.T) {
 	}
 }
 
+// --- Task: RecordEmailSent — the "send by email" micro-registry recipient ---
+
+func TestRecordEmailSentSetsRecipientEmail(t *testing.T) {
+	t.Parallel()
+
+	ctx, pool := openSecrethideTestPool(t, "secrethide_record_email_sent_test")
+	service := NewService(pool)
+	userID := insertSecrethideTestUser(t, ctx, pool, "creator-record-email@example.com")
+
+	created, err := service.Create(ctx, userID, CreateSecretInput{Ciphertext: "Y2lwaGVydGV4dA==", IV: "aXZieXRlcw=="})
+	if err != nil {
+		t.Fatalf("create secret: %v", err)
+	}
+
+	if err := service.RecordEmailSent(ctx, created.ID, "friend@example.com"); err != nil {
+		t.Fatalf("RecordEmailSent: %v", err)
+	}
+
+	got := loadSecrethideTestSentToEmail(t, ctx, pool, created.ID)
+	if got == nil || *got != "friend@example.com" {
+		t.Fatalf("sent_to_email = %v, want %q", got, "friend@example.com")
+	}
+}
+
+func TestRecordEmailSentOverwritesOnRepeatedCalls(t *testing.T) {
+	t.Parallel()
+
+	ctx, pool := openSecrethideTestPool(t, "secrethide_record_email_sent_overwrite_test")
+	service := NewService(pool)
+	userID := insertSecrethideTestUser(t, ctx, pool, "creator-record-email-overwrite@example.com")
+
+	created, err := service.Create(ctx, userID, CreateSecretInput{Ciphertext: "Y2lwaGVydGV4dA==", IV: "aXZieXRlcw=="})
+	if err != nil {
+		t.Fatalf("create secret: %v", err)
+	}
+
+	if err := service.RecordEmailSent(ctx, created.ID, "first@example.com"); err != nil {
+		t.Fatalf("RecordEmailSent (first): %v", err)
+	}
+	if err := service.RecordEmailSent(ctx, created.ID, "second@example.com"); err != nil {
+		t.Fatalf("RecordEmailSent (second): %v", err)
+	}
+
+	got := loadSecrethideTestSentToEmail(t, ctx, pool, created.ID)
+	if got == nil || *got != "second@example.com" {
+		t.Fatalf("sent_to_email = %v, want only the most recent recipient %q (a micro-registry, not a send-audit-trail)", got, "second@example.com")
+	}
+}
+
+func TestListOwnedReflectsMostRecentEmailRecipientAndNilWhenNeverSent(t *testing.T) {
+	t.Parallel()
+
+	ctx, pool := openSecrethideTestPool(t, "secrethide_list_owned_sent_to_email_test")
+	service := NewService(pool)
+	userID := insertSecrethideTestUser(t, ctx, pool, "creator-list-sent-to-email@example.com")
+
+	neverSent, err := service.Create(ctx, userID, CreateSecretInput{Ciphertext: "Y2lwaGVydGV4dA==", IV: "aXZieXRlcw=="})
+	if err != nil {
+		t.Fatalf("create never-sent secret: %v", err)
+	}
+
+	sentTwice, err := service.Create(ctx, userID, CreateSecretInput{Ciphertext: "Y2lwaGVydGV4dA==", IV: "aXZieXRlcw=="})
+	if err != nil {
+		t.Fatalf("create sent-twice secret: %v", err)
+	}
+	if err := service.RecordEmailSent(ctx, sentTwice.ID, "first@example.com"); err != nil {
+		t.Fatalf("RecordEmailSent (first): %v", err)
+	}
+	if err := service.RecordEmailSent(ctx, sentTwice.ID, "second@example.com"); err != nil {
+		t.Fatalf("RecordEmailSent (second): %v", err)
+	}
+
+	secrets, err := service.ListOwned(ctx, userID)
+	if err != nil {
+		t.Fatalf("ListOwned: %v", err)
+	}
+
+	byID := make(map[string]Secret, len(secrets))
+	for _, secret := range secrets {
+		byID[secret.ID] = secret
+	}
+
+	if got := byID[neverSent.ID]; got.SentToEmail != nil {
+		t.Fatalf("never-sent secret SentToEmail = %v, want nil", *got.SentToEmail)
+	}
+	if got := byID[sentTwice.ID]; got.SentToEmail == nil || *got.SentToEmail != "second@example.com" {
+		t.Fatalf("sent-twice secret SentToEmail = %v, want %q (most recent recipient only)", got.SentToEmail, "second@example.com")
+	}
+}
+
 // --- Test helpers (mirrors organizations' openOrganizationsTestPool pattern) ---
 
 func openSecrethideTestPool(t *testing.T, prefix string) (context.Context, *pgxpool.Pool) {
@@ -590,6 +680,16 @@ func loadSecrethideTestStatusAndReadAt(t *testing.T, ctx context.Context, pool *
 		t.Fatalf("load secret status/read_at: %v", err)
 	}
 	return status, readAt
+}
+
+func loadSecrethideTestSentToEmail(t *testing.T, ctx context.Context, pool *pgxpool.Pool, secretID string) *string {
+	t.Helper()
+
+	var sentToEmail *string
+	if err := pool.QueryRow(ctx, `SELECT sent_to_email FROM secrets WHERE id = $1`, secretID).Scan(&sentToEmail); err != nil {
+		t.Fatalf("load secret sent_to_email: %v", err)
+	}
+	return sentToEmail
 }
 
 func forceSecrethideTestExpiry(t *testing.T, ctx context.Context, pool *pgxpool.Pool, secretID string) {

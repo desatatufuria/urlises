@@ -19,7 +19,7 @@ import type { SecretBlob } from "../../lib/api/types";
 // useParams().token — never from window.location.href — and
 // window.location.hash is read separately, only once decrypt setup begins.
 
-type RevealStatus = "loading" | "pending" | "revealed" | "not-found" | "gone" | "error";
+type RevealStatus = "loading" | "pending" | "ready" | "revealed" | "not-found" | "gone" | "error";
 
 const FRAGMENT_KEY_PATTERN = /#k=([^&]+)/;
 
@@ -66,10 +66,20 @@ export function SecretRevealPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token]);
 
-  async function completeReveal(text: string) {
+  // Decryption succeeding does NOT count as "read" — it only stores the
+  // plaintext locally and moves to the masked "ready" state. The secret is
+  // only burned (marked read) when the visitor explicitly clicks "Reveal"
+  // in revealAndBurn() below. This keeps a silent auto-decrypt on page load
+  // from ever being mistaken for the recipient actually having looked at it.
+  function enterReadyState(text: string) {
     setPlaintext(text);
-    setStatus("revealed");
+    setStatus("ready");
     setDecryptError(null);
+  }
+
+  async function revealAndBurn() {
+    setStatus("revealed");
+    setVisible(true);
 
     if (burned.current) {
       return;
@@ -109,7 +119,7 @@ export function SecretRevealPage() {
     try {
       const key = await importContentKey(decodeURIComponent(match[1]));
       const text = await decrypt(key, fetchedBlob.ciphertext, fetchedBlob.iv);
-      await completeReveal(text);
+      enterReadyState(text);
     } catch {
       setDecryptError("This link's decryption key did not match the stored secret.");
     }
@@ -127,7 +137,7 @@ export function SecretRevealPage() {
       const { key: wrappingKey } = await deriveWrappingKey(passphrase, blob.passphraseSalt, blob.kdfIterations);
       const contentKey = await unwrapKey(wrappingKey, blob.wrappedContentKey);
       const text = await decrypt(contentKey, blob.ciphertext, blob.iv);
-      await completeReveal(text);
+      enterReadyState(text);
     } catch {
       setDecryptError("Incorrect passphrase — it didn't match. Try again.");
     }
@@ -148,6 +158,18 @@ export function SecretRevealPage() {
           ) : null}
 
           {status === "error" ? <DataState tone="danger" title="Could not load this secret" description="Something went wrong fetching this secret." /> : null}
+
+          {status === "ready" && plaintext !== null ? (
+            <>
+              <DataState tone="neutral" title="Secret ready to reveal" description="Click Reveal to view this secret. This marks it as read and it cannot be viewed again." compact />
+              <pre className="ui-copy ui-secret-mask">{plaintext}</pre>
+              <div className="ui-actions">
+                <button className="ui-button ui-button-primary" type="button" onClick={() => void revealAndBurn()}>
+                  Reveal
+                </button>
+              </div>
+            </>
+          ) : null}
 
           {status === "revealed" && plaintext !== null ? (
             <>

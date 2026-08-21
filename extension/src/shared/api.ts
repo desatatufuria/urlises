@@ -154,6 +154,13 @@ export interface SecretHistoryEntry {
   expiresAt: string;
   status: "pending" | "read" | "expired";
   readAt: string | null;
+  // sentToEmail is the most recent recipient the "send by email" endpoint
+  // delivered this secret's link to, or null when it was never sent by
+  // email — a deliberate, narrow exception to this registry's "metadata
+  // only" rule (see backend/internal/secrethide/handler.go's
+  // secretHistoryView), never the token, ciphertext, or any key/passphrase
+  // field.
+  sentToEmail: string | null;
 }
 
 // listSecrets fetches the caller's own secret history — a flat, capped

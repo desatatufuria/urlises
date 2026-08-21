@@ -31,10 +31,11 @@ export interface FormattedSecretHistoryEntry {
  */
 export function formatSecretHistoryEntry(entry: SecretHistoryEntry, now: Date): FormattedSecretHistoryEntry {
   const statusTag = resolveSecretHistoryStatusTag(entry, now);
+  const statusLabel = formatSecretHistoryStatusLabel(entry, statusTag);
   return {
     id: entry.id,
     createdLabel: formatUiTimestamp(entry.createdAt) ?? entry.createdAt,
-    statusLabel: formatSecretHistoryStatusLabel(entry, statusTag),
+    statusLabel: entry.sentToEmail ? `${statusLabel} — sent to ${entry.sentToEmail}` : statusLabel,
     statusTag,
   };
 }

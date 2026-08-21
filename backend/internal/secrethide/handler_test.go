@@ -434,6 +434,64 @@ func TestListSecretsReturnsEmptyArrayWhenCallerHasNoSecrets(t *testing.T) {
 	}
 }
 
+func TestListSecretsIncludesSentToEmailReflectingOnlyMostRecentRecipient(t *testing.T) {
+	t.Parallel()
+
+	ctx, pool := openSecrethideTestPool(t, "secrethide_list_sent_to_email_handler_test")
+	userID := insertSecrethideTestUser(t, ctx, pool, "creator-list-sent-to-email-handler@example.com")
+	service := NewService(pool)
+
+	neverSent, err := service.Create(ctx, userID, CreateSecretInput{Ciphertext: "Y2lwaGVydGV4dA==", IV: "aXZieXRlcw=="})
+	if err != nil {
+		t.Fatalf("create never-sent secret: %v", err)
+	}
+	sentTwice, err := service.Create(ctx, userID, CreateSecretInput{Ciphertext: "Y2lwaGVydGV4dA==", IV: "aXZieXRlcw=="})
+	if err != nil {
+		t.Fatalf("create sent-twice secret: %v", err)
+	}
+
+	mux := http.NewServeMux()
+	linkMailer := &recordingSecretLinkMailer{}
+	RegisterRoutes(mux, secretsPrincipal(userID), service, nil, linkMailer)
+
+	for _, recipient := range []string{"first@example.com", "second@example.com"} {
+		r := httptest.NewRequest(http.MethodPost, "/secrets/"+sentTwice.Token+"/send-email", strings.NewReader(`{"recipientEmail":"`+recipient+`"}`))
+		w := httptest.NewRecorder()
+		mux.ServeHTTP(w, r)
+		if w.Code != http.StatusOK {
+			t.Fatalf("send-email to %s: status = %d, body=%s", recipient, w.Code, w.Body.String())
+		}
+	}
+
+	r := httptest.NewRequest(http.MethodGet, "/secrets", nil)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body=%s", w.Code, http.StatusOK, w.Body.String())
+	}
+
+	var entries []struct {
+		ID          string  `json:"id"`
+		SentToEmail *string `json:"sentToEmail"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &entries); err != nil {
+		t.Fatalf("decode response: %v; body=%s", err, w.Body.String())
+	}
+
+	byID := make(map[string]*string, len(entries))
+	for _, entry := range entries {
+		byID[entry.ID] = entry.SentToEmail
+	}
+
+	if got, ok := byID[neverSent.ID]; !ok || got != nil {
+		t.Fatalf("never-sent entry sentToEmail = %v, want null", got)
+	}
+	if got, ok := byID[sentTwice.ID]; !ok || got == nil || *got != "second@example.com" {
+		t.Fatalf("sent-twice entry sentToEmail = %v, want %q (most recent recipient only)", got, "second@example.com")
+	}
+}
+
 // --- Task 2.3: POST /secrets/{token}/burn ---
 
 func TestBurnSecretAfterFetchSetsStatusRead(t *testing.T) {

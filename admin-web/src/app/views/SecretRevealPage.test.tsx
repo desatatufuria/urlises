@@ -126,7 +126,7 @@ describe("SecretRevealPage", () => {
     expect(screen.getByLabelText(/passphrase/i)).toBeInTheDocument();
   });
 
-  it("calls burn exactly once after a successful decrypt, and StrictMode's double-invoked effects do not cause a second burn call", async () => {
+  it("shows the masked ready state after a successful fragment-key decrypt without burning yet, even under StrictMode's double-invoked effects", async () => {
     const contentKey = await generateContentKey();
     const rawKey = await exportContentKey(contentKey);
     const { ciphertext, iv } = await encrypt(contentKey, "the real payload for strict mode");
@@ -147,10 +147,82 @@ describe("SecretRevealPage", () => {
 
     await screen.findByText("the real payload for strict mode");
 
+    const burnCallsBeforeReveal = fetchMock.mock.calls.filter(([input, init]) => String(input).endsWith("/secrets/tok-strict/burn") && init?.method === "POST");
+    expect(burnCallsBeforeReveal).toHaveLength(0);
+  });
+
+  it("burns exactly once when Reveal is clicked after a successful fragment-key decrypt, and unmasks the content, even under StrictMode double-clicks", async () => {
+    const contentKey = await generateContentKey();
+    const rawKey = await exportContentKey(contentKey);
+    const { ciphertext, iv } = await encrypt(contentKey, "the real payload for strict mode");
+
+    await setLocation("/s/tok-strict", `#k=${encodeURIComponent(rawKey)}`);
+    fetchMock.mockImplementation((input, init) => {
+      const url = String(input);
+      if (url.endsWith("/secrets/tok-strict/burn") && init?.method === "POST") {
+        return jsonResponse({ status: "read" });
+      }
+      if (url.endsWith("/secrets/tok-strict")) {
+        return jsonResponse({ ciphertext, iv, wrappedContentKey: null, passphraseSalt: null, kdfIterations: null });
+      }
+      return jsonResponse({ error: "not found" }, 404);
+    });
+
+    renderReveal("/s/tok-strict", { strict: true });
+
+    await screen.findByText("the real payload for strict mode");
+
+    const user = userEvent.setup();
+    const revealButton = screen.getByRole("button", { name: /reveal/i });
+    await user.click(revealButton);
+    await user.click(revealButton);
+
     await waitFor(() => {
       const burnCalls = fetchMock.mock.calls.filter(([input, init]) => String(input).endsWith("/secrets/tok-strict/burn") && init?.method === "POST");
       expect(burnCalls).toHaveLength(1);
     });
+
+    await screen.findByRole("heading", { name: /secret revealed/i });
+  });
+
+  it("shows the masked ready state after a correct passphrase without burning, and burns exactly once when Reveal is clicked afterward", async () => {
+    const contentKey = await generateContentKey();
+    const { ciphertext, iv } = await encrypt(contentKey, "the passphrase payload");
+    const { key: wrappingKey, salt, iterations } = await deriveWrappingKey("correct passphrase");
+    const wrappedContentKey = await wrapKey(wrappingKey, contentKey);
+
+    await setLocation("/s/tok-goodpass", "");
+    fetchMock.mockImplementation((input, init) => {
+      const url = String(input);
+      if (url.endsWith("/secrets/tok-goodpass/burn") && init?.method === "POST") {
+        return jsonResponse({ status: "read" });
+      }
+      if (url.endsWith("/secrets/tok-goodpass")) {
+        return jsonResponse({ ciphertext, iv, wrappedContentKey, passphraseSalt: salt, kdfIterations: iterations });
+      }
+      return jsonResponse({ error: "not found" }, 404);
+    });
+
+    renderReveal("/s/tok-goodpass");
+
+    const passphraseInput = await screen.findByLabelText(/passphrase/i);
+    const user = userEvent.setup();
+    await user.type(passphraseInput, "correct passphrase");
+    await user.click(screen.getByRole("button", { name: /unlock/i }));
+
+    await screen.findByText("the passphrase payload");
+
+    const burnCallsBeforeReveal = fetchMock.mock.calls.filter(([input, init]) => String(input).endsWith("/secrets/tok-goodpass/burn") && init?.method === "POST");
+    expect(burnCallsBeforeReveal).toHaveLength(0);
+
+    await user.click(screen.getByRole("button", { name: /reveal/i }));
+
+    await waitFor(() => {
+      const burnCalls = fetchMock.mock.calls.filter(([input, init]) => String(input).endsWith("/secrets/tok-goodpass/burn") && init?.method === "POST");
+      expect(burnCalls).toHaveLength(1);
+    });
+
+    await screen.findByRole("heading", { name: /secret revealed/i });
   });
 
   it("renders distinct copy for a 404 (not found) response", async () => {

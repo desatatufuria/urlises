@@ -65,6 +65,13 @@ type Secret struct {
 	CreatedAt time.Time
 	ExpiresAt time.Time
 	ReadAt    *time.Time
+	// SentToEmail is the most recent recipient the "send by email" endpoint
+	// delivered this secret's link to, or nil when it was never sent by
+	// email. This is a deliberate, narrow micro-registry field — it mirrors
+	// only the latest recipient (overwritten on repeat sends), never a full
+	// send history, and never the token, ciphertext, or any key/passphrase
+	// material.
+	SentToEmail *string
 }
 
 // SecretBlob is the ciphertext payload returned by Reveal.
@@ -226,7 +233,7 @@ func (s *Service) Burn(ctx context.Context, token string) (creatorUserID string,
 func (s *Service) LoadOwned(ctx context.Context, token, userID string) (Secret, error) {
 	var secret Secret
 	err := s.pool.QueryRow(ctx, `
-		SELECT id, user_id, token, status, created_at, expires_at, read_at
+		SELECT id, user_id, token, status, created_at, expires_at, read_at, sent_to_email
 		FROM secrets
 		WHERE token = $1
 	`, token).Scan(
@@ -237,6 +244,7 @@ func (s *Service) LoadOwned(ctx context.Context, token, userID string) (Secret, 
 		&secret.CreatedAt,
 		&secret.ExpiresAt,
 		&secret.ReadAt,
+		&secret.SentToEmail,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -264,7 +272,7 @@ const maxListOwnedResults = 50
 // matching this package's "compute, don't store" rule for expiry.
 func (s *Service) ListOwned(ctx context.Context, userID string) ([]Secret, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT id, user_id, token, status, created_at, expires_at, read_at
+		SELECT id, user_id, token, status, created_at, expires_at, read_at, sent_to_email
 		FROM secrets
 		WHERE user_id = $1
 		ORDER BY created_at DESC
@@ -286,6 +294,7 @@ func (s *Service) ListOwned(ctx context.Context, userID string) ([]Secret, error
 			&secret.CreatedAt,
 			&secret.ExpiresAt,
 			&secret.ReadAt,
+			&secret.SentToEmail,
 		); err != nil {
 			return nil, fmt.Errorf("scan owned secret: %w", err)
 		}
@@ -296,6 +305,24 @@ func (s *Service) ListOwned(ctx context.Context, userID string) ([]Secret, error
 	}
 
 	return secrets, nil
+}
+
+// RecordEmailSent stores recipientEmail as secretID's most recent
+// send-email recipient, overwriting whatever was there before. This is a
+// deliberate micro-registry, not a send-audit-trail: only the latest
+// recipient is ever retained, so a caller should invoke this only after a
+// send has genuinely succeeded (see handler.go's POST
+// /secrets/{token}/send-email, which calls this as a best-effort step after
+// linkMailer.SendSecretLink succeeds).
+func (s *Service) RecordEmailSent(ctx context.Context, secretID, recipientEmail string) error {
+	if _, err := s.pool.Exec(ctx, `
+		UPDATE secrets
+		SET sent_to_email = $1
+		WHERE id = $2
+	`, recipientEmail, secretID); err != nil {
+		return fmt.Errorf("record email sent: %w", err)
+	}
+	return nil
 }
 
 // resolveTTL applies the default/clamp rules: nil or non-positive

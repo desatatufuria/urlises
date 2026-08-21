@@ -18,11 +18,13 @@ import (
 // (unknown token / wrong owner / wrong status must all collapse into the
 // same ErrNotFound response).
 type stubSendEmailService struct {
-	loadOwnedSecret Secret
-	loadOwnedErr    error
+	loadOwnedSecret    Secret
+	loadOwnedErr       error
+	recordEmailSentErr error
 
-	mu             sync.Mutex
-	loadOwnedCalls []struct{ token, userID string }
+	mu                   sync.Mutex
+	loadOwnedCalls       []struct{ token, userID string }
+	recordEmailSentCalls []struct{ secretID, recipientEmail string }
 }
 
 func (s *stubSendEmailService) Create(context.Context, string, CreateSecretInput) (Secret, error) {
@@ -52,10 +54,23 @@ func (s *stubSendEmailService) ListOwned(context.Context, string) ([]Secret, err
 	return nil, errors.New("unused in these tests")
 }
 
+func (s *stubSendEmailService) RecordEmailSent(_ context.Context, secretID, recipientEmail string) error {
+	s.mu.Lock()
+	s.recordEmailSentCalls = append(s.recordEmailSentCalls, struct{ secretID, recipientEmail string }{secretID, recipientEmail})
+	s.mu.Unlock()
+	return s.recordEmailSentErr
+}
+
 func (s *stubSendEmailService) callCount() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return len(s.loadOwnedCalls)
+}
+
+func (s *stubSendEmailService) recordEmailSentCallCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.recordEmailSentCalls)
 }
 
 // recordingSecretLinkMailer is a secretLinkMailer test double that records
@@ -426,5 +441,84 @@ func TestSendSecretLinkWithoutConfiguredMailerReturnsServiceUnavailable(t *testi
 
 	if w.Code != http.StatusServiceUnavailable {
 		t.Fatalf("status = %d, want %d; body=%s", w.Code, http.StatusServiceUnavailable, w.Body.String())
+	}
+}
+
+// --- Task: recording the recipient in the "Secret history" micro-registry ---
+
+func TestSendSecretLinkRecordsRecipientAfterSuccessfulSend(t *testing.T) {
+	t.Parallel()
+
+	service := &stubSendEmailService{
+		loadOwnedSecret: Secret{ID: "secret-1", UserID: "user-1", Token: "tok123", Status: "pending"},
+	}
+	linkMailer := &recordingSecretLinkMailer{}
+	mux := sendEmailTestMux("user-1", service, linkMailer)
+
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, sendEmailRequest("tok123", `{"recipientEmail":"friend@example.com"}`))
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body=%s", w.Code, http.StatusOK, w.Body.String())
+	}
+	if service.recordEmailSentCallCount() != 1 {
+		t.Fatalf("RecordEmailSent calls = %d, want 1", service.recordEmailSentCallCount())
+	}
+	call := service.recordEmailSentCalls[0]
+	if call.secretID != "secret-1" || call.recipientEmail != "friend@example.com" {
+		t.Fatalf("RecordEmailSent called with (%q, %q), want (%q, %q)", call.secretID, call.recipientEmail, "secret-1", "friend@example.com")
+	}
+}
+
+func TestSendSecretLinkStillReturns200WhenRecordEmailSentFails(t *testing.T) {
+	t.Parallel()
+
+	service := &stubSendEmailService{
+		loadOwnedSecret:    Secret{ID: "secret-1", UserID: "user-1", Token: "tok123", Status: "pending"},
+		recordEmailSentErr: errors.New("db unavailable"),
+	}
+	linkMailer := &recordingSecretLinkMailer{}
+	mux := sendEmailTestMux("user-1", service, linkMailer)
+
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, sendEmailRequest("tok123", `{"recipientEmail":"friend@example.com"}`))
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d (a failed best-effort recipient recording must never turn a successful send into a failure); body=%s", w.Code, http.StatusOK, w.Body.String())
+	}
+	var response struct {
+		Status string `json:"status"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode response: %v; body=%s", err, w.Body.String())
+	}
+	if response.Status != "sent" {
+		t.Fatalf("response.Status = %q, want %q", response.Status, "sent")
+	}
+	if service.recordEmailSentCallCount() != 1 {
+		t.Fatalf("RecordEmailSent calls = %d, want 1 (must still be attempted)", service.recordEmailSentCallCount())
+	}
+	if linkMailer.count() != 1 {
+		t.Fatalf("mailer calls = %d, want 1", linkMailer.count())
+	}
+}
+
+func TestSendSecretLinkDoesNotRecordRecipientWhenMailerFails(t *testing.T) {
+	t.Parallel()
+
+	service := &stubSendEmailService{
+		loadOwnedSecret: Secret{ID: "secret-1", UserID: "user-1", Token: "tok123", Status: "pending"},
+	}
+	linkMailer := &recordingSecretLinkMailer{err: errors.New("smtp dial failed")}
+	mux := sendEmailTestMux("user-1", service, linkMailer)
+
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, sendEmailRequest("tok123", `{"recipientEmail":"friend@example.com"}`))
+
+	if w.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, want %d; body=%s", w.Code, http.StatusBadGateway, w.Body.String())
+	}
+	if service.recordEmailSentCallCount() != 0 {
+		t.Fatalf("RecordEmailSent calls = %d, want 0 (must only record after a truly successful send)", service.recordEmailSentCallCount())
 	}
 }

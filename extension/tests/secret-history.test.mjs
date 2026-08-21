@@ -13,6 +13,7 @@ test("formats a pending secret as Pending", () => {
     expiresAt: "2026-08-22T10:00:00Z",
     status: "pending",
     readAt: null,
+    sentToEmail: null,
   };
   const formatted = formatSecretHistoryEntry(entry, NOW);
   assert.equal(formatted.id, "secret-1");
@@ -31,6 +32,7 @@ test("formats a read secret as Read <time>", () => {
     expiresAt: "2026-08-21T10:00:00Z",
     status: "read",
     readAt: "2026-08-20T11:30:00Z",
+    sentToEmail: null,
   };
   const formatted = formatSecretHistoryEntry(entry, NOW);
   assert.ok(formatted.statusLabel.startsWith("Read "));
@@ -47,6 +49,7 @@ test("formats a backend-computed expired secret as Expired — never read", () =
     expiresAt: "2026-08-20T10:00:00Z",
     status: "expired",
     readAt: null,
+    sentToEmail: null,
   };
   const formatted = formatSecretHistoryEntry(entry, NOW);
   assert.equal(formatted.statusLabel, "Expired — never read");
@@ -64,6 +67,7 @@ test("treats a stale pending row past its expiresAt as expired at render time", 
     expiresAt: "2026-08-20T10:00:00Z", // before NOW
     status: "pending",
     readAt: null,
+    sentToEmail: null,
   };
   const formatted = formatSecretHistoryEntry(entry, NOW);
   assert.equal(formatted.statusLabel, "Expired — never read");
@@ -79,8 +83,68 @@ test("a read secret is never displayed as expired even past its expiresAt", () =
     expiresAt: "2026-08-20T10:00:00Z", // before NOW
     status: "read",
     readAt: "2026-08-19T11:00:00Z",
+    sentToEmail: null,
   };
   const formatted = formatSecretHistoryEntry(entry, NOW);
   assert.ok(formatted.statusLabel.startsWith("Read "));
   assert.equal(formatted.statusTag, "read");
+});
+
+// RED: when sentToEmail is present, it is appended to the status label —
+// terse, one-line-per-row, no bigger layout change.
+test("appends the recipient to a read entry's label when sentToEmail is present", () => {
+  const entry = {
+    id: "secret-6",
+    createdAt: "2026-08-20T10:00:00Z",
+    expiresAt: "2026-08-21T10:00:00Z",
+    status: "read",
+    readAt: "2026-08-20T11:30:00Z",
+    sentToEmail: "friend@example.com",
+  };
+  const formatted = formatSecretHistoryEntry(entry, NOW);
+  assert.ok(formatted.statusLabel.startsWith("Read "));
+  assert.ok(formatted.statusLabel.endsWith(" — sent to friend@example.com"));
+});
+
+test("appends the recipient to a pending entry's label when sentToEmail is present", () => {
+  const entry = {
+    id: "secret-7",
+    createdAt: "2026-08-21T10:00:00Z",
+    expiresAt: "2026-08-22T10:00:00Z",
+    status: "pending",
+    readAt: null,
+    sentToEmail: "friend@example.com",
+  };
+  const formatted = formatSecretHistoryEntry(entry, NOW);
+  assert.equal(formatted.statusLabel, "Pending — sent to friend@example.com");
+  assert.equal(formatted.statusTag, "pending");
+});
+
+test("appends the recipient to an expired entry's label when sentToEmail is present", () => {
+  const entry = {
+    id: "secret-8",
+    createdAt: "2026-08-19T10:00:00Z",
+    expiresAt: "2026-08-20T10:00:00Z",
+    status: "expired",
+    readAt: null,
+    sentToEmail: "friend@example.com",
+  };
+  const formatted = formatSecretHistoryEntry(entry, NOW);
+  assert.equal(formatted.statusLabel, "Expired — never read — sent to friend@example.com");
+  assert.equal(formatted.statusTag, "expired");
+});
+
+// RED: when sentToEmail is null (never sent by email), the label is
+// unchanged — no dangling separator or empty recipient text.
+test("does not append anything when sentToEmail is null", () => {
+  const entry = {
+    id: "secret-9",
+    createdAt: "2026-08-21T10:00:00Z",
+    expiresAt: "2026-08-22T10:00:00Z",
+    status: "pending",
+    readAt: null,
+    sentToEmail: null,
+  };
+  const formatted = formatSecretHistoryEntry(entry, NOW);
+  assert.equal(formatted.statusLabel, "Pending");
 });
