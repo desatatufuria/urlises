@@ -2,7 +2,7 @@
 
 ## Technical Approach
 
-`backend/internal/secrets` mirrors `organizations`' service/handler shape: `Service` wraps `*pgxpool.Pool`, `RegisterRoutes` takes `authMiddleware`, a `routeService`, and a `secretReadNotifier` port (unexported, matching `invitationNotifier`). `POST /secrets` runs behind `service.Middleware`; `GET /secrets/{token}` and `POST /secrets/{token}/burn` are unauthenticated and wrapped in a new `httpapi` IP rate limiter. Reveal and burn are separate DB operations so a failed client-side unwrap never touches `status`. Burn's own `Service.Burn` transaction commits, then the handler flushes the 200 response and calls `Hub.PublishToUser` — the same commit-then-notify ordering as invitation email, hand-rolled instead of via `IdempotencyExecutor.ExecutePrepared` because burn has no `Principal`/`Idempotency-Key` to build an `IdempotencyScope` from. `websocket.Hub` gains a `byUser` index and a second per-subscription channel so user-notifications never masquerade as `syncapi.Envelope`.
+`backend/internal/onetimesecrets` mirrors `organizations`' service/handler shape: `Service` wraps `*pgxpool.Pool`, `RegisterRoutes` takes `authMiddleware`, a `routeService`, and a `secretReadNotifier` port (unexported, matching `invitationNotifier`). `POST /secrets` runs behind `service.Middleware`; `GET /secrets/{token}` and `POST /secrets/{token}/burn` are unauthenticated and wrapped in a new `httpapi` IP rate limiter. Reveal and burn are separate DB operations so a failed client-side unwrap never touches `status`. Burn's own `Service.Burn` transaction commits, then the handler flushes the 200 response and calls `Hub.PublishToUser` — the same commit-then-notify ordering as invitation email, hand-rolled instead of via `IdempotencyExecutor.ExecutePrepared` because burn has no `Principal`/`Idempotency-Key` to build an `IdempotencyScope` from. `websocket.Hub` gains a `byUser` index and a second per-subscription channel so user-notifications never masquerade as `syncapi.Envelope`.
 
 ## Architecture Decisions
 
@@ -28,7 +28,7 @@
 
     extension popup: create-secret
       -> crypto.ts: generateContentKey, encrypt, (optional) deriveWrappingKey+wrap
-      -> POST /secrets (auth)  -> secrets.Service.Create -> INSERT, token, expires_at
+      -> POST /secrets (auth)  -> onetimesecrets.Service.Create -> INSERT, token, expires_at
       -> link = {PUBLIC_BASE_URL}/s/{token}[#k=...]     -> persist {id,token} locally
 
     recipient opens /s/:token (public, outside RequireSession)
@@ -46,12 +46,12 @@
 | File | Action | Description |
 |---|---|---|
 | `backend/migrations/000010_secrets.sql` | Create | `secrets` table + `wrapped_content_key`; indexes on `user_id`, `(status, expires_at)` |
-| `backend/internal/secrets/service.go` | Create | `Create`, `Reveal`, `Burn`, `generateToken` (24B/hex, mirrors `generateInviteToken`) |
-| `backend/internal/secrets/handler.go` | Create | `RegisterRoutes`; field allow-list, TTL clamp, status mapping (404/410/429) |
+| `backend/internal/onetimesecrets/service.go` | Create | `Create`, `Reveal`, `Burn`, `generateToken` (24B/hex, mirrors `generateInviteToken`) |
+| `backend/internal/onetimesecrets/handler.go` | Create | `RegisterRoutes`; field allow-list, TTL clamp, status mapping (404/410/429) |
 | `backend/internal/httpapi/ratelimit.go` | Create | `IPRateLimiter`, `ClientIP` |
 | `backend/internal/websocket/hub.go` | Modify | `byUser` index, `Notifications` channel, `PublishToUser` |
 | `backend/internal/websocket/handler.go` | Modify | `Subscribe(workspaceID, principal.UserID, principal.ClientID)`, second `select` case |
-| `backend/cmd/api/main.go` | Modify | wire `secrets.NewService`, `secrets.RegisterRoutes(..., websocketHub)`, rate limiter instance |
+| `backend/cmd/api/main.go` | Modify | wire `onetimesecrets.NewService`, `onetimesecrets.RegisterRoutes(..., websocketHub)`, rate limiter instance |
 | `admin-web/src/app/router.tsx` | Modify | `{ path: "/s/:token", element: <SecretRevealPage/> }`, sibling of `/login`, no `RequireSession` |
 | `admin-web/src/app/views/SecretRevealPage.tsx` | Create | no `useAuth()`; fetch/decrypt/burn flow |
 | `admin-web/src/lib/api/secrets.ts` | Create | `apiRequest` calls with no `token` option |
@@ -94,7 +94,7 @@ N/A — no shell, subprocess, VCS/PR automation, executable-file classification,
 
 ## Migration / Rollout
 
-Additive migration `000010_secrets.sql`; no backfill. Rollback: drop the table, remove `secrets.RegisterRoutes`/router entry, revert `Hub`'s additive fields (unused if `PublishToUser` is never called). No existing data touched.
+Additive migration `000010_secrets.sql`; no backfill. Rollback: drop the table, remove `onetimesecrets.RegisterRoutes`/router entry, revert `Hub`'s additive fields (unused if `PublishToUser` is never called). No existing data touched.
 
 ## Open Questions
 

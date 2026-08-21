@@ -15,7 +15,7 @@ Automatic mode — no interactive round was possible this turn. Open items below
 ## Scope
 
 ### In Scope
-- `backend/internal/secrets/`: create (authenticated), public reveal-fetch (no burn), public burn/confirm (client-asserted), TTL expiry, `expires_at NOT NULL`.
+- `backend/internal/onetimesecrets/`: create (authenticated), public reveal-fetch (no burn), public burn/confirm (client-asserted), TTL expiry, `expires_at NOT NULL`.
 - Client-side AES-256-GCM encryption; optional passphrase wraps the content key via PBKDF2-SHA256 (≥210,000 iterations, per-secret salt) — server never sees plaintext, key, or passphrase.
 - New public admin-web route (`/s/:token`) — first unauthenticated resource-disclosure route in this codebase.
 - Extension: create-secret UI + read-confirmation surfacing.
@@ -45,7 +45,7 @@ Backend mirrors `organizations`' service/handler shape and reuses `generateInvit
 
 | Area | Impact | Description |
 |---|---|---|
-| `backend/internal/secrets/` | New | Service, handler, token/TTL logic |
+| `backend/internal/onetimesecrets/` | New | Service, handler, token/TTL logic |
 | `backend/migrations/` | New | `secrets` table, `expires_at NOT NULL` |
 | `backend/internal/websocket/hub.go` | Modified | `byUser` index, `PublishToUser` |
 | `backend/internal/httpapi/` | New | IP rate-limit middleware (public routes only) |

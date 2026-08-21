@@ -22,8 +22,8 @@ Chain strategy: feature-branch-chain (5 sequential branches off `develop`, each 
 | File | Action | Est. lines |
 |---|---|---|
 | `backend/migrations/000010_secrets.sql` | Create | ~50 |
-| `backend/internal/secrets/service.go` (+tests) | Create | ~180 + ~200 |
-| `backend/internal/secrets/handler.go` (+tests) | Create | ~180 + ~150 |
+| `backend/internal/onetimesecrets/service.go` (+tests) | Create | ~180 + ~200 |
+| `backend/internal/onetimesecrets/handler.go` (+tests) | Create | ~180 + ~150 |
 | `backend/internal/httpapi/ratelimit.go` (+tests) | Create | ~100 + ~120 |
 | `backend/internal/websocket/hub.go` (+tests) | Modify | ~70 + ~100 |
 | `backend/internal/websocket/handler.go` | Modify | ~25 |
@@ -43,9 +43,9 @@ Chain strategy: feature-branch-chain (5 sequential branches off `develop`, each 
 
 | Unit | Goal | Branch | Likely PR | Focused test command | Runtime harness | Rollback boundary |
 |---|---|---|---|---|---|---|
-| 1a | Backend foundation: migration + `secrets` service (token/TTL/Create/Reveal/Burn) | `feat/secret-sharing-backend-core` off `develop` | PR 1a | `cd backend && go test ./internal/secrets` | `docker compose up -d backend`; exercise `Service` via a Go test harness (no HTTP routes yet) | `backend/migrations/000010_secrets.sql`, `backend/internal/secrets/service.go`(+test) |
-| 1b | Backend handler: `secrets.Handler` (field allow-list, content limit, status mapping) + rate-limit middleware | `feat/secret-sharing-backend-api` off `feat/secret-sharing-backend-core` | PR 1b, base = 1a | `cd backend && go test ./internal/secrets ./internal/httpapi` | `docker compose up -d backend`; `curl -X POST http://localhost:8080/secrets` with a session cookie, then `GET`/`burn` the returned token | `backend/internal/secrets/handler.go`(+test), `backend/internal/httpapi/ratelimit.go`(+test) |
-| 2 | `websocket.Hub` `byUser`/`PublishToUser`, `Subscribe` signature change, `main.go` composition wiring (real notifier into `secrets.RegisterRoutes`) | `feat/secret-sharing-websocket` off `feat/secret-sharing-backend-api` | PR 2, base = 1b | `cd backend && go test ./internal/websocket ./internal/secrets -run Integration` | `docker compose up -d`; open two extension popups as the same user, burn a secret via `curl`, confirm both sockets receive `secret_read` | `backend/internal/websocket/{hub.go,handler.go}`, `backend/cmd/api/main.go` |
+| 1a | Backend foundation: migration + `secrets` service (token/TTL/Create/Reveal/Burn) | `feat/secret-sharing-backend-core` off `develop` | PR 1a | `cd backend && go test ./internal/onetimesecrets` | `docker compose up -d backend`; exercise `Service` via a Go test harness (no HTTP routes yet) | `backend/migrations/000010_secrets.sql`, `backend/internal/onetimesecrets/service.go`(+test) |
+| 1b | Backend handler: `onetimesecrets.Handler` (field allow-list, content limit, status mapping) + rate-limit middleware | `feat/secret-sharing-backend-api` off `feat/secret-sharing-backend-core` | PR 1b, base = 1a | `cd backend && go test ./internal/onetimesecrets ./internal/httpapi` | `docker compose up -d backend`; `curl -X POST http://localhost:8080/secrets` with a session cookie, then `GET`/`burn` the returned token | `backend/internal/onetimesecrets/handler.go`(+test), `backend/internal/httpapi/ratelimit.go`(+test) |
+| 2 | `websocket.Hub` `byUser`/`PublishToUser`, `Subscribe` signature change, `main.go` composition wiring (real notifier into `onetimesecrets.RegisterRoutes`) | `feat/secret-sharing-websocket` off `feat/secret-sharing-backend-api` | PR 2, base = 1b | `cd backend && go test ./internal/websocket ./internal/onetimesecrets -run Integration` | `docker compose up -d`; open two extension popups as the same user, burn a secret via `curl`, confirm both sockets receive `secret_read` | `backend/internal/websocket/{hub.go,handler.go}`, `backend/cmd/api/main.go` |
 | 3 | Admin-web public reveal: `/s/:token` route, `SecretRevealPage`, `lib/crypto.ts`, `lib/api/secrets.ts` | `feat/secret-sharing-admin-web` off `feat/secret-sharing-websocket` | PR 3, base = 2 | `cd admin-web && npm test -- SecretRevealPage crypto` | `npm run dev`; open `/s/:token` for a secret created via `curl`, confirm decrypt+burn end to end | `admin-web/src/{app/router.tsx,app/views/SecretRevealPage.tsx,lib/crypto.ts,lib/api/secrets.ts}` |
 | 4 | Extension: `shared/crypto.ts`, `shared/websocket.ts` `onSecretRead`, `shared/api.ts` `createSecret`, `background/projection.ts`, popup create/read-confirmation UI | `feat/secret-sharing-extension` off `feat/secret-sharing-admin-web` | PR 4, base = 3 | `cd extension && npm test -- crypto projection` | load unpacked extension, create a secret, open the `/s/:token` link in another profile, confirm the popup shows the read confirmation | `extension/src/{shared/crypto.ts,shared/websocket.ts,shared/api.ts,background/projection.ts,popup/}` |
 
@@ -53,24 +53,24 @@ Each unit is developed, tested, and merged into `develop` before the next unit's
 
 ## Phase 1: Backend Foundation — Migration & Secrets Service
 
-- [ ] 1.1 `backend/migrations/000010_secrets.sql` — create `secrets` table: `id`, `user_id` (creator, FK), `token` (unique), `ciphertext`, `iv`, `wrapped_content_key BYTEA` (nullable), `passphrase_salt` (nullable), `kdf_iterations` (nullable), `status` (`pending`/`read`), `created_at`, `expires_at NOT NULL`, `read_at` (nullable); indexes on `user_id` and `(status, expires_at)`.
-- [ ] 1.2 RED: `backend/internal/secrets/service_test.go` — default TTL (`expires_at == created_at + 24h`) when unspecified; requested TTL clamped to 7 days; `generateToken` produces 24B/hex tokens mirroring `generateInviteToken`; `Reveal` returns the blob without mutating `status`; `Reveal` on unknown/expired/already-read token maps to a distinguishable not-found/gone error.
-- [ ] 1.3 RED: same file — `Burn` sets `status='read'`+`read_at` and returns the creator's `user_id`; repeated `Burn` after first success is a no-op returning the original `read_at` (idempotent, does not re-trigger notify per the design's `alreadyRead` return).
-- [ ] 1.4 GREEN: `backend/internal/secrets/service.go` — `Service` wrapping `*pgxpool.Pool`; `generateToken` (24B `crypto/rand`/hex); `Create(ctx, userID, input) (Secret, error)` (24h default / 7d hard cap TTL clamp); `Reveal(ctx, token) (SecretBlob, error)`; `Burn(ctx, token) (creatorUserID string, alreadyRead bool, error)` using `SELECT ... FOR UPDATE` inside a tx.
+- [x] 1.1 `backend/migrations/000010_secrets.sql` — create `secrets` table: `id`, `user_id` (creator, FK), `token` (unique), `ciphertext`, `iv`, `wrapped_content_key BYTEA` (nullable), `passphrase_salt` (nullable), `kdf_iterations` (nullable), `status` (`pending`/`read`), `created_at`, `expires_at NOT NULL`, `read_at` (nullable); indexes on `user_id` and `(status, expires_at)`.
+- [x] 1.2 RED: `backend/internal/onetimesecrets/service_test.go` — default TTL (`expires_at == created_at + 24h`) when unspecified; requested TTL clamped to 7 days; `generateToken` produces 24B/hex tokens mirroring `generateInviteToken`; `Reveal` returns the blob without mutating `status`; `Reveal` on unknown/expired/already-read token maps to a distinguishable not-found/gone error.
+- [x] 1.3 RED: same file — `Burn` sets `status='read'`+`read_at` and returns the creator's `user_id`; repeated `Burn` after first success is a no-op returning the original `read_at` (idempotent, does not re-trigger notify per the design's `alreadyRead` return).
+- [x] 1.4 GREEN: `backend/internal/onetimesecrets/service.go` — `Service` wrapping `*pgxpool.Pool`; `generateToken` (24B `crypto/rand`/hex); `Create(ctx, userID, input) (Secret, error)` (24h default / 7d hard cap TTL clamp); `Reveal(ctx, token) (SecretBlob, error)`; `Burn(ctx, token) (creatorUserID string, alreadyRead bool, error)` using `SELECT ... FOR UPDATE` inside a tx.
 
 ## Phase 2: Backend Handler — Validation, Field Allow-List, Content Limit
 
-- [ ] 2.1 RED: `backend/internal/secrets/handler_test.go` — `POST /secrets` rejects a body containing `plaintext` or `passphrase` fields (400, no row persisted); rejects `ciphertext` over 64KB base64 (400, checked before further unmarshal); persists `wrappedContentKey`/`passphraseSalt`/`kdfIterations` verbatim when supplied.
+- [ ] 2.1 RED: `backend/internal/onetimesecrets/handler_test.go` — `POST /secrets` rejects a body containing `plaintext` or `passphrase` fields (400, no row persisted); rejects `ciphertext` over 64KB base64 (400, checked before further unmarshal); persists `wrappedContentKey`/`passphraseSalt`/`kdfIterations` verbatim when supplied.
 - [ ] 2.2 RED: same file — `GET /secrets/{token}` returns 200+blob and leaves `status` unchanged, repeatable; unknown token → 404; expired token → 410 with no ciphertext body; already-read token → 410.
 - [ ] 2.3 RED: same file — `POST /secrets/{token}/burn` after fetch sets `status='read'`; a repeated burn call responds without error and does not change the original `read_at`.
-- [ ] 2.4 GREEN: `backend/internal/secrets/handler.go` — `RegisterRoutes(mux, authMiddleware, routeService, notifier secretReadNotifier)`; `POST /secrets` behind `authMiddleware`; unauthenticated `GET /secrets/{token}` and `POST /secrets/{token}/burn`; decode into `map[string]json.RawMessage` first, reject any key outside `{ciphertext,iv,wrappedContentKey,passphraseSalt,kdfIterations,ttlSeconds}` with 400; check raw base64 `ciphertext` length against 64KB before further unmarshalling; map service errors to 404/410/429 per status.
+- [ ] 2.4 GREEN: `backend/internal/onetimesecrets/handler.go` — `RegisterRoutes(mux, authMiddleware, routeService, notifier secretReadNotifier)`; `POST /secrets` behind `authMiddleware`; unauthenticated `GET /secrets/{token}` and `POST /secrets/{token}/burn`; decode into `map[string]json.RawMessage` first, reject any key outside `{ciphertext,iv,wrappedContentKey,passphraseSalt,kdfIterations,ttlSeconds}` with 400; check raw base64 `ciphertext` length against 64KB before further unmarshalling; map service errors to 404/410/429 per status.
 - [ ] 2.5 GREEN: same file — after `Burn` succeeds and `!alreadyRead`, `httpapi.WriteJSON(w, 200, ...)` → `http.NewResponseController(w).Flush()` → `notifier.NotifySecretRead(context.WithoutCancel(ctx), creatorUserID, secretID)` (unexported `secretReadNotifier` port, matching the `invitationNotifier` shape).
 
 ## Phase 3: Rate Limiting Middleware
 
 - [ ] 3.1 RED: `backend/internal/httpapi/ratelimit_test.go` — 30 requests/minute from one IP allowed, 31st denied (429) with a fake clock; independent buckets per IP; a request over the limit does not touch secret state (asserted at the middleware layer via a spy handler).
 - [ ] 3.2 RED: same file — `ClientIP(r)` returns the first `X-Forwarded-For` entry when present, else `SplitHostPort(r.RemoteAddr)`.
-- [ ] 3.3 GREEN: `backend/internal/httpapi/ratelimit.go` — `IPRateLimiter{buckets map[string]*bucket, mu sync.Mutex}`, `bucket{tokens float64, lastRefill time.Time}`, capacity 30, refill 0.5 tok/s, lazy per-request refill, opportunistic eviction of entries idle > 2 minutes; `ClientIP(r *http.Request) string` helper; wrap `GET /secrets/{token}` and `POST /secrets/{token}/burn` in this middleware in `secrets.RegisterRoutes` (2.4).
+- [ ] 3.3 GREEN: `backend/internal/httpapi/ratelimit.go` — `IPRateLimiter{buckets map[string]*bucket, mu sync.Mutex}`, `bucket{tokens float64, lastRefill time.Time}`, capacity 30, refill 0.5 tok/s, lazy per-request refill, opportunistic eviction of entries idle > 2 minutes; `ClientIP(r *http.Request) string` helper; wrap `GET /secrets/{token}` and `POST /secrets/{token}/burn` in this middleware in `onetimesecrets.RegisterRoutes` (2.4).
 
 ## Phase 4: WebSocket Hub — Per-User Index and PublishToUser
 
@@ -78,12 +78,12 @@ Each unit is developed, tested, and merged into `develop` before the next unit's
 - [ ] 4.2 RED: same file — `PublishToUser` delivers to all of a user's open sockets across workspaces; is a no-op (no error, no delivery attempt) when the user has no open subscription; does not deliver to another user's sockets.
 - [ ] 4.3 GREEN: `backend/internal/websocket/hub.go` — add `byUser` index; add `Notifications chan any` field on `Subscription` (new channel, `Messages`/`byWorkspace`/`Publish` untouched); `Subscribe(workspaceID, userID, clientID string) *Subscription` signature change; `PublishToUser(ctx context.Context, userID string, message any) error`.
 - [ ] 4.4 GREEN: `backend/internal/websocket/handler.go` — pass `principal.UserID` into `Subscribe`; add a `case msg := <-subscription.Notifications: connection.WriteJSON(msg)` branch to the read loop (raw frame, no `{"type":"event",...}` wrapper).
-- [ ] 4.5 RED: `backend/internal/secrets/handler_integration_test.go` (new, extends the package's integration harness) — full create→reveal→burn flow asserts `Hub.Notifications` receives a `{"type":"secret_read","secretId":...,"readAt":...}` frame for the creator and `hub_test.go`'s existing `Messages`/`byWorkspace` behavior is untouched.
+- [ ] 4.5 RED: `backend/internal/onetimesecrets/handler_integration_test.go` (new, extends the package's integration harness) — full create→reveal→burn flow asserts `Hub.Notifications` receives a `{"type":"secret_read","secretId":...,"readAt":...}` frame for the creator and `hub_test.go`'s existing `Messages`/`byWorkspace` behavior is untouched.
 - [ ] 4.6 GREEN: satisfy 4.5 by wiring `*websocket.Hub` as the `secretReadNotifier` implementation (`NotifySecretRead` → `PublishToUser`) and confirming the assertions pass.
 
 ## Phase 5: Backend Composition Wiring
 
-- [ ] 5.1 `backend/cmd/api/main.go` — construct `secrets.NewService(pool)`, `httpapi.NewIPRateLimiter(30, 0.5)`, and call `secrets.RegisterRoutes(mux, authMiddleware, secretsService, hub)` after `websocketHub` is constructed (real notifier, not a stub).
+- [ ] 5.1 `backend/cmd/api/main.go` — construct `onetimesecrets.NewService(pool)`, `httpapi.NewIPRateLimiter(30, 0.5)`, and call `onetimesecrets.RegisterRoutes(mux, authMiddleware, secretsService, hub)` after `websocketHub` is constructed (real notifier, not a stub).
 
 ## Phase 6: Admin-web — Crypto Helper and Reveal Page
 
@@ -108,7 +108,7 @@ Each unit is developed, tested, and merged into `develop` before the next unit's
 
 ## Phase 8: Verification
 
-- [ ] 8.1 `cd backend && go test ./internal/secrets ./internal/httpapi ./internal/websocket ./...` — full backend suite green.
+- [ ] 8.1 `cd backend && go test ./internal/onetimesecrets ./internal/httpapi ./internal/websocket ./...` — full backend suite green.
 - [ ] 8.2 `cd admin-web && npm test` — full suite green, including `SecretRevealPage.test.tsx` and `crypto.test.ts`.
 - [ ] 8.3 `cd extension && npm test` — full suite green, including crypto round-trip and `secret_read` dispatch tests.
 - [ ] 8.4 Manual: `docker compose up`, create a secret in the extension (with and without passphrase), open `/s/{token}` in another browser profile, confirm reveal-then-burn and the creator's read-confirmation (live socket and, separately, next-popup-open fallback with the socket closed).
@@ -116,4 +116,4 @@ Each unit is developed, tested, and merged into `develop` before the next unit's
 ## Phase 9: Review and Rollback
 
 - [ ] 9.1 Chain strategy resolved: `feature-branch-chain`, 5 sequential branches (1a → 1b → 2 → 3 → 4) off `develop`, each unit merged before the next starts.
-- [ ] 9.2 Confirm rollback: dropping `000010_secrets.sql`, removing `secrets.RegisterRoutes`/router entries in `main.go`/`router.tsx`, and reverting `Hub`'s additive `byUser`/`Notifications`/`PublishToUser` fields leaves `hub_test.go` and all existing workspace-sync behavior unaffected (no existing data model touched).
+- [ ] 9.2 Confirm rollback: dropping `000010_secrets.sql`, removing `onetimesecrets.RegisterRoutes`/router entries in `main.go`/`router.tsx`, and reverting `Hub`'s additive `byUser`/`Notifications`/`PublishToUser` fields leaves `hub_test.go` and all existing workspace-sync behavior unaffected (no existing data model touched).
