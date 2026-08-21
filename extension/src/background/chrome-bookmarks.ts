@@ -127,10 +127,13 @@ export async function ensureManagedPath(organizationName: string, workspaceName:
   return { rootId: root.id, organizationId: organization.id, workspaceId: workspace.id };
 }
 
-export async function clearChildren(folderId: string): Promise<string[]> {
+export async function clearChildren(folderId: string, excludeIds: string[] = []): Promise<string[]> {
   const children = await getChildren(folderId);
   const removedIds: string[] = [];
   for (const child of children) {
+    if (excludeIds.includes(child.id)) {
+      continue;
+    }
     const subtree = await getSubTree(child.id);
     if (subtree) {
       removedIds.push(...collectChromeIds(subtree));

@@ -182,6 +182,7 @@ export interface ProjectionState {
   rootChromeId?: string;
   organizationChromeId?: string;
   workspaceChromeId?: string;
+  localOnlyChromeId?: string;
   chromeIdByBackendId: Record<string, string>;
   backendIdByChromeId: Record<string, string>;
   entityTypeByBackendId: Record<string, "folder" | "bookmark">;

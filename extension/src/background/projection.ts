@@ -25,6 +25,7 @@ import {
   findReusableBookmarkNode,
   findReusableFolderNode,
 } from "../shared/projection-helpers.js";
+import { LOCAL_ONLY_FOLDER_TITLE } from "../shared/runtime.js";
 import { setBackendUrl, saveSession, clearSession, ensureClientId, restoreSession, setSessionPauseHandler, bestEffortLogout } from "../shared/session.js";
 import { createProjectionState, getState, resetStatePreservingSettings, setState, updateState } from "../shared/storage.js";
 import type {
@@ -400,6 +401,10 @@ export async function handleBookmarkCreated(id: string, node: chrome.bookmarks.B
   if (node.url) {
     const parentBackendId = projection.backendIdByChromeId[node.parentId ?? ""];
     if (!parentBackendId) {
+      if (projection.workspaceChromeId && node.parentId === projection.workspaceChromeId) {
+        await relocateToLocalOnly(context.workspaceId, projection, id, "created-outside-canonical-folder");
+        return;
+      }
       await resyncWorkspace(context.workspaceId, "bookmark create outside canonical folder boundary");
       return;
     }
@@ -849,7 +854,8 @@ async function doResyncWorkspace(workspaceId: string, reason: string, targetHeal
     }
 
     const workspaceChromeId = projection.workspaceChromeId;
-    const removedIds = await clearManagedChildrenWithSuppression(workspaceChromeId);
+    const localOnlyChromeId = await ensureLocalOnlyFolder(workspaceId, workspaceChromeId);
+    const removedIds = await clearManagedChildrenWithSuppression(workspaceChromeId, [localOnlyChromeId]);
     await updateProjectionState(workspaceId, (current) => {
       removeMappingsByChromeIds(current, removedIds);
     });
@@ -898,6 +904,46 @@ async function doResyncWorkspace(workspaceId: string, reason: string, targetHeal
     }
     return false;
   }
+}
+
+async function ensureLocalOnlyFolder(workspaceId: string, workspaceChromeId: string): Promise<string> {
+  const projection = (await getState()).projectionsByWorkspaceId[workspaceId];
+  const existingId = projection?.localOnlyChromeId;
+  if (existingId) {
+    const existingNode = await getNode(existingId);
+    if (existingNode && existingNode.parentId === workspaceChromeId) {
+      return existingId;
+    }
+  }
+
+  const children = await getChildren(workspaceChromeId);
+  const reused = children.find((child) => !child.url && child.title === LOCAL_ONLY_FOLDER_TITLE);
+  const folderNode = reused ?? await withSuppression(
+    async () => createFolder(workspaceChromeId, LOCAL_ONLY_FOLDER_TITLE),
+    [workspaceChromeId],
+  );
+
+  await updateProjectionState(workspaceId, (current) => {
+    current.localOnlyChromeId = folderNode.id;
+  });
+  return folderNode.id;
+}
+
+async function relocateToLocalOnly(workspaceId: string, projection: ProjectionState, chromeId: string, reason: string): Promise<void> {
+  if (!projection.workspaceChromeId) {
+    return;
+  }
+  const localOnlyChromeId = await ensureLocalOnlyFolder(workspaceId, projection.workspaceChromeId);
+  if (chromeId === localOnlyChromeId) {
+    return;
+  }
+  try {
+    await moveNode(chromeId, { parentId: localOnlyChromeId });
+  } catch (error) {
+    await log(`sync:${workspaceId}`, `local-only relocation failed: ${describeError(error)}`, "warn");
+    return;
+  }
+  await log(`sync:${workspaceId}`, `event=local_only_relocated workspaceId=${workspaceId} chromeId=${chromeId} reason=${reason}`, "info");
 }
 
 async function materializeFolder(workspaceId: string, parentChromeId: string, folder: FolderNode): Promise<void> {
@@ -1478,10 +1524,12 @@ async function removeWorkspaceProjection(projection: ProjectionState): Promise<v
   }
 }
 
-async function clearManagedChildrenWithSuppression(workspaceChromeId: string): Promise<string[]> {
+async function clearManagedChildrenWithSuppression(workspaceChromeId: string, excludeIds: string[] = []): Promise<string[]> {
   const subtree = await getSubTree(workspaceChromeId);
-  const managedChildIds = (subtree?.children ?? []).flatMap((child) => collectChromeIds(child));
-  return withSuppression(() => clearChildren(workspaceChromeId), managedChildIds);
+  const managedChildIds = (subtree?.children ?? [])
+    .filter((child) => !excludeIds.includes(child.id))
+    .flatMap((child) => collectChromeIds(child));
+  return withSuppression(() => clearChildren(workspaceChromeId, excludeIds), managedChildIds);
 }
 
 async function updateProjectionState(
@@ -1951,7 +1999,7 @@ async function attemptSubtreeRecovery(
     return false;
   }
 
-  const removedIds = await clearManagedChildrenWithSuppression(anchor.parentChromeId);
+  const removedIds = await clearManagedChildrenWithSuppression(anchor.parentChromeId, latest.localOnlyChromeId ? [latest.localOnlyChromeId] : []);
   await updateProjectionState(scope.workspaceId, (current) => {
     const removedBackendIds = collectBackendIdsByChromeIds(current, removedIds);
     removeMappingsByChromeIds(current, removedIds);

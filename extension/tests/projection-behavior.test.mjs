@@ -237,6 +237,7 @@ import {
 } from "../dist/shared/projection-helpers.js";
 import {
   handleBookmarkChanged,
+  handleBookmarkCreated,
   handleBookmarkMoved,
   handleBookmarkRemoved,
   logout,
@@ -250,6 +251,7 @@ import {
 import { createRemoteReceipt } from "../dist/background/convergence.js";
 import { getState, setState } from "../dist/shared/storage.js";
 import { connectWorkspaceSocket } from "../dist/shared/websocket.js";
+import { LOCAL_ONLY_FOLDER_TITLE } from "../dist/shared/runtime.js";
 
 const fetchLog = [];
 let fetchHandlers = [];
@@ -955,6 +957,142 @@ test("Retry keeps an unproven receipt paused and Rebuild is the only destructive
   assert.equal(fetchLog.filter((url) => url.endsWith("/tree")).length, 1);
   assert.equal(projection.convergenceJournal?.localIntents.length, 1);
   assert.equal(projection.convergenceJournal?.phase, "live");
+});
+
+test("rebuildWorkspace creates the local-only folder and does not duplicate it on repeated rebuilds", async () => {
+  const workspace = { workspaceId: "workspace-1", workspaceName: "Workspace", workspaceType: "shared", organizationId: "org-1", organizationName: "Org", role: "editor" };
+  fetchHandlers = [
+    { match: (url) => url.endsWith("/workspaces/workspace-1/tree"), respond: () => jsonResponse({ workspace, folders: [] }) },
+    { match: (url) => url.includes("afterCursor=0"), respond: () => jsonResponse({ currentCursor: 0, events: [] }) },
+  ];
+  await setState({ ...createRuntimeState(), projectionsByWorkspaceId: { "workspace-1": createEditorProjection() } });
+
+  await rebuildWorkspace("workspace-1");
+  let projection = (await getState()).projectionsByWorkspaceId["workspace-1"];
+  const workspaceChromeId = projection.workspaceChromeId;
+  let localOnlyChildren = (bookmarkNodes.get(workspaceChromeId)?.children ?? []).filter((node) => node.title === LOCAL_ONLY_FOLDER_TITLE);
+  assert.equal(localOnlyChildren.length, 1, "RED: workspace bootstrap must create exactly one local-only folder");
+  assert.equal(projection.localOnlyChromeId, localOnlyChildren[0].id);
+
+  fetchHandlers = [
+    { match: (url) => url.endsWith("/workspaces/workspace-1/tree"), respond: () => jsonResponse({ workspace, folders: [] }) },
+    { match: (url) => url.includes("afterCursor=0"), respond: () => jsonResponse({ currentCursor: 0, events: [] }) },
+  ];
+  await rebuildWorkspace("workspace-1");
+  projection = (await getState()).projectionsByWorkspaceId["workspace-1"];
+  localOnlyChildren = (bookmarkNodes.get(workspaceChromeId)?.children ?? []).filter((node) => node.title === LOCAL_ONLY_FOLDER_TITLE);
+  assert.equal(localOnlyChildren.length, 1, "a repeated rebuild must not duplicate the local-only folder");
+  assert.equal(projection.localOnlyChromeId, localOnlyChildren[0].id);
+});
+
+test("creating a bookmark directly at the workspace root relocates it into the local-only folder instead of syncing or resyncing", async () => {
+  bookmarkNodes.set("workspace-node", createBookmarkNode({ id: "workspace-node", parentId: "1", title: "Workspace", index: 0 }));
+  bookmarkNodes.set("local-only-node", createBookmarkNode({ id: "local-only-node", parentId: "workspace-node", title: LOCAL_ONLY_FOLDER_TITLE, index: 0 }));
+  rebuildBookmarkChildren();
+
+  await setState({
+    ...createRuntimeState(),
+    projectionsByWorkspaceId: {
+      "workspace-1": createEditorProjection({ workspaceChromeId: "workspace-node", localOnlyChromeId: "local-only-node" }),
+    },
+  });
+
+  const created = await new Promise((resolve) => chrome.bookmarks.create({ parentId: "workspace-node", title: "Root Bookmark", url: "https://example.com/root", index: 0 }, resolve));
+  await handleBookmarkCreated(created.id, created);
+
+  const state = await getState();
+  const projection = state.projectionsByWorkspaceId["workspace-1"];
+  const localOnlyChildren = bookmarkNodes.get("local-only-node")?.children ?? [];
+  const workspaceRootChildren = bookmarkNodes.get("workspace-node")?.children ?? [];
+
+  assert.equal(localOnlyChildren.some((node) => node.id === created.id), true, "RED: the orphaned bookmark must land inside the local-only folder");
+  assert.equal(workspaceRootChildren.some((node) => node.id === created.id), false, "the bookmark must no longer sit directly at the workspace root");
+  assert.equal(fetchLog.some((url) => url.includes("/bookmarks")), false, "must never send a backend mutation for root-level content");
+  assert.equal(projection.convergenceJournal?.pauseReason, undefined, "must not pause the workspace as a boundary violation");
+  assert.equal(state.diagnostics.some((entry) => entry.level === "warn"), false, "must not log a boundary-violation warning");
+  assert.equal(state.diagnostics.some((entry) => entry.message.includes("local_only_relocated")), true, "must log an informational relocation event");
+});
+
+test("creating a bookmark or folder inside the local-only folder is a pure no-op for the sync engine", async () => {
+  bookmarkNodes.set("workspace-node", createBookmarkNode({ id: "workspace-node", parentId: "1", title: "Workspace", index: 0 }));
+  bookmarkNodes.set("local-only-node", createBookmarkNode({ id: "local-only-node", parentId: "workspace-node", title: LOCAL_ONLY_FOLDER_TITLE, index: 0 }));
+  rebuildBookmarkChildren();
+
+  await setState({
+    ...createRuntimeState(),
+    projectionsByWorkspaceId: {
+      "workspace-1": createEditorProjection({ workspaceChromeId: "workspace-node", localOnlyChromeId: "local-only-node" }),
+    },
+  });
+
+  const beforeProjection = (await getState()).projectionsByWorkspaceId["workspace-1"];
+
+  const bookmarkNode = await new Promise((resolve) => chrome.bookmarks.create({ parentId: "local-only-node", title: "Note", url: "https://example.com/note", index: 0 }, resolve));
+  await handleBookmarkCreated(bookmarkNode.id, bookmarkNode);
+  const folderNode = await new Promise((resolve) => chrome.bookmarks.create({ parentId: "local-only-node", title: "Subfolder", index: 1 }, resolve));
+  await handleBookmarkCreated(folderNode.id, folderNode);
+
+  const afterProjection = (await getState()).projectionsByWorkspaceId["workspace-1"];
+  assert.deepEqual(afterProjection, beforeProjection, "RED: content created inside the local-only folder must never mutate projection state");
+  assert.equal(fetchLog.length, 0, "RED: content created inside the local-only folder must never call the backend");
+});
+
+test("rebuilding a workspace preserves existing content inside the local-only folder and keeps the folder itself", async () => {
+  bookmarkNodes.set("root-node", createBookmarkNode({ id: "root-node", parentId: "1", title: "URLises", index: 0 }));
+  bookmarkNodes.set("org-node", createBookmarkNode({ id: "org-node", parentId: "root-node", title: "Org", index: 0 }));
+  bookmarkNodes.set("workspace-node", createBookmarkNode({ id: "workspace-node", parentId: "org-node", title: "Workspace", index: 0 }));
+  bookmarkNodes.set("local-only-node", createBookmarkNode({ id: "local-only-node", parentId: "workspace-node", title: LOCAL_ONLY_FOLDER_TITLE, index: 0 }));
+  bookmarkNodes.set("local-only-bookmark", createBookmarkNode({ id: "local-only-bookmark", parentId: "local-only-node", title: "My note", url: "https://example.com/note", index: 0 }));
+  bookmarkNodes.set("stale-folder", createBookmarkNode({ id: "stale-folder", parentId: "workspace-node", title: "Stale", index: 1 }));
+  rebuildBookmarkChildren();
+
+  await setState({
+    ...createRuntimeState({ lastCursor: 7 }),
+    projectionsByWorkspaceId: {
+      "workspace-1": createEditorProjection({
+        workspaceChromeId: "workspace-node",
+        localOnlyChromeId: "local-only-node",
+        chromeIdByBackendId: { "folder-stale": "stale-folder" },
+        backendIdByChromeId: { "stale-folder": "folder-stale" },
+        entityTypeByBackendId: { "folder-stale": "folder" },
+        lastCursor: 7,
+      }),
+    },
+  });
+
+  const workspace = { workspaceId: "workspace-1", workspaceName: "Workspace", workspaceType: "shared", organizationId: "org-1", organizationName: "Org", role: "editor" };
+  fetchHandlers = [
+    { match: (url) => url.endsWith("/workspaces/workspace-1/tree"), respond: () => jsonResponse({ workspace, folders: [] }) },
+    { match: (url) => url.includes("afterCursor=0"), respond: () => jsonResponse({ currentCursor: 0, events: [] }) },
+  ];
+
+  await rebuildWorkspace("workspace-1");
+
+  assert.equal(bookmarkNodes.has("local-only-node"), true, "RED: rebuild must never delete the local-only folder");
+  assert.equal(bookmarkNodes.has("local-only-bookmark"), true, "RED: rebuild must never delete content inside the local-only folder");
+  assert.equal(bookmarkNodes.has("stale-folder"), false, "rebuild must still clear unmanaged synced content outside the local-only folder");
+  const projection = (await getState()).projectionsByWorkspaceId["workspace-1"];
+  assert.equal(projection.localOnlyChromeId, "local-only-node");
+});
+
+test("editing, moving within, or removing a bookmark inside the local-only folder never calls the backend", async () => {
+  bookmarkNodes.set("workspace-node", createBookmarkNode({ id: "workspace-node", parentId: "1", title: "Workspace", index: 0 }));
+  bookmarkNodes.set("local-only-node", createBookmarkNode({ id: "local-only-node", parentId: "workspace-node", title: LOCAL_ONLY_FOLDER_TITLE, index: 0 }));
+  bookmarkNodes.set("local-only-bookmark", createBookmarkNode({ id: "local-only-bookmark", parentId: "local-only-node", title: "My note", url: "https://example.com/note", index: 0 }));
+  rebuildBookmarkChildren();
+
+  await setState({
+    ...createRuntimeState(),
+    projectionsByWorkspaceId: {
+      "workspace-1": createEditorProjection({ workspaceChromeId: "workspace-node", localOnlyChromeId: "local-only-node" }),
+    },
+  });
+
+  await handleBookmarkChanged("local-only-bookmark", { title: "Renamed note" });
+  await handleBookmarkMoved("local-only-bookmark", { parentId: "local-only-node", oldParentId: "local-only-node", index: 0, oldIndex: 0 });
+  await handleBookmarkRemoved("local-only-bookmark", { parentId: "local-only-node", index: 0 });
+
+  assert.equal(fetchLog.length, 0, "RED: no backend call must ever happen for content inside the local-only folder");
 });
 
 test("remote receipt capacity prunes consumed receipts or pauses before the Chrome effect", async () => {
