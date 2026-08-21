@@ -87,13 +87,13 @@ Each unit is developed, tested, and merged into `develop` before the next unit's
 
 ## Phase 6: Admin-web — Crypto Helper and Reveal Page
 
-- [ ] 6.1 RED: `admin-web/src/lib/crypto.test.ts` — AES-256-GCM `encrypt`/`decrypt` round-trip; `deriveWrappingKey` PBKDF2-SHA256 with >= 210,000 iterations and per-call salt; wrong passphrase produces a decrypt failure (GCM auth-tag mismatch), not silent garbage.
-- [ ] 6.2 GREEN: `admin-web/src/lib/crypto.ts` — `generateContentKey`, `encrypt`, `decrypt`, `deriveWrappingKey`, `wrapKey`, `unwrapKey`, base64 helpers, matching the wire format `base64(iv(12B) || gcmCiphertext)` for `wrappedContentKey`.
-- [ ] 6.3 `admin-web/src/lib/api/secrets.ts` — `getSecret(token)`, `burnSecret(token)` via `apiRequest` calls with no `token`/session option (unauthenticated).
-- [ ] 6.4 RED: `admin-web/src/app/views/SecretRevealPage.test.tsx` — the fetch URL is always the literal `` `/secrets/${token}` `` string, never built from `window.location.href`; the fragment/hash is never passed to `fetch`, `console.*`, or any logger; a wrong passphrase leaves the page in `pending` state and never calls burn.
-- [ ] 6.5 RED: same file — successful local decrypt calls `burnSecret` exactly once; a second render/mount does not re-burn; 404/410 responses render distinct "not found"/"already read or expired" copy.
-- [ ] 6.6 GREEN: create `admin-web/src/app/views/SecretRevealPage.tsx` — no `useAuth()`; `useParams().token` for the fetch path; reads `window.location.hash` separately, only after decrypt setup; passphrase input when `wrappedContentKey` is present; calls `burnSecret` only after a successful local decrypt.
-- [ ] 6.7 `admin-web/src/app/router.tsx` — register `{ path: "/s/:token", element: <SecretRevealPage /> }` as a top-level route outside `RequireSession`, sibling of `/login`.
+- [x] 6.1 RED: `admin-web/src/lib/crypto.test.ts` — AES-256-GCM `encrypt`/`decrypt` round-trip; `deriveWrappingKey` PBKDF2-SHA256 with >= 210,000 iterations and per-call salt; wrong passphrase produces a decrypt failure (GCM auth-tag mismatch), not silent garbage.
+- [x] 6.2 GREEN: `admin-web/src/lib/crypto.ts` — `generateContentKey`, `encrypt`, `decrypt`, `deriveWrappingKey`, `wrapKey`, `unwrapKey`, base64 helpers, matching the wire format `base64(iv(12B) || gcmCiphertext)` for `wrappedContentKey`.
+- [x] 6.3 `admin-web/src/lib/api/secrets.ts` — `getSecret(token)`, `burnSecret(token)` via `apiRequest` calls with no `token`/session option (unauthenticated).
+- [x] 6.4 RED: `admin-web/src/app/views/SecretRevealPage.test.tsx` — the fetch URL is always the literal `` `/secrets/${token}` `` string, never built from `window.location.href`; the fragment/hash is never passed to `fetch`, `console.*`, or any logger; a wrong passphrase leaves the page in `pending` state and never calls burn.
+- [x] 6.5 RED: same file — successful local decrypt calls `burnSecret` exactly once; a second render/mount does not re-burn; 404/410 responses render distinct "not found"/"already read or expired" copy.
+- [x] 6.6 GREEN: create `admin-web/src/app/views/SecretRevealPage.tsx` — no `useAuth()`; `useParams().token` for the fetch path; reads `window.location.hash` separately, only after decrypt setup; passphrase input when `wrappedContentKey` is present; calls `burnSecret` only after a successful local decrypt.
+- [x] 6.7 `admin-web/src/app/router.tsx` — register `{ path: "/s/:token", element: <SecretRevealPage /> }` as a top-level route outside `RequireSession`, sibling of `/login`.
 
 ## Phase 7: Extension — Crypto Helper, Create UI, Read Confirmation
 

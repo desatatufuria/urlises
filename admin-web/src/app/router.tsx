@@ -13,6 +13,7 @@ import { OrganizationSetupPage } from "./views/OrganizationSetupPage";
 import { OrganizationCreatePage } from "./views/OrganizationCreatePage";
 import { RegisterPage } from "./views/RegisterPage";
 import { InvitationAcceptPage } from "./views/InvitationAcceptPage";
+import { SecretRevealPage } from "./views/SecretRevealPage";
 
 function LoadingScreen() {
   return <DataState tone="neutral" title="Restoring operator session" description="Checking your admin session and organization scope." />;
@@ -72,6 +73,14 @@ export const appRoutes: RouteObject[] = [
   {
     path: "/invitations/:token",
     element: <InvitationAcceptPage />,
+  },
+  {
+    // Fully anonymous, public route: no RequireSession, no session concept
+    // at all. SecretRevealPage must never call useAuth(), unlike
+    // InvitationAcceptPage which — although also a top-level sibling here —
+    // is internally auth-aware.
+    path: "/s/:token",
+    element: <SecretRevealPage />,
   },
   {
     path: "/",
