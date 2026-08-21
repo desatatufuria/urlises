@@ -676,6 +676,59 @@ func (s *Service) AcceptInvitation(ctx context.Context, userID, token string) (A
 	}, nil
 }
 
+// ValidatePendingInvitation is a read-only counterpart to AcceptInvitation
+// used to gate self-registration behind a real, pending, matching-email
+// invitation without mutating any state. It intentionally does not lock the
+// row (no FOR UPDATE) and does not require a transaction — callers must not
+// use it to decide whether to mutate the invitation; only AcceptInvitation
+// may transition an invitation to accepted.
+func (s *Service) ValidatePendingInvitation(ctx context.Context, token, email string) error {
+	token = strings.TrimSpace(token)
+	if token == "" {
+		return ErrNotFound
+	}
+	normalizedEmail := strings.TrimSpace(strings.ToLower(email))
+
+	var record invitationRecord
+	err := s.pool.QueryRow(ctx, `
+		SELECT i.id, i.organization_id, o.name, i.email, i.role, i.status,
+			i.expires_at, i.accepted_by_user_id, i.accepted_at::text, i.created_at::text, i.updated_at::text
+		FROM invitations i
+		JOIN organizations o ON o.id = i.organization_id
+		WHERE i.token = $1
+	`, token).Scan(
+		&record.ID,
+		&record.OrganizationID,
+		&record.OrganizationName,
+		&record.Email,
+		&record.Role,
+		&record.Status,
+		&record.ExpiresAt,
+		&record.AcceptedByUserID,
+		&record.AcceptedAt,
+		&record.CreatedAt,
+		&record.UpdatedAt,
+	)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrNotFound
+		}
+		return fmt.Errorf("query invitation: %w", err)
+	}
+
+	if record.Status != "pending" {
+		return ErrInvitationNotPending
+	}
+	if record.ExpiresAt != nil && !record.ExpiresAt.After(time.Now().UTC()) {
+		return ErrInvitationNotPending
+	}
+	if strings.TrimSpace(strings.ToLower(record.Email)) != normalizedEmail {
+		return ErrInvitationEmailMismatch
+	}
+
+	return nil
+}
+
 func requireOrganizationAdmin(ctx context.Context, querier dbQuerier, userID, organizationID string) error {
 	role, err := loadOrganizationRole(ctx, querier, organizationID, userID)
 	if err != nil {

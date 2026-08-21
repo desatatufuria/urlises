@@ -67,6 +67,33 @@ func TestLoadMailConfigDoesNotDial(t *testing.T) {
 	}
 }
 
+func TestLoadOpenRegistrationEnabled(t *testing.T) {
+	tests := []struct {
+		name  string
+		value string
+		want  bool
+	}{
+		{"default when unset", "", true},
+		{"explicit true", "true", true},
+		{"explicit false locks registration", "false", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("DATABASE_URL", "postgres://example")
+			t.Setenv("AUTH_JWT_SECRET", "test-secret")
+			t.Setenv("OPEN_REGISTRATION_ENABLED", tt.value)
+
+			cfg, err := Load()
+			if err != nil {
+				t.Fatalf("Load() error = %v", err)
+			}
+			if cfg.App.OpenRegistrationEnabled != tt.want {
+				t.Fatalf("OpenRegistrationEnabled = %v, want %v", cfg.App.OpenRegistrationEnabled, tt.want)
+			}
+		})
+	}
+}
+
 func TestLoadPublicBaseURL(t *testing.T) {
 	validMailEnv := map[string]string{
 		"MAIL_ENABLED":           "true",

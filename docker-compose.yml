@@ -39,6 +39,11 @@ services:
       DATABASE_MAX_CONNS: "10"
       DATABASE_MIN_CONNS: "1"
       PUBLIC_BASE_URL: http://localhost:5173
+      # Instance-wide self-registration lock. Default true preserves today's
+      # open POST /auth/register dev workflow. Set to "false" to require a
+      # valid, pending invitation token (or first-owner bootstrap) to
+      # register.
+      OPEN_REGISTRATION_ENABLED: "true"
       MAIL_ENABLED: "true"
       MAIL_SMTP_HOST: mailpit
       MAIL_SMTP_PORT: "1025"

@@ -1,6 +1,7 @@
 package organizations
 
 import (
+	"context"
 	"testing"
 	"time"
 )
@@ -294,5 +295,111 @@ func TestResendInvitationNotFoundForWrongOrganization(t *testing.T) {
 
 	if _, err := service.ResendInvitation(ctx, inviterID, otherOrganizationID, created.Invitation.ID); err != ErrNotFound {
 		t.Fatalf("err = %v, want %v", err, ErrNotFound)
+	}
+}
+
+// Registration Lock — RED: ValidatePendingInvitation is a read-only check
+// used by open-registration gating. It must mirror AcceptInvitation's
+// validation rules without mutating the invitation or requiring an
+// authenticated caller.
+func TestValidatePendingInvitationAcceptsMatchingPendingToken(t *testing.T) {
+	t.Parallel()
+
+	ctx, pool := openOrganizationsTestPool(t, "organizations_validate_invite_test")
+	service := NewService(pool)
+	inviterID := insertOrganizationsTestUser(t, ctx, pool, "admin@example.com")
+	organizationID := insertOrganizationsTestOrganization(t, ctx, pool, "Validate Invite Org")
+	insertOrganizationsTestMember(t, ctx, pool, organizationID, inviterID, "admin")
+
+	invitation, err := service.CreateInvitation(ctx, inviterID, organizationID, CreateInvitationInput{
+		Email: "invitee@example.com",
+		Role:  "member",
+	})
+	if err != nil {
+		t.Fatalf("create invitation: %v", err)
+	}
+
+	if err := service.ValidatePendingInvitation(ctx, invitation.Invitation.Token, "Invitee@Example.com"); err != nil {
+		t.Fatalf("validate pending invitation: %v", err)
+	}
+
+	var status string
+	if err := pool.QueryRow(ctx, `SELECT status FROM invitations WHERE id = $1`, invitation.Invitation.ID).Scan(&status); err != nil {
+		t.Fatalf("query invitation status: %v", err)
+	}
+	if status != "pending" {
+		t.Fatalf("status = %q, want pending (validation must not mutate)", status)
+	}
+}
+
+func TestValidatePendingInvitationRejectsUnknownToken(t *testing.T) {
+	t.Parallel()
+
+	_, pool := openOrganizationsTestPool(t, "organizations_validate_invite_test")
+	service := NewService(pool)
+
+	if err := service.ValidatePendingInvitation(context.Background(), "not-a-real-token", "someone@example.com"); err != ErrNotFound {
+		t.Fatalf("err = %v, want %v", err, ErrNotFound)
+	}
+}
+
+func TestValidatePendingInvitationRejectsEmailMismatch(t *testing.T) {
+	t.Parallel()
+
+	ctx, pool := openOrganizationsTestPool(t, "organizations_validate_invite_test")
+	service := NewService(pool)
+	inviterID := insertOrganizationsTestUser(t, ctx, pool, "admin2@example.com")
+	organizationID := insertOrganizationsTestOrganization(t, ctx, pool, "Validate Invite Org Mismatch")
+	insertOrganizationsTestMember(t, ctx, pool, organizationID, inviterID, "admin")
+
+	invitation, err := service.CreateInvitation(ctx, inviterID, organizationID, CreateInvitationInput{
+		Email: "invitee2@example.com",
+		Role:  "member",
+	})
+	if err != nil {
+		t.Fatalf("create invitation: %v", err)
+	}
+
+	if err := service.ValidatePendingInvitation(ctx, invitation.Invitation.Token, "someone-else@example.com"); err != ErrInvitationEmailMismatch {
+		t.Fatalf("err = %v, want %v", err, ErrInvitationEmailMismatch)
+	}
+}
+
+func TestValidatePendingInvitationRejectsExpiredOrAlreadyAccepted(t *testing.T) {
+	t.Parallel()
+
+	ctx, pool := openOrganizationsTestPool(t, "organizations_validate_invite_test")
+	service := NewService(pool)
+	inviterID := insertOrganizationsTestUser(t, ctx, pool, "admin3@example.com")
+	inviteeID := insertOrganizationsTestUser(t, ctx, pool, "invitee3b@example.com")
+	organizationID := insertOrganizationsTestOrganization(t, ctx, pool, "Validate Invite Org Expired")
+	insertOrganizationsTestMember(t, ctx, pool, organizationID, inviterID, "admin")
+
+	expired, err := service.CreateInvitation(ctx, inviterID, organizationID, CreateInvitationInput{
+		Email: "invitee3@example.com",
+		Role:  "member",
+	})
+	if err != nil {
+		t.Fatalf("create invitation: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE invitations SET expires_at = $2 WHERE id = $1`, expired.Invitation.ID, time.Now().UTC().Add(-time.Minute)); err != nil {
+		t.Fatalf("expire invitation: %v", err)
+	}
+	if err := service.ValidatePendingInvitation(ctx, expired.Invitation.Token, "invitee3@example.com"); err != ErrInvitationNotPending {
+		t.Fatalf("err = %v, want %v", err, ErrInvitationNotPending)
+	}
+
+	accepted, err := service.CreateInvitation(ctx, inviterID, organizationID, CreateInvitationInput{
+		Email: "invitee3b@example.com",
+		Role:  "member",
+	})
+	if err != nil {
+		t.Fatalf("create second invitation: %v", err)
+	}
+	if _, err := service.AcceptInvitation(ctx, inviteeID, accepted.Invitation.Token); err != nil {
+		t.Fatalf("accept invitation: %v", err)
+	}
+	if err := service.ValidatePendingInvitation(ctx, accepted.Invitation.Token, "invitee3b@example.com"); err != ErrInvitationNotPending {
+		t.Fatalf("err = %v, want %v", err, ErrInvitationNotPending)
 	}
 }

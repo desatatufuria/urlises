@@ -168,6 +168,8 @@ func writeAuthError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, ErrInvalidCredentials), errors.Is(err, ErrUnauthorized):
 		httpapi.WriteError(w, http.StatusUnauthorized, err.Error())
+	case errors.Is(err, ErrRegistrationLocked):
+		httpapi.WriteError(w, http.StatusForbidden, err.Error())
 	case errors.Is(err, ErrClientBinding):
 		httpapi.WriteError(w, http.StatusConflict, err.Error())
 	case errors.Is(err, ErrRefreshUnavailable):

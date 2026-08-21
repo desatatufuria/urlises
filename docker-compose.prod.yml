@@ -32,6 +32,11 @@ services:
     environment:
       CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-https://admin.urlises.lab.dtfuria.xyz}
       PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-https://admin.urlises.lab.dtfuria.xyz}
+      # Instance-wide self-registration lock (env-var only, defaults to
+      # open). Set OPEN_REGISTRATION_ENABLED=false in .env to require a
+      # valid, pending invitation token (or first-owner bootstrap) to
+      # register via POST /auth/register.
+      OPEN_REGISTRATION_ENABLED: ${OPEN_REGISTRATION_ENABLED:-true}
     ports:
       - "${BIND_ADDR:-10.77.0.2}:${API_PORT:-8080}:8080"
     depends_on:

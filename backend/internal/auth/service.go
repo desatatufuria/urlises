@@ -19,15 +19,42 @@ var (
 	ErrInvalidCredentials = errors.New("invalid credentials")
 	ErrClientBinding      = errors.New("client ID is already bound to another user")
 	ErrRefreshUnavailable = errors.New("refresh operation unavailable")
+	ErrRegistrationLocked = errors.New("registration is locked; a valid invitation is required")
 )
 
+// InvitationValidator is the narrow, read-only contract auth depends on to
+// gate locked self-registration behind a real pending invitation. It is
+// satisfied by an adapter around organizations.Service.ValidatePendingInvitation
+// so this package never imports organizations directly.
+type InvitationValidator interface {
+	ValidatePendingInvitation(ctx context.Context, token, email string) error
+}
+
 type Service struct {
-	pool           *pgxpool.Pool
-	refresh        refreshStore
-	tickets        *ticketRepository
-	jwtSecret      []byte
-	tokenTTL       time.Duration
-	clientIDHeader string
+	pool                    *pgxpool.Pool
+	refresh                 refreshStore
+	tickets                 *ticketRepository
+	jwtSecret               []byte
+	tokenTTL                time.Duration
+	clientIDHeader          string
+	openRegistrationEnabled bool
+	invitations             InvitationValidator
+}
+
+// ServiceOption configures optional Service behavior at construction time.
+type ServiceOption func(*Service)
+
+// WithRegistrationLock configures whether self-registration is open
+// (openRegistrationEnabled=true, the default) or locked behind a validated,
+// pending invitation (openRegistrationEnabled=false). The bootstrap path
+// (no organizations exist yet) always bypasses this lock regardless of the
+// configured value. invitations may be nil only when openRegistrationEnabled
+// is true.
+func WithRegistrationLock(openRegistrationEnabled bool, invitations InvitationValidator) ServiceOption {
+	return func(s *Service) {
+		s.openRegistrationEnabled = openRegistrationEnabled
+		s.invitations = invitations
+	}
 }
 
 func (s *Service) CreateWSTicket(ctx context.Context, p Principal) (WSTicket, error) {
@@ -70,10 +97,11 @@ type RenewableSession struct {
 }
 
 type RegisterInput struct {
-	Email      string `json:"email"`
-	Name       string `json:"name"`
-	Password   string `json:"password"`
-	DeviceName string `json:"deviceName"`
+	Email           string `json:"email"`
+	Name            string `json:"name"`
+	Password        string `json:"password"`
+	DeviceName      string `json:"deviceName"`
+	InvitationToken string `json:"invitationToken,omitempty"`
 }
 
 type LoginInput struct {
@@ -87,15 +115,22 @@ type tokenClaims struct {
 	jwt.RegisteredClaims
 }
 
-func NewService(pool *pgxpool.Pool, cfg config.AuthConfig) *Service {
-	return &Service{
+func NewService(pool *pgxpool.Pool, cfg config.AuthConfig, opts ...ServiceOption) *Service {
+	s := &Service{
 		pool:           pool,
 		refresh:        newRefreshRepository(pool, cfg.JWTSecret),
 		tickets:        &ticketRepository{pool: pool},
 		jwtSecret:      cfg.JWTSecret,
 		tokenTTL:       cfg.TokenTTL,
 		clientIDHeader: cfg.ClientIDHeader,
+		// Registration stays open by default so callers that don't opt into
+		// WithRegistrationLock keep today's behavior unchanged.
+		openRegistrationEnabled: true,
 	}
+	for _, opt := range opts {
+		opt(s)
+	}
+	return s
 }
 
 // RevokeAllRefreshFamilies is called by password-change and recovery transactions.
@@ -127,6 +162,34 @@ func (s *Service) SetupRequired(ctx context.Context) (bool, error) {
 	return required, nil
 }
 
+// enforceRegistrationLock gates self-registration when the operator has
+// locked it via WithRegistrationLock. Bootstrap (no organizations exist yet)
+// always bypasses the lock so an instance can never lock out its own first
+// owner account. When the lock is disabled, registration stays open exactly
+// as before this feature existed.
+func (s *Service) enforceRegistrationLock(ctx context.Context, input RegisterInput) error {
+	if s.openRegistrationEnabled {
+		return nil
+	}
+
+	setupRequired, err := s.SetupRequired(ctx)
+	if err != nil {
+		return err
+	}
+	if setupRequired {
+		return nil
+	}
+
+	if input.InvitationToken == "" || s.invitations == nil {
+		return ErrRegistrationLocked
+	}
+	if err := s.invitations.ValidatePendingInvitation(ctx, input.InvitationToken, input.Email); err != nil {
+		return ErrRegistrationLocked
+	}
+
+	return nil
+}
+
 func (s *Service) Register(ctx context.Context, input RegisterInput, clientID string) (Session, error) {
 	session, _, err := s.register(ctx, input, clientID, false)
 	return session, err
@@ -141,12 +204,17 @@ func (s *Service) register(ctx context.Context, input RegisterInput, clientID st
 	input.Email = strings.TrimSpace(strings.ToLower(input.Email))
 	input.Name = strings.TrimSpace(input.Name)
 	input.Password = strings.TrimSpace(input.Password)
+	input.InvitationToken = strings.TrimSpace(input.InvitationToken)
 
 	if input.Email == "" || input.Password == "" {
 		return Session{}, RefreshToken{}, fmt.Errorf("email and password are required")
 	}
 	if clientID == "" {
 		return Session{}, RefreshToken{}, fmt.Errorf("client ID is required")
+	}
+
+	if err := s.enforceRegistrationLock(ctx, input); err != nil {
+		return Session{}, RefreshToken{}, err
 	}
 
 	hash, err := bcrypt.GenerateFromPassword([]byte(input.Password), bcrypt.DefaultCost)

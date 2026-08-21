@@ -32,6 +32,14 @@ func (a invitationAccepterAdapter) AcceptInvitation(ctx context.Context, userID,
 	return a.service.AcceptInvitation(ctx, userID, token)
 }
 
+type invitationValidatorAdapter struct {
+	service *organizations.Service
+}
+
+func (a invitationValidatorAdapter) ValidatePendingInvitation(ctx context.Context, token, email string) error {
+	return a.service.ValidatePendingInvitation(ctx, token, email)
+}
+
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
@@ -54,9 +62,10 @@ func main() {
 	}
 
 	mux := http.NewServeMux()
-	authService := auth.NewService(pool, cfg.Auth)
 	accessService := access.NewService(pool)
 	organizationsService := organizations.NewService(pool)
+	authService := auth.NewService(pool, cfg.Auth,
+		auth.WithRegistrationLock(cfg.App.OpenRegistrationEnabled, invitationValidatorAdapter{service: organizationsService}))
 	invitationMailer := mailer.NewSMTP(cfg.Mail)
 	invitationNotifier := organizations.NewMailInvitationNotifier(invitationMailer, cfg.App.PublicBaseURL, os.Stdout)
 	groupsService := groups.NewService(pool)

@@ -21,7 +21,8 @@ type Config struct {
 }
 
 type AppConfig struct {
-	PublicBaseURL string
+	PublicBaseURL           string
+	OpenRegistrationEnabled bool
 }
 
 func (c AppConfig) Validate(mailEnabled bool) error {
@@ -197,7 +198,15 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 
-	appConfig := AppConfig{PublicBaseURL: strings.TrimRight(envString("PUBLIC_BASE_URL", ""), "/")}
+	openRegistrationEnabled, err := envBool("OPEN_REGISTRATION_ENABLED", true)
+	if err != nil {
+		return Config{}, err
+	}
+
+	appConfig := AppConfig{
+		PublicBaseURL:           strings.TrimRight(envString("PUBLIC_BASE_URL", ""), "/"),
+		OpenRegistrationEnabled: openRegistrationEnabled,
+	}
 	if err := appConfig.Validate(mailConfig.Enabled); err != nil {
 		return Config{}, err
 	}
