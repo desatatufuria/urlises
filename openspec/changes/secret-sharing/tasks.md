@@ -74,16 +74,16 @@ Each unit is developed, tested, and merged into `develop` before the next unit's
 
 ## Phase 4: WebSocket Hub — Per-User Index and PublishToUser
 
-- [ ] 4.1 RED: `backend/internal/websocket/hub_test.go` — `Subscribe(workspaceID, userID, clientID)` populates `byUser[userID]` alongside the existing `byWorkspace`; closing a subscription removes it from both indexes with no stale entries; a user with two open workspace sockets has two entries in `byUser`.
-- [ ] 4.2 RED: same file — `PublishToUser` delivers to all of a user's open sockets across workspaces; is a no-op (no error, no delivery attempt) when the user has no open subscription; does not deliver to another user's sockets.
-- [ ] 4.3 GREEN: `backend/internal/websocket/hub.go` — add `byUser` index; add `Notifications chan any` field on `Subscription` (new channel, `Messages`/`byWorkspace`/`Publish` untouched); `Subscribe(workspaceID, userID, clientID string) *Subscription` signature change; `PublishToUser(ctx context.Context, userID string, message any) error`.
-- [ ] 4.4 GREEN: `backend/internal/websocket/handler.go` — pass `principal.UserID` into `Subscribe`; add a `case msg := <-subscription.Notifications: connection.WriteJSON(msg)` branch to the read loop (raw frame, no `{"type":"event",...}` wrapper).
-- [ ] 4.5 RED: `backend/internal/onetimesecrets/handler_integration_test.go` (new, extends the package's integration harness) — full create→reveal→burn flow asserts `Hub.Notifications` receives a `{"type":"secret_read","secretId":...,"readAt":...}` frame for the creator and `hub_test.go`'s existing `Messages`/`byWorkspace` behavior is untouched.
-- [ ] 4.6 GREEN: satisfy 4.5 by wiring `*websocket.Hub` as the `secretReadNotifier` implementation (`NotifySecretRead` → `PublishToUser`) and confirming the assertions pass.
+- [x] 4.1 RED: `backend/internal/websocket/hub_test.go` — `Subscribe(workspaceID, userID, clientID)` populates `byUser[userID]` alongside the existing `byWorkspace`; closing a subscription removes it from both indexes with no stale entries; a user with two open workspace sockets has two entries in `byUser`.
+- [x] 4.2 RED: same file — `PublishToUser` delivers to all of a user's open sockets across workspaces; is a no-op (no error, no delivery attempt) when the user has no open subscription; does not deliver to another user's sockets.
+- [x] 4.3 GREEN: `backend/internal/websocket/hub.go` — add `byUser` index; add `Notifications chan any` field on `Subscription` (new channel, `Messages`/`byWorkspace`/`Publish` untouched); `Subscribe(workspaceID, userID, clientID string) *Subscription` signature change; `PublishToUser(ctx context.Context, userID string, message any) error`.
+- [x] 4.4 GREEN: `backend/internal/websocket/handler.go` — pass `principal.UserID` into `Subscribe`; add a `case msg := <-subscription.Notifications: connection.WriteJSON(msg)` branch to the read loop (raw frame, no `{"type":"event",...}` wrapper).
+- [x] 4.5 RED: `backend/internal/onetimesecrets/hub_integration_test.go` (new) — full create→reveal→burn flow asserts a real `*websocket.Hub`'s `Notifications` channel receives a `{"type":"secret_read","secretId":...,"readAt":...}` frame for the creator and `hub_test.go`'s existing `Messages`/`byWorkspace` behavior is untouched.
+- [x] 4.6 GREEN: satisfy 4.5 by wiring `*websocket.Hub` as the `secretReadNotifier` implementation (`NotifySecretRead` → `PublishToUser`) and confirming the assertions pass.
 
 ## Phase 5: Backend Composition Wiring
 
-- [ ] 5.1 `backend/cmd/api/main.go` — construct `onetimesecrets.NewService(pool)`, `httpapi.NewIPRateLimiter(30, 0.5)`, and call `onetimesecrets.RegisterRoutes(mux, authMiddleware, secretsService, hub)` after `websocketHub` is constructed (real notifier, not a stub).
+- [x] 5.1 `backend/cmd/api/main.go` — construct `onetimesecrets.NewService(pool)` and call `onetimesecrets.RegisterRoutes(mux, authMiddleware, secretsService, hubSecretReadNotifierAdapter{hub: websocketHub})` after `websocketHub` is constructed (real notifier, not a stub). The IP rate limiter is constructed internally by `onetimesecrets.RegisterRoutes` itself (Phase 3.3), so no separate `httpapi.NewIPRateLimiter` call is needed in `main.go`.
 
 ## Phase 6: Admin-web — Crypto Helper and Reveal Page
 
