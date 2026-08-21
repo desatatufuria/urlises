@@ -1,6 +1,7 @@
 import { DEFAULT_BACKEND_URL } from "../shared/runtime.js";
 import { getPopupStatusModel } from "../shared/ui/status.js";
 import type { ExtensionState, LoginRequest, UiState } from "../shared/types.js";
+import { nextAdvancedToggleState } from "./advanced-toggle.js";
 
 const signedOut = document.querySelector<HTMLElement>("#signed-out")!;
 const signedIn = document.querySelector<HTMLElement>("#signed-in")!;
@@ -18,6 +19,9 @@ const backendUrlInput = document.querySelector<HTMLInputElement>("#backend-url")
 const emailInput = document.querySelector<HTMLInputElement>("#email")!;
 const passwordInput = document.querySelector<HTMLInputElement>("#password")!;
 const deviceNameInput = document.querySelector<HTMLInputElement>("#device-name")!;
+const toggleAdvancedButton = document.querySelector<HTMLButtonElement>("#toggle-advanced")!;
+const advancedPanel = document.querySelector<HTMLElement>("#advanced-panel")!;
+const advancedChevron = toggleAdvancedButton.querySelector<SVGElement>(".ui-chevron")!;
 let lastAcknowledgedRevision = 0;
 
 document.querySelector<HTMLFormElement>("#login-form")!.addEventListener("submit", (event) => {
@@ -31,6 +35,14 @@ document.querySelector<HTMLButtonElement>("#logout")!.addEventListener("click", 
 
 document.querySelector<HTMLButtonElement>("#open-options")!.addEventListener("click", () => {
   chrome.runtime.openOptionsPage();
+});
+
+toggleAdvancedButton.addEventListener("click", () => {
+  const isExpanded = toggleAdvancedButton.getAttribute("aria-expanded") === "true";
+  const next = nextAdvancedToggleState(isExpanded);
+  advancedPanel.classList.toggle("hidden", !next.expanded);
+  advancedChevron.classList.toggle("ui-chevron--open", next.expanded);
+  toggleAdvancedButton.setAttribute("aria-expanded", next.ariaExpanded);
 });
 
 void bootstrap().catch(showError);

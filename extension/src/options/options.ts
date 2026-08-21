@@ -195,12 +195,38 @@ function renderAppearance(activeTheme: UITheme): void {
   }
 }
 
+const STAT_ICON_SELECTED = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>';
+const STAT_ICON_LIVE = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>';
+const STAT_ICON_ATTENTION = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>';
+
 function renderOverviewMetrics(overview: StatusOverview): void {
-  overviewMetrics.replaceChildren(
-    createMetric(String(overview.selectedWorkspaceCount), "Selected"),
-    createMetric(String(overview.liveWorkspaceCount), "Live now"),
-    createMetric(String(overview.degradedWorkspaceCount), "Need attention"),
-  );
+  const stats = [
+    createStat(String(overview.selectedWorkspaceCount), "Selected", STAT_ICON_SELECTED),
+    createStat(String(overview.liveWorkspaceCount), "Live now", STAT_ICON_LIVE),
+    createStat(String(overview.degradedWorkspaceCount), "Need attention", STAT_ICON_ATTENTION, overview.degradedWorkspaceCount > 0),
+  ];
+  overviewMetrics.replaceChildren();
+  stats.forEach((stat, index) => {
+    if (index > 0) {
+      const separator = document.createElement("span");
+      separator.className = "ui-stat-separator";
+      overviewMetrics.appendChild(separator);
+    }
+    overviewMetrics.appendChild(stat);
+  });
+}
+
+function createStat(value: string, label: string, iconSvg: string, attention = false): HTMLElement {
+  const stat = document.createElement("span");
+  stat.className = attention ? "ui-stat ui-stat--attention" : "ui-stat";
+  stat.innerHTML = iconSvg;
+  const strong = document.createElement("strong");
+  strong.textContent = value;
+  const copy = document.createElement("span");
+  copy.className = "ui-muted";
+  copy.textContent = label;
+  stat.append(strong, copy);
+  return stat;
 }
 
 function createStatusRow(model: ReturnType<typeof getWorkspaceStatusModel>): HTMLElement {
@@ -249,18 +275,6 @@ function createIndicator(label: string, dotClassName: string, activity = false):
   dot.className = dotClassName;
   indicator.append(dot, document.createTextNode(label));
   return indicator;
-}
-
-function createMetric(value: string, label: string): HTMLElement {
-  const metric = document.createElement("div");
-  metric.className = "ui-kpi";
-  const strong = document.createElement("strong");
-  strong.textContent = value;
-  const copy = document.createElement("span");
-  copy.className = "ui-muted";
-  copy.textContent = label;
-  metric.append(strong, copy);
-  return metric;
 }
 
 function renderDiagnostics(entries: Array<{ time: string; level: string; scope: string; message: string }>): void {

@@ -19,12 +19,22 @@
         <p class="ui-card-copy">Status, workspace selection, and sync health stay here.</p>
       </div>
       <form id="login-form" class="ui-form">
-        <label class="ui-field-label">Backend URL<input id="backend-url" type="url" placeholder="https://backend.example.com" required /></label>
         <label class="ui-field-label">Email<input id="email" type="email" placeholder="you@example.com" required /></label>
         <label class="ui-field-label">Password<input id="password" type="password" placeholder="Password" required /></label>
-        <label class="ui-field-label">Device name<input id="device-name" type="text" placeholder="URLises for Chrome" value="URLises for Chrome" /></label>
         <div class="ui-actions">
           <button class="ui-button-primary" type="submit">Sign in</button>
+        </div>
+        <button id="toggle-advanced" class="ui-button-ghost ui-advanced-toggle" type="button" aria-expanded="false">
+          <span class="ui-advanced-toggle__left">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/></svg>
+            <span>Advanced setup</span>
+          </span>
+          <svg class="ui-chevron" width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M4 6l4 4 4-4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+        <div id="advanced-panel" class="ui-advanced-panel hidden">
+          <p class="ui-advanced-hint">These stay set after your first sign-in — you won't see this again unless you're connecting a fresh browser or a different backend.</p>
+          <label class="ui-field-label">Backend URL<input id="backend-url" type="url" placeholder="https://backend.example.com" required /></label>
+          <label class="ui-field-label">Device name<input id="device-name" type="text" placeholder="URLises for Chrome" value="URLises for Chrome" /></label>
         </div>
       </form>
       <small>Authentication, summary, and a direct path to Settings.</small>
