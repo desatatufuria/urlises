@@ -252,6 +252,52 @@ func (s *Service) LoadOwned(ctx context.Context, token, userID string) (Secret, 
 	return secret, nil
 }
 
+// maxListOwnedResults is the hard cap ListOwned applies. The registry is
+// deliberately a micro-registry — no pagination — so this is a flat cutoff,
+// not a page size.
+const maxListOwnedResults = 50
+
+// ListOwned returns userID's own secrets, newest first, capped at
+// maxListOwnedResults. Rows are returned as-is (including a "pending" row
+// whose ExpiresAt has already passed): computing the display-only "expired"
+// state from status+ExpiresAt is left to the caller (the handler view),
+// matching this package's "compute, don't store" rule for expiry.
+func (s *Service) ListOwned(ctx context.Context, userID string) ([]Secret, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT id, user_id, token, status, created_at, expires_at, read_at
+		FROM secrets
+		WHERE user_id = $1
+		ORDER BY created_at DESC
+		LIMIT $2
+	`, userID, maxListOwnedResults)
+	if err != nil {
+		return nil, fmt.Errorf("list owned secrets: %w", err)
+	}
+	defer rows.Close()
+
+	secrets := make([]Secret, 0)
+	for rows.Next() {
+		var secret Secret
+		if err := rows.Scan(
+			&secret.ID,
+			&secret.UserID,
+			&secret.Token,
+			&secret.Status,
+			&secret.CreatedAt,
+			&secret.ExpiresAt,
+			&secret.ReadAt,
+		); err != nil {
+			return nil, fmt.Errorf("scan owned secret: %w", err)
+		}
+		secrets = append(secrets, secret)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate owned secrets: %w", err)
+	}
+
+	return secrets, nil
+}
+
 // resolveTTL applies the default/clamp rules: nil or non-positive
 // requestedSeconds falls back to defaultTTL; anything beyond maxTTL is
 // clamped down to it.

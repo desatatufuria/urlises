@@ -1,11 +1,14 @@
+import type { SecretHistoryEntry } from "../shared/api.js";
 import type { ExtensionState, StatusOverview, UiState, UITheme } from "../shared/types.js";
 import { formatUiTimestamp, getStatusOverview, getWorkspaceStatusModel } from "../shared/ui/status.js";
+import { formatSecretHistoryEntry, type FormattedSecretHistoryEntry } from "./secret-history.js";
 
 const summary = document.querySelector<HTMLElement>("#summary")!;
 const workspaceGroups = document.querySelector<HTMLElement>("#workspace-groups")!;
 const liveSyncStatusNode = document.querySelector<HTMLElement>("#live-sync-status")!;
 const liveSyncStatusTextNode = document.querySelector<HTMLElement>("#live-sync-status-text")!;
 const diagnosticsNode = document.querySelector<HTMLElement>("#diagnostics")!;
+const secretHistoryNode = document.querySelector<HTMLElement>("#secret-history")!;
 const overviewMetrics = document.querySelector<HTMLElement>("#overview-metrics")!;
 const themeSwatches = document.querySelector<HTMLElement>("#theme-swatches")!;
 let lastAcknowledgedRevision = 0;
@@ -28,6 +31,23 @@ void load();
 async function load(): Promise<void> {
   const ui = await sendMessage<UiState>({ type: "options/load" });
   render(ui);
+  if (ui.state.session) {
+    void loadSecretHistory();
+  }
+}
+
+// loadSecretHistory fetches the caller's secret micro-registry once when
+// the page loads (not on every render()), matching the "flat list, no
+// pagination" scope — there is nothing here to refresh on a per-action
+// basis the way workspace state is.
+async function loadSecretHistory(): Promise<void> {
+  try {
+    const entries = await sendMessage<SecretHistoryEntry[]>({ type: "secrets/list" });
+    renderSecretHistory(entries);
+  } catch (error) {
+    renderSecretHistory([]);
+    showError(error);
+  }
 }
 
 function render(ui: UiState): void {
@@ -42,6 +62,7 @@ function render(ui: UiState): void {
     liveSyncStatusTextNode.textContent = "";
     renderDiagnostics([{ time: "", level: "info", scope: "session", message: "No active session." }]);
     overviewMetrics.replaceChildren();
+    secretHistoryNode.replaceChildren();
     return;
   }
 
@@ -308,6 +329,45 @@ function createLogLine(entry: { time: string; level: string; scope: string; mess
   const message = document.createElement("span");
   message.className = "ui-log__message";
   message.textContent = `${entry.scope}: ${entry.message}`;
+
+  line.append(time, level, message);
+  return line;
+}
+
+// renderSecretHistory renders the compact, read-only micro-registry: one
+// row per secret, created time plus a computed status label. No actions,
+// no links, no re-fetch-content affordance — deliberately not exhaustive.
+function renderSecretHistory(entries: SecretHistoryEntry[]): void {
+  secretHistoryNode.replaceChildren();
+  if (entries.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "ui-log__empty";
+    empty.textContent = "No secrets created yet.";
+    secretHistoryNode.appendChild(empty);
+    return;
+  }
+
+  const now = new Date();
+  for (const entry of entries) {
+    secretHistoryNode.appendChild(createSecretHistoryLine(formatSecretHistoryEntry(entry, now)));
+  }
+}
+
+function createSecretHistoryLine(formatted: FormattedSecretHistoryEntry): HTMLElement {
+  const line = document.createElement("div");
+  line.className = `ui-log__line ui-log__line--${formatted.statusTag}`;
+
+  const time = document.createElement("span");
+  time.className = "ui-log__time";
+  time.textContent = formatted.createdLabel;
+
+  const level = document.createElement("span");
+  level.className = "ui-log__level";
+  level.textContent = `[${formatted.statusTag}]`;
+
+  const message = document.createElement("span");
+  message.className = "ui-log__message";
+  message.textContent = formatted.statusLabel;
 
   line.append(time, level, message);
   return line;

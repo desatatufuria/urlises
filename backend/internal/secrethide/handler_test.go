@@ -310,6 +310,130 @@ func TestGetSecretAlreadyReadTokenReturns410(t *testing.T) {
 	}
 }
 
+// --- Task: GET /secrets — the caller's own micro-registry ---
+
+func TestListSecretsRequiresAuthentication(t *testing.T) {
+	t.Parallel()
+
+	_, pool := openSecrethideTestPool(t, "secrethide_list_unauth_test")
+	mux := http.NewServeMux()
+	RegisterRoutes(mux, func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+		})
+	}, NewService(pool), nil, nil)
+
+	r := httptest.NewRequest(http.MethodGet, "/secrets", nil)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, r)
+
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want %d", w.Code, http.StatusUnauthorized)
+	}
+}
+
+func TestListSecretsReturnsCallersOwnRegistryWithComputedStatusesAndNoSensitiveFields(t *testing.T) {
+	t.Parallel()
+
+	ctx, pool := openSecrethideTestPool(t, "secrethide_list_handler_test")
+	userID := insertSecrethideTestUser(t, ctx, pool, "creator-list-handler@example.com")
+	otherID := insertSecrethideTestUser(t, ctx, pool, "other-list-handler@example.com")
+	service := NewService(pool)
+
+	pending, err := service.Create(ctx, userID, CreateSecretInput{Ciphertext: "Y2lwaGVydGV4dA==", IV: "aXZieXRlcw=="})
+	if err != nil {
+		t.Fatalf("create pending secret: %v", err)
+	}
+
+	readSecret, err := service.Create(ctx, userID, CreateSecretInput{Ciphertext: "Y2lwaGVydGV4dA==", IV: "aXZieXRlcw=="})
+	if err != nil {
+		t.Fatalf("create secret to burn: %v", err)
+	}
+	if _, _, _, err := service.Burn(ctx, readSecret.Token); err != nil {
+		t.Fatalf("burn secret: %v", err)
+	}
+
+	expiredUnread, err := service.Create(ctx, userID, CreateSecretInput{Ciphertext: "Y2lwaGVydGV4dA==", IV: "aXZieXRlcw=="})
+	if err != nil {
+		t.Fatalf("create secret to expire: %v", err)
+	}
+	forceSecrethideTestExpiry(t, ctx, pool, expiredUnread.ID)
+
+	if _, err := service.Create(ctx, otherID, CreateSecretInput{Ciphertext: "Y2lwaGVydGV4dA==", IV: "aXZieXRlcw=="}); err != nil {
+		t.Fatalf("create other user's secret: %v", err)
+	}
+
+	mux := secretsHandlerTestMux(userID, pool, nil)
+	r := httptest.NewRequest(http.MethodGet, "/secrets", nil)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body=%s", w.Code, http.StatusOK, w.Body.String())
+	}
+
+	body := w.Body.String()
+	for _, forbidden := range []string{"token", "ciphertext", "iv", "wrappedContentKey", "passphraseSalt", "kdfIterations"} {
+		if strings.Contains(body, forbidden) {
+			t.Fatalf("response body must not contain %q: %s", forbidden, body)
+		}
+	}
+
+	var entries []struct {
+		ID        string  `json:"id"`
+		CreatedAt string  `json:"createdAt"`
+		ExpiresAt string  `json:"expiresAt"`
+		Status    string  `json:"status"`
+		ReadAt    *string `json:"readAt"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &entries); err != nil {
+		t.Fatalf("decode response: %v; body=%s", err, body)
+	}
+	if len(entries) != 3 {
+		t.Fatalf("len(entries) = %d, want 3 (only the caller's own secrets)", len(entries))
+	}
+
+	byID := make(map[string]struct {
+		ID        string  `json:"id"`
+		CreatedAt string  `json:"createdAt"`
+		ExpiresAt string  `json:"expiresAt"`
+		Status    string  `json:"status"`
+		ReadAt    *string `json:"readAt"`
+	}, len(entries))
+	for _, entry := range entries {
+		byID[entry.ID] = entry
+	}
+
+	if got := byID[pending.ID]; got.Status != "pending" || got.ReadAt != nil {
+		t.Fatalf("pending entry = %+v, want status=pending, readAt=nil", got)
+	}
+	if got := byID[readSecret.ID]; got.Status != "read" || got.ReadAt == nil {
+		t.Fatalf("read entry = %+v, want status=read, readAt!=nil", got)
+	}
+	if got := byID[expiredUnread.ID]; got.Status != "expired" || got.ReadAt != nil {
+		t.Fatalf("expired entry = %+v, want status=expired, readAt=nil", got)
+	}
+}
+
+func TestListSecretsReturnsEmptyArrayWhenCallerHasNoSecrets(t *testing.T) {
+	t.Parallel()
+
+	ctx, pool := openSecrethideTestPool(t, "secrethide_list_handler_empty_test")
+	userID := insertSecrethideTestUser(t, ctx, pool, "creator-list-handler-empty@example.com")
+	mux := secretsHandlerTestMux(userID, pool, nil)
+
+	r := httptest.NewRequest(http.MethodGet, "/secrets", nil)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body=%s", w.Code, http.StatusOK, w.Body.String())
+	}
+	if strings.TrimSpace(w.Body.String()) != "[]" {
+		t.Fatalf("body = %q, want empty JSON array []", w.Body.String())
+	}
+}
+
 // --- Task 2.3: POST /secrets/{token}/burn ---
 
 func TestBurnSecretAfterFetchSetsStatusRead(t *testing.T) {

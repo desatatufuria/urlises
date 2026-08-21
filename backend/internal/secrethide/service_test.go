@@ -364,6 +364,138 @@ func TestLoadOwnedNonPendingStatusReturnsNotFound(t *testing.T) {
 	}
 }
 
+// --- Task: ListOwned powers the micro-registry — a caller's own secrets,
+// newest first, with status computed (pending/read/expired), capped at 50,
+// and never leaking another user's secrets. ---
+
+func TestListOwnedReturnsEmptyListWhenCallerHasNoSecrets(t *testing.T) {
+	t.Parallel()
+
+	ctx, pool := openSecrethideTestPool(t, "secrethide_list_owned_empty_test")
+	service := NewService(pool)
+	userID := insertSecrethideTestUser(t, ctx, pool, "creator-list-empty@example.com")
+
+	secrets, err := service.ListOwned(ctx, userID)
+	if err != nil {
+		t.Fatalf("ListOwned: %v", err)
+	}
+	if len(secrets) != 0 {
+		t.Fatalf("len(secrets) = %d, want 0", len(secrets))
+	}
+}
+
+func TestListOwnedReturnsOnlyCallersOwnSecretsOrderedNewestFirst(t *testing.T) {
+	t.Parallel()
+
+	ctx, pool := openSecrethideTestPool(t, "secrethide_list_owned_order_test")
+	service := NewService(pool)
+	userID := insertSecrethideTestUser(t, ctx, pool, "creator-list-order@example.com")
+	otherID := insertSecrethideTestUser(t, ctx, pool, "other-list-order@example.com")
+
+	first, err := service.Create(ctx, userID, CreateSecretInput{Ciphertext: "Y2lwaGVydGV4dA==", IV: "aXZieXRlcw=="})
+	if err != nil {
+		t.Fatalf("create first secret: %v", err)
+	}
+	second, err := service.Create(ctx, userID, CreateSecretInput{Ciphertext: "Y2lwaGVydGV4dA==", IV: "aXZieXRlcw=="})
+	if err != nil {
+		t.Fatalf("create second secret: %v", err)
+	}
+	if _, err := service.Create(ctx, otherID, CreateSecretInput{Ciphertext: "Y2lwaGVydGV4dA==", IV: "aXZieXRlcw=="}); err != nil {
+		t.Fatalf("create other user's secret: %v", err)
+	}
+
+	secrets, err := service.ListOwned(ctx, userID)
+	if err != nil {
+		t.Fatalf("ListOwned: %v", err)
+	}
+	if len(secrets) != 2 {
+		t.Fatalf("len(secrets) = %d, want 2 (must not include other user's secret)", len(secrets))
+	}
+	if secrets[0].ID != second.ID || secrets[1].ID != first.ID {
+		t.Fatalf("secrets = [%s, %s], want [%s, %s] (newest first)", secrets[0].ID, secrets[1].ID, second.ID, first.ID)
+	}
+	for _, secret := range secrets {
+		if secret.UserID != userID {
+			t.Fatalf("secret.UserID = %q, want only %q", secret.UserID, userID)
+		}
+	}
+}
+
+func TestListOwnedIncludesPendingReadAndExpiredSecrets(t *testing.T) {
+	t.Parallel()
+
+	ctx, pool := openSecrethideTestPool(t, "secrethide_list_owned_mix_test")
+	service := NewService(pool)
+	userID := insertSecrethideTestUser(t, ctx, pool, "creator-list-mix@example.com")
+
+	pending, err := service.Create(ctx, userID, CreateSecretInput{Ciphertext: "Y2lwaGVydGV4dA==", IV: "aXZieXRlcw=="})
+	if err != nil {
+		t.Fatalf("create pending secret: %v", err)
+	}
+
+	readSecret, err := service.Create(ctx, userID, CreateSecretInput{Ciphertext: "Y2lwaGVydGV4dA==", IV: "aXZieXRlcw=="})
+	if err != nil {
+		t.Fatalf("create secret to burn: %v", err)
+	}
+	if _, _, _, err := service.Burn(ctx, readSecret.Token); err != nil {
+		t.Fatalf("burn secret: %v", err)
+	}
+
+	expiredUnread, err := service.Create(ctx, userID, CreateSecretInput{Ciphertext: "Y2lwaGVydGV4dA==", IV: "aXZieXRlcw=="})
+	if err != nil {
+		t.Fatalf("create secret to expire: %v", err)
+	}
+	forceSecrethideTestExpiry(t, ctx, pool, expiredUnread.ID)
+
+	secrets, err := service.ListOwned(ctx, userID)
+	if err != nil {
+		t.Fatalf("ListOwned: %v", err)
+	}
+	if len(secrets) != 3 {
+		t.Fatalf("len(secrets) = %d, want 3", len(secrets))
+	}
+
+	byID := make(map[string]Secret, len(secrets))
+	for _, secret := range secrets {
+		byID[secret.ID] = secret
+	}
+
+	if got := byID[pending.ID]; got.Status != "pending" {
+		t.Fatalf("pending secret status = %q, want pending", got.Status)
+	}
+	if got := byID[readSecret.ID]; got.Status != "read" || got.ReadAt == nil {
+		t.Fatalf("read secret status = %q, ReadAt = %v, want read with non-nil ReadAt", got.Status, got.ReadAt)
+	}
+	// The "expired" state is computed by the caller (handler view), not
+	// stored: the DB row still has status "pending" with a past ExpiresAt —
+	// ListOwned returns the raw row so the caller can compute expiry.
+	if got := byID[expiredUnread.ID]; got.Status != "pending" || !time.Now().UTC().After(got.ExpiresAt) {
+		t.Fatalf("expired-unread secret status = %q, ExpiresAt = %v, want raw pending row with a past ExpiresAt", got.Status, got.ExpiresAt)
+	}
+}
+
+func TestListOwnedCapsAtFiftyResults(t *testing.T) {
+	t.Parallel()
+
+	ctx, pool := openSecrethideTestPool(t, "secrethide_list_owned_cap_test")
+	service := NewService(pool)
+	userID := insertSecrethideTestUser(t, ctx, pool, "creator-list-cap@example.com")
+
+	for i := 0; i < 55; i++ {
+		if _, err := service.Create(ctx, userID, CreateSecretInput{Ciphertext: "Y2lwaGVydGV4dA==", IV: "aXZieXRlcw=="}); err != nil {
+			t.Fatalf("create secret %d: %v", i, err)
+		}
+	}
+
+	secrets, err := service.ListOwned(ctx, userID)
+	if err != nil {
+		t.Fatalf("ListOwned: %v", err)
+	}
+	if len(secrets) != 50 {
+		t.Fatalf("len(secrets) = %d, want 50 (hard cap)", len(secrets))
+	}
+}
+
 // --- Test helpers (mirrors organizations' openOrganizationsTestPool pattern) ---
 
 func openSecrethideTestPool(t *testing.T, prefix string) (context.Context, *pgxpool.Pool) {

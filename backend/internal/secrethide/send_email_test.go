@@ -48,6 +48,10 @@ func (s *stubSendEmailService) LoadOwned(_ context.Context, token, userID string
 	return s.loadOwnedSecret, nil
 }
 
+func (s *stubSendEmailService) ListOwned(context.Context, string) ([]Secret, error) {
+	return nil, errors.New("unused in these tests")
+}
+
 func (s *stubSendEmailService) callCount() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()

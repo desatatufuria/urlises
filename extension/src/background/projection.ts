@@ -9,6 +9,7 @@ import {
   getPublicConfig as apiGetPublicConfig,
   getWorkspaceTree,
   getWorkspaces,
+  listSecrets as apiListSecrets,
   login as apiLogin,
   createWSTicket,
   parseBookmarkDeletePayload,
@@ -20,6 +21,7 @@ import {
   updatePreferences as apiUpdatePreferences,
   ApiError,
   type CreateSecretInput,
+  type SecretHistoryEntry,
 } from "../shared/api.js";
 import { pushDiagnostic } from "../shared/diagnostics.js";
 import { addExclusion, isExcluded, pruneExclusions, removeExclusions } from "../shared/exclusions.js";
@@ -279,6 +281,20 @@ export async function createSecret(input: CreateSecretInput): Promise<UiState & 
 
   const ui = await getUiState();
   return { ...ui, secret: { ...record, expiresAt: created.expiresAt } };
+}
+
+// listSecrets follows createSecret/sendSecretEmail's shape (require a
+// session, call the API) but returns the raw entries directly rather than
+// UiState — the history list isn't part of persisted extension state, it's
+// fetched fresh from the backend's micro-registry each time the options
+// page loads.
+export async function listSecrets(): Promise<SecretHistoryEntry[]> {
+  const state = await getState();
+  if (!state.session) {
+    throw new Error("sign in required to view secret history");
+  }
+
+  return apiListSecrets(state.settings.backendUrl, state.session);
 }
 
 export interface SendSecretEmailRequest {

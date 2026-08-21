@@ -143,6 +143,29 @@ export function sendSecretEmail(
   });
 }
 
+// SecretHistoryEntry is the metadata-only shape the backend's micro-registry
+// (GET /secrets) returns — never a token, ciphertext, iv, or any
+// key/passphrase-related field, since the registry must never be usable to
+// re-fetch or re-derive a secret's content or link. See
+// backend/internal/secrethide/handler.go's secretHistoryView.
+export interface SecretHistoryEntry {
+  id: string;
+  createdAt: string;
+  expiresAt: string;
+  status: "pending" | "read" | "expired";
+  readAt: string | null;
+}
+
+// listSecrets fetches the caller's own secret history — a flat, capped
+// list with no pagination/filtering (see the backend's ListOwned), matching
+// createWSTicket/getOrganizations' authenticated-GET shape (authHeaders
+// only, no mutation headers, since this never advances a sync cursor).
+export async function listSecrets(backendUrl: string, session: SessionData): Promise<SecretHistoryEntry[]> {
+  return requestJSON<SecretHistoryEntry[]>(backendUrl, "/secrets", {
+    headers: authHeaders(session),
+  });
+}
+
 export interface PublicConfig {
   publicBaseUrl: string;
 }

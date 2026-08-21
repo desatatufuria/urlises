@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"time"
 
 	"github.com/furia/shared-bookmark-sync/backend/internal/auth"
 	"github.com/furia/shared-bookmark-sync/backend/internal/httpapi"
@@ -38,6 +39,7 @@ type routeService interface {
 	Reveal(ctx context.Context, token string) (SecretBlob, error)
 	Burn(ctx context.Context, token string) (creatorUserID string, secretID string, alreadyRead bool, err error)
 	LoadOwned(ctx context.Context, token, userID string) (Secret, error)
+	ListOwned(ctx context.Context, userID string) ([]Secret, error)
 }
 
 // secretReadNotifier is a narrow, consumer-defined port so this package
@@ -90,6 +92,22 @@ func RegisterRoutes(mux *http.ServeMux, authMiddleware func(http.Handler) http.H
 		}
 
 		httpapi.WriteJSON(w, http.StatusCreated, secretCreationView(secret))
+	})))
+
+	mux.Handle("GET /secrets", authMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		principal, ok := auth.PrincipalFromContext(r.Context())
+		if !ok {
+			httpapi.WriteError(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+
+		secrets, err := service.ListOwned(r.Context(), principal.UserID)
+		if err != nil {
+			httpapi.WriteError(w, http.StatusInternalServerError, "internal server error")
+			return
+		}
+
+		httpapi.WriteJSON(w, http.StatusOK, secretHistoryView(secrets, time.Now().UTC()))
 	})))
 
 	mux.Handle("GET /secrets/{token}", limiter.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -205,6 +223,38 @@ func secretCreationView(secret Secret) map[string]any {
 		"createdAt": secret.CreatedAt,
 		"expiresAt": secret.ExpiresAt,
 	}
+}
+
+// secretHistoryView builds the metadata-only micro-registry response for GET
+// /secrets: one entry per secret with an id, timestamps, and a computed
+// status — never the token, ciphertext, iv, or any key/passphrase-related
+// field, since this registry must never be usable to re-fetch or re-derive
+// a secret's content or link.
+func secretHistoryView(secrets []Secret, now time.Time) []map[string]any {
+	entries := make([]map[string]any, 0, len(secrets))
+	for _, secret := range secrets {
+		entries = append(entries, map[string]any{
+			"id":        secret.ID,
+			"createdAt": secret.CreatedAt,
+			"expiresAt": secret.ExpiresAt,
+			"status":    secretHistoryStatus(secret, now),
+			"readAt":    secret.ReadAt,
+		})
+	}
+	return entries
+}
+
+// secretHistoryStatus computes exactly one of "pending", "read", or
+// "expired" from the stored status and expiry — "expired" is never stored,
+// only derived when a still-"pending" row's expiry has passed.
+func secretHistoryStatus(secret Secret, now time.Time) string {
+	if secret.Status == "read" {
+		return "read"
+	}
+	if now.After(secret.ExpiresAt) {
+		return "expired"
+	}
+	return "pending"
 }
 
 func secretBlobView(blob SecretBlob) map[string]any {
