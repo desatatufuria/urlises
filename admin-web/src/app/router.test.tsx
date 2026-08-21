@@ -40,7 +40,7 @@ describe("admin router", () => {
 
     const { router } = renderAppRoute("/invitations/abc123?email=invitee%40example.com", null);
 
-    expect(await screen.findByRole("heading", { name: /sign in to urlises control/i })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: /you're invited to join urlises/i })).toBeInTheDocument();
     expect(router.state.location.pathname).toBe("/login");
     expect(router.state.location.search).toBe("?invitation=abc123&email=invitee%40example.com");
   });

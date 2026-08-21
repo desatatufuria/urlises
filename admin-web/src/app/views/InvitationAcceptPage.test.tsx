@@ -55,7 +55,7 @@ describe("InvitationAcceptPage", () => {
 
     const { router } = renderAppRoute("/invitations/abc123?email=invitee%40example.com", null);
 
-    await screen.findByRole("heading", { name: /sign in to urlises control/i });
+    await screen.findByRole("heading", { name: /you're invited to join urlises/i });
     expect(router.state.location.pathname).toBe("/login");
     expect(router.state.location.search).toBe("?invitation=abc123&email=invitee%40example.com");
   });
@@ -76,7 +76,7 @@ describe("InvitationAcceptPage", () => {
 
     const { router } = renderAppRoute(`/invitations/${encodeURIComponent(maliciousToken)}`, null);
 
-    await screen.findByRole("heading", { name: /sign in to urlises control/i });
+    await screen.findByRole("heading", { name: /you're invited to join urlises/i });
     expect(router.state.location.pathname).toBe("/login");
     expect(router.state.location.search).toBe(`?invitation=${encodeURIComponent(maliciousToken)}`);
   });
@@ -156,7 +156,7 @@ describe("InvitationAcceptPage", () => {
     const user = userEvent.setup();
     await user.click(screen.getByRole("button", { name: /sign out/i }));
 
-    await waitFor(() => expect(screen.getByRole("heading", { name: /sign in to urlises control/i })).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByRole("heading", { name: /you're invited to join urlises/i })).toBeInTheDocument());
   });
 
   it("shows an inline error when the invitation is no longer pending", async () => {
@@ -230,7 +230,7 @@ describe("InvitationAcceptPage", () => {
     const user = userEvent.setup();
     const { router } = renderAppRoute("/invitations/abc123?email=invitee%40example.com", null);
 
-    expect(await screen.findByRole("heading", { name: /sign in to urlises control/i })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: /you're invited to join urlises/i })).toBeInTheDocument();
     expect(router.state.location.pathname).toBe("/login");
     await user.click(screen.getByRole("link", { name: /create an account to accept this invitation/i }));
 
