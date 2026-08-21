@@ -1,7 +1,7 @@
-// Package onetimesecrets implements zero-knowledge, one-time-read secret
+// Package secrethide implements zero-knowledge, one-time-read secret
 // sharing: the server stores and serves only ciphertext, an optional wrapped
 // content key, and metadata — it never sees plaintext.
-package onetimesecrets
+package secrethide
 
 import (
 	"context"
@@ -215,6 +215,41 @@ func (s *Service) Burn(ctx context.Context, token string) (creatorUserID string,
 	}
 
 	return userID, id, false, nil
+}
+
+// LoadOwned returns the secret identified by token when — and only when —
+// it exists, belongs to userID, and is still pending. Any other case
+// (unknown token, a different owner, or a non-pending status: already read
+// or expired) returns the same ErrNotFound, so a caller built on top of
+// this method (e.g. the send-email endpoint) can never use it to enumerate
+// other users' tokens or learn a secret's current state.
+func (s *Service) LoadOwned(ctx context.Context, token, userID string) (Secret, error) {
+	var secret Secret
+	err := s.pool.QueryRow(ctx, `
+		SELECT id, user_id, token, status, created_at, expires_at, read_at
+		FROM secrets
+		WHERE token = $1
+	`, token).Scan(
+		&secret.ID,
+		&secret.UserID,
+		&secret.Token,
+		&secret.Status,
+		&secret.CreatedAt,
+		&secret.ExpiresAt,
+		&secret.ReadAt,
+	)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return Secret{}, ErrNotFound
+		}
+		return Secret{}, fmt.Errorf("load owned secret: %w", err)
+	}
+
+	if secret.UserID != userID || secret.Status != "pending" {
+		return Secret{}, ErrNotFound
+	}
+
+	return secret, nil
 }
 
 // resolveTTL applies the default/clamp rules: nil or non-positive

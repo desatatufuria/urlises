@@ -1,8 +1,9 @@
-package onetimesecrets
+package secrethide
 
 import (
 	"context"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -19,9 +20,9 @@ import (
 func TestCreateDefaultTTLAppliedWhenUnspecified(t *testing.T) {
 	t.Parallel()
 
-	ctx, pool := openOnetimesecretsTestPool(t, "onetimesecrets_ttl_default_test")
+	ctx, pool := openSecrethideTestPool(t, "secrethide_ttl_default_test")
 	service := NewService(pool)
-	userID := insertOnetimesecretsTestUser(t, ctx, pool, "creator-default-ttl@example.com")
+	userID := insertSecrethideTestUser(t, ctx, pool, "creator-default-ttl@example.com")
 
 	secret, err := service.Create(ctx, userID, CreateSecretInput{
 		Ciphertext: "Y2lwaGVydGV4dA==",
@@ -40,9 +41,9 @@ func TestCreateDefaultTTLAppliedWhenUnspecified(t *testing.T) {
 func TestCreateRequestedTTLBeyondCapIsClamped(t *testing.T) {
 	t.Parallel()
 
-	ctx, pool := openOnetimesecretsTestPool(t, "onetimesecrets_ttl_clamp_test")
+	ctx, pool := openSecrethideTestPool(t, "secrethide_ttl_clamp_test")
 	service := NewService(pool)
-	userID := insertOnetimesecretsTestUser(t, ctx, pool, "creator-clamp-ttl@example.com")
+	userID := insertSecrethideTestUser(t, ctx, pool, "creator-clamp-ttl@example.com")
 
 	requestedSeconds := int((30 * 24 * time.Hour).Seconds())
 	secret, err := service.Create(ctx, userID, CreateSecretInput{
@@ -91,9 +92,9 @@ func TestGenerateTokenProduces24ByteHexToken(t *testing.T) {
 func TestRevealReturnsBlobWithoutMutatingStatus(t *testing.T) {
 	t.Parallel()
 
-	ctx, pool := openOnetimesecretsTestPool(t, "onetimesecrets_reveal_test")
+	ctx, pool := openSecrethideTestPool(t, "secrethide_reveal_test")
 	service := NewService(pool)
-	userID := insertOnetimesecretsTestUser(t, ctx, pool, "creator-reveal@example.com")
+	userID := insertSecrethideTestUser(t, ctx, pool, "creator-reveal@example.com")
 
 	salt := "c2FsdGJ5dGVz"
 	iterations := 210000
@@ -129,7 +130,7 @@ func TestRevealReturnsBlobWithoutMutatingStatus(t *testing.T) {
 		t.Fatalf("blob.KDFIterations = %v, want %d", blob.KDFIterations, iterations)
 	}
 
-	status := loadOnetimesecretsTestStatus(t, ctx, pool, created.ID)
+	status := loadSecrethideTestStatus(t, ctx, pool, created.ID)
 	if status != "pending" {
 		t.Fatalf("status after first reveal = %q, want pending", status)
 	}
@@ -137,7 +138,7 @@ func TestRevealReturnsBlobWithoutMutatingStatus(t *testing.T) {
 	if _, err := service.Reveal(ctx, created.Token); err != nil {
 		t.Fatalf("second reveal: %v", err)
 	}
-	status = loadOnetimesecretsTestStatus(t, ctx, pool, created.ID)
+	status = loadSecrethideTestStatus(t, ctx, pool, created.ID)
 	if status != "pending" {
 		t.Fatalf("status after second reveal = %q, want pending", status)
 	}
@@ -146,7 +147,7 @@ func TestRevealReturnsBlobWithoutMutatingStatus(t *testing.T) {
 func TestRevealUnknownTokenReturnsNotFound(t *testing.T) {
 	t.Parallel()
 
-	ctx, pool := openOnetimesecretsTestPool(t, "onetimesecrets_reveal_unknown_test")
+	ctx, pool := openSecrethideTestPool(t, "secrethide_reveal_unknown_test")
 	service := NewService(pool)
 
 	_, err := service.Reveal(ctx, "does-not-exist")
@@ -158,9 +159,9 @@ func TestRevealUnknownTokenReturnsNotFound(t *testing.T) {
 func TestRevealExpiredTokenReturnsGone(t *testing.T) {
 	t.Parallel()
 
-	ctx, pool := openOnetimesecretsTestPool(t, "onetimesecrets_reveal_expired_test")
+	ctx, pool := openSecrethideTestPool(t, "secrethide_reveal_expired_test")
 	service := NewService(pool)
-	userID := insertOnetimesecretsTestUser(t, ctx, pool, "creator-expired@example.com")
+	userID := insertSecrethideTestUser(t, ctx, pool, "creator-expired@example.com")
 
 	created, err := service.Create(ctx, userID, CreateSecretInput{
 		Ciphertext: "Y2lwaGVydGV4dA==",
@@ -169,7 +170,7 @@ func TestRevealExpiredTokenReturnsGone(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create secret: %v", err)
 	}
-	forceOnetimesecretsTestExpiry(t, ctx, pool, created.ID)
+	forceSecrethideTestExpiry(t, ctx, pool, created.ID)
 
 	if _, err := service.Reveal(ctx, created.Token); err != ErrGone {
 		t.Fatalf("err = %v, want %v", err, ErrGone)
@@ -179,9 +180,9 @@ func TestRevealExpiredTokenReturnsGone(t *testing.T) {
 func TestRevealAlreadyReadTokenReturnsGone(t *testing.T) {
 	t.Parallel()
 
-	ctx, pool := openOnetimesecretsTestPool(t, "onetimesecrets_reveal_already_read_test")
+	ctx, pool := openSecrethideTestPool(t, "secrethide_reveal_already_read_test")
 	service := NewService(pool)
-	userID := insertOnetimesecretsTestUser(t, ctx, pool, "creator-already-read@example.com")
+	userID := insertSecrethideTestUser(t, ctx, pool, "creator-already-read@example.com")
 
 	created, err := service.Create(ctx, userID, CreateSecretInput{
 		Ciphertext: "Y2lwaGVydGV4dA==",
@@ -204,9 +205,9 @@ func TestRevealAlreadyReadTokenReturnsGone(t *testing.T) {
 func TestBurnSetsStatusReadAndReturnsCreatorUserID(t *testing.T) {
 	t.Parallel()
 
-	ctx, pool := openOnetimesecretsTestPool(t, "onetimesecrets_burn_test")
+	ctx, pool := openSecrethideTestPool(t, "secrethide_burn_test")
 	service := NewService(pool)
-	userID := insertOnetimesecretsTestUser(t, ctx, pool, "creator-burn@example.com")
+	userID := insertSecrethideTestUser(t, ctx, pool, "creator-burn@example.com")
 
 	created, err := service.Create(ctx, userID, CreateSecretInput{
 		Ciphertext: "Y2lwaGVydGV4dA==",
@@ -230,7 +231,7 @@ func TestBurnSetsStatusReadAndReturnsCreatorUserID(t *testing.T) {
 		t.Fatalf("secretID = %q, want %q", secretID, created.ID)
 	}
 
-	status, readAt := loadOnetimesecretsTestStatusAndReadAt(t, ctx, pool, created.ID)
+	status, readAt := loadSecrethideTestStatusAndReadAt(t, ctx, pool, created.ID)
 	if status != "read" {
 		t.Fatalf("status = %q, want read", status)
 	}
@@ -242,9 +243,9 @@ func TestBurnSetsStatusReadAndReturnsCreatorUserID(t *testing.T) {
 func TestBurnIsIdempotentOnRepeat(t *testing.T) {
 	t.Parallel()
 
-	ctx, pool := openOnetimesecretsTestPool(t, "onetimesecrets_burn_idempotent_test")
+	ctx, pool := openSecrethideTestPool(t, "secrethide_burn_idempotent_test")
 	service := NewService(pool)
-	userID := insertOnetimesecretsTestUser(t, ctx, pool, "creator-burn-idempotent@example.com")
+	userID := insertSecrethideTestUser(t, ctx, pool, "creator-burn-idempotent@example.com")
 
 	created, err := service.Create(ctx, userID, CreateSecretInput{
 		Ciphertext: "Y2lwaGVydGV4dA==",
@@ -257,7 +258,7 @@ func TestBurnIsIdempotentOnRepeat(t *testing.T) {
 	if _, _, alreadyRead, err := service.Burn(ctx, created.Token); err != nil || alreadyRead {
 		t.Fatalf("first burn: alreadyRead=%v err=%v, want false/nil", alreadyRead, err)
 	}
-	_, firstReadAt := loadOnetimesecretsTestStatusAndReadAt(t, ctx, pool, created.ID)
+	_, firstReadAt := loadSecrethideTestStatusAndReadAt(t, ctx, pool, created.ID)
 	if firstReadAt == nil {
 		t.Fatal("read_at is nil after first burn")
 	}
@@ -276,7 +277,7 @@ func TestBurnIsIdempotentOnRepeat(t *testing.T) {
 		t.Fatalf("secretID on second burn = %q, want %q", secretID, created.ID)
 	}
 
-	status, secondReadAt := loadOnetimesecretsTestStatusAndReadAt(t, ctx, pool, created.ID)
+	status, secondReadAt := loadSecrethideTestStatusAndReadAt(t, ctx, pool, created.ID)
 	if status != "read" {
 		t.Fatalf("status after second burn = %q, want read", status)
 	}
@@ -285,20 +286,98 @@ func TestBurnIsIdempotentOnRepeat(t *testing.T) {
 	}
 }
 
+// --- Task: LoadOwned collapses unknown token, wrong owner, and non-pending
+// status into the same ErrNotFound, so the send-email endpoint built on top
+// of it can never be used to enumerate other users' tokens or a secret's
+// current state. ---
+
+func TestLoadOwnedReturnsSecretForOwnerAndPendingStatus(t *testing.T) {
+	t.Parallel()
+
+	ctx, pool := openSecrethideTestPool(t, "secrethide_load_owned_test")
+	service := NewService(pool)
+	userID := insertSecrethideTestUser(t, ctx, pool, "creator-load-owned@example.com")
+
+	created, err := service.Create(ctx, userID, CreateSecretInput{Ciphertext: "Y2lwaGVydGV4dA==", IV: "aXZieXRlcw=="})
+	if err != nil {
+		t.Fatalf("create secret: %v", err)
+	}
+
+	secret, err := service.LoadOwned(ctx, created.Token, userID)
+	if err != nil {
+		t.Fatalf("LoadOwned: %v", err)
+	}
+	if secret.ID != created.ID {
+		t.Fatalf("secret.ID = %q, want %q", secret.ID, created.ID)
+	}
+	if secret.Status != "pending" {
+		t.Fatalf("secret.Status = %q, want pending", secret.Status)
+	}
+}
+
+func TestLoadOwnedUnknownTokenReturnsNotFound(t *testing.T) {
+	t.Parallel()
+
+	ctx, pool := openSecrethideTestPool(t, "secrethide_load_owned_unknown_test")
+	service := NewService(pool)
+
+	if _, err := service.LoadOwned(ctx, "does-not-exist", "irrelevant-user"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("err = %v, want %v", err, ErrNotFound)
+	}
+}
+
+func TestLoadOwnedWrongOwnerReturnsNotFound(t *testing.T) {
+	t.Parallel()
+
+	ctx, pool := openSecrethideTestPool(t, "secrethide_load_owned_wrong_owner_test")
+	service := NewService(pool)
+	ownerID := insertSecrethideTestUser(t, ctx, pool, "owner-load-owned@example.com")
+	otherID := insertSecrethideTestUser(t, ctx, pool, "other-load-owned@example.com")
+
+	created, err := service.Create(ctx, ownerID, CreateSecretInput{Ciphertext: "Y2lwaGVydGV4dA==", IV: "aXZieXRlcw=="})
+	if err != nil {
+		t.Fatalf("create secret: %v", err)
+	}
+
+	if _, err := service.LoadOwned(ctx, created.Token, otherID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("err = %v, want %v (a non-owner must get the same not-found error as an unknown token)", err, ErrNotFound)
+	}
+}
+
+func TestLoadOwnedNonPendingStatusReturnsNotFound(t *testing.T) {
+	t.Parallel()
+
+	ctx, pool := openSecrethideTestPool(t, "secrethide_load_owned_wrong_status_test")
+	service := NewService(pool)
+	userID := insertSecrethideTestUser(t, ctx, pool, "creator-load-owned-status@example.com")
+
+	created, err := service.Create(ctx, userID, CreateSecretInput{Ciphertext: "Y2lwaGVydGV4dA==", IV: "aXZieXRlcw=="})
+	if err != nil {
+		t.Fatalf("create secret: %v", err)
+	}
+	if _, _, _, err := service.Burn(ctx, created.Token); err != nil {
+		t.Fatalf("burn secret: %v", err)
+	}
+
+	if _, err := service.LoadOwned(ctx, created.Token, userID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("err = %v, want %v (a burned secret must get the same not-found error as an unknown token)", err, ErrNotFound)
+	}
+}
+
 // --- Test helpers (mirrors organizations' openOrganizationsTestPool pattern) ---
 
-func openOnetimesecretsTestPool(t *testing.T, prefix string) (context.Context, *pgxpool.Pool) {
+func openSecrethideTestPool(t *testing.T, prefix string) (context.Context, *pgxpool.Pool) {
 	t.Helper()
 	if testing.Short() {
 		t.Skip("skipping PostgreSQL integration-style test in short mode")
 	}
 
-	databaseURL := strings.TrimSpace(os.Getenv("ONETIMESECRETS_TEST_DATABASE_URL"))
+	databaseURL := strings.TrimSpace(os.Getenv("SECRETHIDE_TEST_DATABASE_URL"))
 	if databaseURL == "" {
 		databaseURL = strings.TrimSpace(os.Getenv("DATABASE_URL"))
 	}
 	if databaseURL == "" {
-		t.Skip("set ONETIMESECRETS_TEST_DATABASE_URL or DATABASE_URL to run PostgreSQL tests")
+		t.Skip("set SECRETHIDE_TEST_DATABASE_URL or DATABASE_URL to run PostgreSQL tests")
 	}
 
 	ctx := context.Background()
@@ -342,7 +421,7 @@ func openOnetimesecretsTestPool(t *testing.T, prefix string) (context.Context, *
 	return ctx, pool
 }
 
-func insertOnetimesecretsTestUser(t *testing.T, ctx context.Context, pool *pgxpool.Pool, email string) string {
+func insertSecrethideTestUser(t *testing.T, ctx context.Context, pool *pgxpool.Pool, email string) string {
 	t.Helper()
 
 	var userID string
@@ -358,7 +437,7 @@ func insertOnetimesecretsTestUser(t *testing.T, ctx context.Context, pool *pgxpo
 	return userID
 }
 
-func loadOnetimesecretsTestStatus(t *testing.T, ctx context.Context, pool *pgxpool.Pool, secretID string) string {
+func loadSecrethideTestStatus(t *testing.T, ctx context.Context, pool *pgxpool.Pool, secretID string) string {
 	t.Helper()
 
 	var status string
@@ -368,7 +447,7 @@ func loadOnetimesecretsTestStatus(t *testing.T, ctx context.Context, pool *pgxpo
 	return status
 }
 
-func loadOnetimesecretsTestStatusAndReadAt(t *testing.T, ctx context.Context, pool *pgxpool.Pool, secretID string) (string, *time.Time) {
+func loadSecrethideTestStatusAndReadAt(t *testing.T, ctx context.Context, pool *pgxpool.Pool, secretID string) (string, *time.Time) {
 	t.Helper()
 
 	var (
@@ -381,7 +460,7 @@ func loadOnetimesecretsTestStatusAndReadAt(t *testing.T, ctx context.Context, po
 	return status, readAt
 }
 
-func forceOnetimesecretsTestExpiry(t *testing.T, ctx context.Context, pool *pgxpool.Pool, secretID string) {
+func forceSecrethideTestExpiry(t *testing.T, ctx context.Context, pool *pgxpool.Pool, secretID string) {
 	t.Helper()
 
 	if _, err := pool.Exec(ctx, `UPDATE secrets SET expires_at = NOW() - INTERVAL '1 hour' WHERE id = $1`, secretID); err != nil {

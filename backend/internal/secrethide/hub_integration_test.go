@@ -1,4 +1,4 @@
-package onetimesecrets
+package secrethide
 
 import (
 	"context"
@@ -13,7 +13,7 @@ import (
 // hubSecretReadNotifier adapts *wsapi.Hub to this package's unexported
 // secretReadNotifier port by calling Hub.PublishToUser under the hood,
 // mirroring the adapter wired in cmd/api/main.go (Task 5.1). It lives here,
-// not in a non-test file, so onetimesecrets never imports websocket outside
+// not in a non-test file, so secrethide never imports websocket outside
 // of this integration-style test proving the wiring works end-to-end.
 type hubSecretReadNotifier struct {
 	hub *wsapi.Hub
@@ -34,8 +34,8 @@ func (n hubSecretReadNotifier) NotifySecretRead(ctx context.Context, creatorUser
 func TestBurnNotifiesCreatorOverHubWithoutAffectingWorkspaceMessages(t *testing.T) {
 	t.Parallel()
 
-	ctx, pool := openOnetimesecretsTestPool(t, "onetimesecrets_hub_integration_test")
-	userID := insertOnetimesecretsTestUser(t, ctx, pool, "creator-hub-integration@example.com")
+	ctx, pool := openSecrethideTestPool(t, "secrethide_hub_integration_test")
+	userID := insertSecrethideTestUser(t, ctx, pool, "creator-hub-integration@example.com")
 
 	hub := wsapi.NewHub()
 

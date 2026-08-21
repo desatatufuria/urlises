@@ -1,4 +1,4 @@
-package onetimesecrets
+package secrethide
 
 import (
 	"context"
@@ -47,7 +47,7 @@ func secretsPrincipal(userID string) func(http.Handler) http.Handler {
 
 func secretsHandlerTestMux(userID string, pool *pgxpool.Pool, notifier secretReadNotifier) *http.ServeMux {
 	mux := http.NewServeMux()
-	RegisterRoutes(mux, secretsPrincipal(userID), NewService(pool), notifier)
+	RegisterRoutes(mux, secretsPrincipal(userID), NewService(pool), notifier, nil)
 	return mux
 }
 
@@ -66,8 +66,8 @@ func countTestSecretRows(t *testing.T, ctx context.Context, pool *pgxpool.Pool) 
 func TestCreateSecretRejectsPlaintextField(t *testing.T) {
 	t.Parallel()
 
-	ctx, pool := openOnetimesecretsTestPool(t, "onetimesecrets_handler_plaintext_test")
-	userID := insertOnetimesecretsTestUser(t, ctx, pool, "creator-plaintext@example.com")
+	ctx, pool := openSecrethideTestPool(t, "secrethide_handler_plaintext_test")
+	userID := insertSecrethideTestUser(t, ctx, pool, "creator-plaintext@example.com")
 	mux := secretsHandlerTestMux(userID, pool, nil)
 
 	before := countTestSecretRows(t, ctx, pool)
@@ -87,8 +87,8 @@ func TestCreateSecretRejectsPlaintextField(t *testing.T) {
 func TestCreateSecretRejectsPassphraseField(t *testing.T) {
 	t.Parallel()
 
-	ctx, pool := openOnetimesecretsTestPool(t, "onetimesecrets_handler_passphrase_field_test")
-	userID := insertOnetimesecretsTestUser(t, ctx, pool, "creator-passphrase-field@example.com")
+	ctx, pool := openSecrethideTestPool(t, "secrethide_handler_passphrase_field_test")
+	userID := insertSecrethideTestUser(t, ctx, pool, "creator-passphrase-field@example.com")
 	mux := secretsHandlerTestMux(userID, pool, nil)
 
 	before := countTestSecretRows(t, ctx, pool)
@@ -108,8 +108,8 @@ func TestCreateSecretRejectsPassphraseField(t *testing.T) {
 func TestCreateSecretRejectsOversizedCiphertext(t *testing.T) {
 	t.Parallel()
 
-	ctx, pool := openOnetimesecretsTestPool(t, "onetimesecrets_handler_oversized_test")
-	userID := insertOnetimesecretsTestUser(t, ctx, pool, "creator-oversized@example.com")
+	ctx, pool := openSecrethideTestPool(t, "secrethide_handler_oversized_test")
+	userID := insertSecrethideTestUser(t, ctx, pool, "creator-oversized@example.com")
 	mux := secretsHandlerTestMux(userID, pool, nil)
 
 	before := countTestSecretRows(t, ctx, pool)
@@ -135,8 +135,8 @@ func TestCreateSecretRejectsOversizedCiphertext(t *testing.T) {
 func TestCreateSecretPersistsPassphraseFieldsVerbatim(t *testing.T) {
 	t.Parallel()
 
-	ctx, pool := openOnetimesecretsTestPool(t, "onetimesecrets_handler_verbatim_test")
-	userID := insertOnetimesecretsTestUser(t, ctx, pool, "creator-verbatim@example.com")
+	ctx, pool := openSecrethideTestPool(t, "secrethide_handler_verbatim_test")
+	userID := insertSecrethideTestUser(t, ctx, pool, "creator-verbatim@example.com")
 	mux := secretsHandlerTestMux(userID, pool, nil)
 
 	r := httptest.NewRequest(http.MethodPost, "/secrets", strings.NewReader(`{
@@ -182,7 +182,7 @@ func TestCreateSecretPersistsPassphraseFieldsVerbatim(t *testing.T) {
 func TestCreateSecretRequiresAuthentication(t *testing.T) {
 	t.Parallel()
 
-	ctx, pool := openOnetimesecretsTestPool(t, "onetimesecrets_handler_unauth_test")
+	ctx, pool := openSecrethideTestPool(t, "secrethide_handler_unauth_test")
 	mux := http.NewServeMux()
 	RegisterRoutes(mux, func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -190,7 +190,7 @@ func TestCreateSecretRequiresAuthentication(t *testing.T) {
 			// authMiddleware rejecting an unauthenticated caller.
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 		})
-	}, NewService(pool), nil)
+	}, NewService(pool), nil, nil)
 
 	before := countTestSecretRows(t, ctx, pool)
 	r := httptest.NewRequest(http.MethodPost, "/secrets", strings.NewReader(`{"ciphertext":"Y2lwaGVydGV4dA==","iv":"aXZieXRlcw=="}`))
@@ -210,8 +210,8 @@ func TestCreateSecretRequiresAuthentication(t *testing.T) {
 func TestGetSecretReturnsBlobWithoutBurningAndIsRepeatable(t *testing.T) {
 	t.Parallel()
 
-	ctx, pool := openOnetimesecretsTestPool(t, "onetimesecrets_handler_get_test")
-	userID := insertOnetimesecretsTestUser(t, ctx, pool, "creator-get@example.com")
+	ctx, pool := openSecrethideTestPool(t, "secrethide_handler_get_test")
+	userID := insertSecrethideTestUser(t, ctx, pool, "creator-get@example.com")
 	service := NewService(pool)
 	created, err := service.Create(ctx, userID, CreateSecretInput{Ciphertext: "Y2lwaGVydGV4dA==", IV: "aXZieXRlcw=="})
 	if err != nil {
@@ -240,7 +240,7 @@ func TestGetSecretReturnsBlobWithoutBurningAndIsRepeatable(t *testing.T) {
 		}
 	}
 
-	status := loadOnetimesecretsTestStatus(t, ctx, pool, created.ID)
+	status := loadSecrethideTestStatus(t, ctx, pool, created.ID)
 	if status != "pending" {
 		t.Fatalf("status after two GETs = %q, want pending (GET must never burn)", status)
 	}
@@ -249,7 +249,7 @@ func TestGetSecretReturnsBlobWithoutBurningAndIsRepeatable(t *testing.T) {
 func TestGetSecretUnknownTokenReturns404(t *testing.T) {
 	t.Parallel()
 
-	_, pool := openOnetimesecretsTestPool(t, "onetimesecrets_handler_get_unknown_test")
+	_, pool := openSecrethideTestPool(t, "secrethide_handler_get_unknown_test")
 	mux := secretsHandlerTestMux("irrelevant", pool, nil)
 
 	r := httptest.NewRequest(http.MethodGet, "/secrets/does-not-exist", nil)
@@ -264,14 +264,14 @@ func TestGetSecretUnknownTokenReturns404(t *testing.T) {
 func TestGetSecretExpiredTokenReturns410WithNoCiphertextBody(t *testing.T) {
 	t.Parallel()
 
-	ctx, pool := openOnetimesecretsTestPool(t, "onetimesecrets_handler_get_expired_test")
-	userID := insertOnetimesecretsTestUser(t, ctx, pool, "creator-get-expired@example.com")
+	ctx, pool := openSecrethideTestPool(t, "secrethide_handler_get_expired_test")
+	userID := insertSecrethideTestUser(t, ctx, pool, "creator-get-expired@example.com")
 	service := NewService(pool)
 	created, err := service.Create(ctx, userID, CreateSecretInput{Ciphertext: "Y2lwaGVydGV4dA==", IV: "aXZieXRlcw=="})
 	if err != nil {
 		t.Fatalf("create secret: %v", err)
 	}
-	forceOnetimesecretsTestExpiry(t, ctx, pool, created.ID)
+	forceSecrethideTestExpiry(t, ctx, pool, created.ID)
 
 	mux := secretsHandlerTestMux(userID, pool, nil)
 	r := httptest.NewRequest(http.MethodGet, "/secrets/"+created.Token, nil)
@@ -289,8 +289,8 @@ func TestGetSecretExpiredTokenReturns410WithNoCiphertextBody(t *testing.T) {
 func TestGetSecretAlreadyReadTokenReturns410(t *testing.T) {
 	t.Parallel()
 
-	ctx, pool := openOnetimesecretsTestPool(t, "onetimesecrets_handler_get_already_read_test")
-	userID := insertOnetimesecretsTestUser(t, ctx, pool, "creator-get-already-read@example.com")
+	ctx, pool := openSecrethideTestPool(t, "secrethide_handler_get_already_read_test")
+	userID := insertSecrethideTestUser(t, ctx, pool, "creator-get-already-read@example.com")
 	service := NewService(pool)
 	created, err := service.Create(ctx, userID, CreateSecretInput{Ciphertext: "Y2lwaGVydGV4dA==", IV: "aXZieXRlcw=="})
 	if err != nil {
@@ -315,8 +315,8 @@ func TestGetSecretAlreadyReadTokenReturns410(t *testing.T) {
 func TestBurnSecretAfterFetchSetsStatusRead(t *testing.T) {
 	t.Parallel()
 
-	ctx, pool := openOnetimesecretsTestPool(t, "onetimesecrets_handler_burn_test")
-	userID := insertOnetimesecretsTestUser(t, ctx, pool, "creator-handler-burn@example.com")
+	ctx, pool := openSecrethideTestPool(t, "secrethide_handler_burn_test")
+	userID := insertSecrethideTestUser(t, ctx, pool, "creator-handler-burn@example.com")
 	service := NewService(pool)
 	created, err := service.Create(ctx, userID, CreateSecretInput{Ciphertext: "Y2lwaGVydGV4dA==", IV: "aXZieXRlcw=="})
 	if err != nil {
@@ -340,7 +340,7 @@ func TestBurnSecretAfterFetchSetsStatusRead(t *testing.T) {
 		t.Fatalf("burn: status = %d, body=%s", burnResp.Code, burnResp.Body.String())
 	}
 
-	status := loadOnetimesecretsTestStatus(t, ctx, pool, created.ID)
+	status := loadSecrethideTestStatus(t, ctx, pool, created.ID)
 	if status != "read" {
 		t.Fatalf("status after burn = %q, want read", status)
 	}
@@ -352,8 +352,8 @@ func TestBurnSecretAfterFetchSetsStatusRead(t *testing.T) {
 func TestBurnSecretRepeatedCallIsIdempotentAndDoesNotChangeReadAt(t *testing.T) {
 	t.Parallel()
 
-	ctx, pool := openOnetimesecretsTestPool(t, "onetimesecrets_handler_burn_idempotent_test")
-	userID := insertOnetimesecretsTestUser(t, ctx, pool, "creator-handler-burn-idempotent@example.com")
+	ctx, pool := openSecrethideTestPool(t, "secrethide_handler_burn_idempotent_test")
+	userID := insertSecrethideTestUser(t, ctx, pool, "creator-handler-burn-idempotent@example.com")
 	service := NewService(pool)
 	created, err := service.Create(ctx, userID, CreateSecretInput{Ciphertext: "Y2lwaGVydGV4dA==", IV: "aXZieXRlcw=="})
 	if err != nil {
@@ -372,7 +372,7 @@ func TestBurnSecretRepeatedCallIsIdempotentAndDoesNotChangeReadAt(t *testing.T) 
 		}
 	}
 
-	_, readAt := loadOnetimesecretsTestStatusAndReadAt(t, ctx, pool, created.ID)
+	_, readAt := loadSecrethideTestStatusAndReadAt(t, ctx, pool, created.ID)
 	if readAt == nil {
 		t.Fatal("read_at is nil after burn, want non-nil")
 	}

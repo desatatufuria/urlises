@@ -1,4 +1,4 @@
-package onetimesecrets
+package secrethide
 
 import (
 	"context"
@@ -37,6 +37,7 @@ type routeService interface {
 	Create(ctx context.Context, userID string, input CreateSecretInput) (Secret, error)
 	Reveal(ctx context.Context, token string) (SecretBlob, error)
 	Burn(ctx context.Context, token string) (creatorUserID string, secretID string, alreadyRead bool, err error)
+	LoadOwned(ctx context.Context, token, userID string) (Secret, error)
 }
 
 // secretReadNotifier is a narrow, consumer-defined port so this package
@@ -61,10 +62,12 @@ func (NoopSecretReadNotifier) NotifySecretRead(context.Context, string, string) 
 }
 
 // RegisterRoutes wires the one-time-secrets endpoints onto mux. POST
-// /secrets runs behind authMiddleware; GET /secrets/{token} and POST
-// /secrets/{token}/burn are unauthenticated and rate-limited per IP. A nil
-// notifier is treated the same as NoopSecretReadNotifier.
-func RegisterRoutes(mux *http.ServeMux, authMiddleware func(http.Handler) http.Handler, service routeService, notifier secretReadNotifier) {
+// /secrets and POST /secrets/{token}/send-email run behind authMiddleware;
+// GET /secrets/{token} and POST /secrets/{token}/burn are unauthenticated
+// and rate-limited per IP. A nil notifier is treated the same as
+// NoopSecretReadNotifier. A nil linkMailer makes /send-email fail closed
+// with 503 rather than silently succeeding or panicking.
+func RegisterRoutes(mux *http.ServeMux, authMiddleware func(http.Handler) http.Handler, service routeService, notifier secretReadNotifier, linkMailer secretLinkMailer) {
 	limiter := httpapi.NewIPRateLimiter(30, 0.5)
 
 	mux.Handle("POST /secrets", authMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -112,6 +115,43 @@ func RegisterRoutes(mux *http.ServeMux, authMiddleware func(http.Handler) http.H
 			_ = http.NewResponseController(w).Flush()
 			_ = notifier.NotifySecretRead(context.WithoutCancel(r.Context()), creatorUserID, secretID)
 		}
+	})))
+
+	mux.Handle("POST /secrets/{token}/send-email", authMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		principal, ok := auth.PrincipalFromContext(r.Context())
+		if !ok {
+			httpapi.WriteError(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+
+		input, err := decodeSendSecretLinkInput(r)
+		if err != nil {
+			httpapi.WriteError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+
+		secret, err := service.LoadOwned(r.Context(), r.PathValue("token"), principal.UserID)
+		if err != nil {
+			writeSecretError(w, err)
+			return
+		}
+
+		if linkMailer == nil {
+			httpapi.WriteError(w, http.StatusServiceUnavailable, "email delivery unavailable")
+			return
+		}
+
+		if err := linkMailer.SendSecretLink(r.Context(), SecretLinkNotification{
+			SecretID:       secret.ID,
+			RecipientEmail: input.RecipientEmail,
+			Token:          secret.Token,
+			Fragment:       input.Fragment,
+		}); err != nil {
+			httpapi.WriteError(w, http.StatusBadGateway, "email delivery failed")
+			return
+		}
+
+		httpapi.WriteJSON(w, http.StatusOK, map[string]string{"status": "sent"})
 	})))
 }
 

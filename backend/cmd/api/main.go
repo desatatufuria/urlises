@@ -18,8 +18,8 @@ import (
 	"github.com/furia/shared-bookmark-sync/backend/internal/groups"
 	"github.com/furia/shared-bookmark-sync/backend/internal/httpapi"
 	"github.com/furia/shared-bookmark-sync/backend/internal/mailer"
-	"github.com/furia/shared-bookmark-sync/backend/internal/onetimesecrets"
 	"github.com/furia/shared-bookmark-sync/backend/internal/organizations"
+	"github.com/furia/shared-bookmark-sync/backend/internal/secrethide"
 	syncapi "github.com/furia/shared-bookmark-sync/backend/internal/sync"
 	wsapi "github.com/furia/shared-bookmark-sync/backend/internal/websocket"
 	"github.com/furia/shared-bookmark-sync/backend/internal/workspaces"
@@ -55,7 +55,7 @@ func (a invitationValidatorAdapter) ValidatePendingInvitation(ctx context.Contex
 	return a.service.ValidatePendingInvitation(ctx, token, email)
 }
 
-// hubSecretReadNotifierAdapter adapts *wsapi.Hub to onetimesecrets'
+// hubSecretReadNotifierAdapter adapts *wsapi.Hub to secrethide's
 // unexported secretReadNotifier port so the handler package never depends
 // on internal/websocket directly, mirroring invitationAccepterAdapter's
 // shape above. It calls Hub.PublishToUser under the hood, addressing the
@@ -99,8 +99,9 @@ func main() {
 	organizationsService := organizations.NewService(pool)
 	authService := auth.NewService(pool, cfg.Auth,
 		auth.WithRegistrationLock(cfg.App.OpenRegistrationEnabled, invitationValidatorAdapter{service: organizationsService}))
-	invitationMailer := mailer.NewSMTP(cfg.Mail)
-	invitationNotifier := organizations.NewMailInvitationNotifier(invitationMailer, cfg.App.PublicBaseURL, os.Stdout)
+	smtpMailer := mailer.NewSMTP(cfg.Mail)
+	invitationNotifier := organizations.NewMailInvitationNotifier(smtpMailer, cfg.App.PublicBaseURL, os.Stdout)
+	secretLinkMailer := secrethide.NewMailSecretLinkMailer(smtpMailer, cfg.App.PublicBaseURL, os.Stdout)
 	groupsService := groups.NewService(pool)
 	workspacesService := workspaces.NewService(pool, accessService)
 	idempotencyExecutor := httpapi.NewIdempotencyExecutor(pool)
@@ -121,7 +122,7 @@ func main() {
 	bookmarksService := bookmarks.NewService(pool, accessService)
 	websocketHub := wsapi.NewHub()
 	syncService := syncapi.NewService(syncapi.NewPostgresStore(pool, bookmarksService, workspacesService, websocketHub))
-	onetimesecretsService := onetimesecrets.NewService(pool)
+	secrethideService := secrethide.NewService(pool)
 
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		httpapi.WriteJSON(w, http.StatusOK, map[string]string{
@@ -155,7 +156,7 @@ func main() {
 	syncapi.RegisterBookmarkRoutes(mux, authService.Middleware, syncService, idempotencyExecutor)
 	syncapi.RegisterRoutes(mux, authService.Middleware, syncService)
 	wsapi.RegisterRoutes(mux, authService, workspacesService, syncService, websocketHub)
-	onetimesecrets.RegisterRoutes(mux, authService.Middleware, onetimesecretsService, hubSecretReadNotifierAdapter{hub: websocketHub})
+	secrethide.RegisterRoutes(mux, authService.Middleware, secrethideService, hubSecretReadNotifierAdapter{hub: websocketHub}, secretLinkMailer)
 
 	server := &http.Server{
 		Addr:              cfg.Server.Addr,

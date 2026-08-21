@@ -2,7 +2,7 @@
 
 ## Intent
 
-Users have no way to share a one-time secret (credential, token, note) with another account without sending plaintext through chat/email that then sits in history forever. Add a OneTimeSecret-style, zero-knowledge sharing flow: the extension encrypts client-side, the server stores only ciphertext it can never read, and the recipient's browser decrypts via a link. Fills a real gap — this codebase has no ephemeral, self-destructing sharing primitive today.
+Users have no way to share a one-time secret (credential, token, note) with another account without sending plaintext through chat/email that then sits in history forever. Add a self-destructing link-based, zero-knowledge sharing flow: the extension encrypts client-side, the server stores only ciphertext it can never read, and the recipient's browser decrypts via a link. Fills a real gap — this codebase has no ephemeral, self-destructing sharing primitive today.
 
 ## Proposal Question Round
 
@@ -15,7 +15,7 @@ Automatic mode — no interactive round was possible this turn. Open items below
 ## Scope
 
 ### In Scope
-- `backend/internal/onetimesecrets/`: create (authenticated), public reveal-fetch (no burn), public burn/confirm (client-asserted), TTL expiry, `expires_at NOT NULL`.
+- `backend/internal/secrethide/`: create (authenticated), public reveal-fetch (no burn), public burn/confirm (client-asserted), TTL expiry, `expires_at NOT NULL`.
 - Client-side AES-256-GCM encryption; optional passphrase wraps the content key via PBKDF2-SHA256 (≥210,000 iterations, per-secret salt) — server never sees plaintext, key, or passphrase.
 - New public admin-web route (`/s/:token`) — first unauthenticated resource-disclosure route in this codebase.
 - Extension: create-secret UI + read-confirmation surfacing.
@@ -45,7 +45,7 @@ Backend mirrors `organizations`' service/handler shape and reuses `generateInvit
 
 | Area | Impact | Description |
 |---|---|---|
-| `backend/internal/onetimesecrets/` | New | Service, handler, token/TTL logic |
+| `backend/internal/secrethide/` | New | Service, handler, token/TTL logic |
 | `backend/migrations/` | New | `secrets` table, `expires_at NOT NULL` |
 | `backend/internal/websocket/hub.go` | Modified | `byUser` index, `PublishToUser` |
 | `backend/internal/httpapi/` | New | IP rate-limit middleware (public routes only) |
@@ -56,7 +56,7 @@ Backend mirrors `organizations`' service/handler shape and reuses `generateInvit
 
 | Risk | Likelihood | Mitigation |
 |---|---|---|
-| Client-asserted burn lets anyone with the link burn before the recipient reads | High (by design) | Accepted risk, stated explicitly — matches real OneTimeSecret behavior |
+| Client-asserted burn lets anyone with the link burn before the recipient reads | High (by design) | Accepted risk, stated explicitly — matches the standard behavior of this class of self-destructing link-based secret-sharing tools |
 | Fragment-key leakage (logging, referrers, history) | Medium | Design phase: hard rule never to log/transmit full URL with fragment |
 | Hub change touches shared, tested infra (`hub_test.go`) | Medium | Additive `byUser` index alongside existing `byWorkspace`, keep tests green |
 | No rate-limiting precedent to build on | Medium | Minimal scoped IP limiter, new but narrow surface |
