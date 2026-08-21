@@ -159,14 +159,16 @@ func (s *Service) Reveal(ctx context.Context, token string) (SecretBlob, error) 
 	return blob, nil
 }
 
-// Burn marks token's secret as read and returns the creator's user ID.
-// Repeated calls after the first success are a no-op: alreadyRead is true
-// and the original read_at is left untouched (so a caller never
-// double-notifies the creator).
-func (s *Service) Burn(ctx context.Context, token string) (creatorUserID string, alreadyRead bool, err error) {
+// Burn marks token's secret as read and returns the creator's user ID and
+// the secret's own ID (needed by the handler's post-burn notify call, which
+// identifies the secret without ever transmitting its token). Repeated
+// calls after the first success are a no-op: alreadyRead is true and the
+// original read_at is left untouched (so a caller never double-notifies
+// the creator).
+func (s *Service) Burn(ctx context.Context, token string) (creatorUserID string, secretID string, alreadyRead bool, err error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
-		return "", false, fmt.Errorf("begin burn tx: %w", err)
+		return "", "", false, fmt.Errorf("begin burn tx: %w", err)
 	}
 	defer tx.Rollback(ctx)
 
@@ -184,20 +186,20 @@ func (s *Service) Burn(ctx context.Context, token string) (creatorUserID string,
 	`, token).Scan(&id, &userID, &status, &expiresAt)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return "", false, ErrNotFound
+			return "", "", false, ErrNotFound
 		}
-		return "", false, fmt.Errorf("load secret for burn: %w", err)
+		return "", "", false, fmt.Errorf("load secret for burn: %w", err)
 	}
 
 	if status == "read" {
 		if err := tx.Commit(ctx); err != nil {
-			return "", false, fmt.Errorf("commit burn tx: %w", err)
+			return "", "", false, fmt.Errorf("commit burn tx: %w", err)
 		}
-		return userID, true, nil
+		return userID, id, true, nil
 	}
 
 	if time.Now().UTC().After(expiresAt) {
-		return "", false, ErrGone
+		return "", "", false, ErrGone
 	}
 
 	if _, err := tx.Exec(ctx, `
@@ -205,14 +207,14 @@ func (s *Service) Burn(ctx context.Context, token string) (creatorUserID string,
 		SET status = 'read', read_at = NOW()
 		WHERE id = $1
 	`, id); err != nil {
-		return "", false, fmt.Errorf("burn secret: %w", err)
+		return "", "", false, fmt.Errorf("burn secret: %w", err)
 	}
 
 	if err := tx.Commit(ctx); err != nil {
-		return "", false, fmt.Errorf("commit burn tx: %w", err)
+		return "", "", false, fmt.Errorf("commit burn tx: %w", err)
 	}
 
-	return userID, false, nil
+	return userID, id, false, nil
 }
 
 // resolveTTL applies the default/clamp rules: nil or non-positive
