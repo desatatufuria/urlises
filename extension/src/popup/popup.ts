@@ -2,16 +2,15 @@ import { DEFAULT_BACKEND_URL } from "../shared/runtime.js";
 import { getPopupStatusModel } from "../shared/ui/status.js";
 import type { ExtensionState, LoginRequest, UiState } from "../shared/types.js";
 import { nextAdvancedToggleState } from "./advanced-toggle.js";
+import { shouldShowStatusDetail } from "./status-detail.js";
 
 const signedOut = document.querySelector<HTMLElement>("#signed-out")!;
 const signedIn = document.querySelector<HTMLElement>("#signed-in")!;
 const errorNode = document.querySelector<HTMLElement>("#error")!;
 const sessionSummary = document.querySelector<HTMLElement>("#session-summary")!;
-const workspaceSummary = document.querySelector<HTMLElement>("#workspace-summary")!;
-const statusHeadline = document.querySelector<HTMLElement>("#status-headline")!;
 const statusDetail = document.querySelector<HTMLElement>("#status-detail")!;
 const statusIndicators = document.querySelector<HTMLElement>("#status-indicators")!;
-const workspaceMetrics = document.querySelector<HTMLElement>("#workspace-metrics")!;
+const lastActivity = document.querySelector<HTMLElement>("#last-activity")!;
 const recentActivitySection = document.querySelector<HTMLElement>("#recent-activity")!;
 const recentActivityList = document.querySelector<HTMLElement>("#recent-activity-list")!;
 
@@ -78,25 +77,22 @@ function render(ui: UiState): void {
 
   if (!state.session) {
     sessionSummary.textContent = "";
-    workspaceSummary.textContent = "";
-    statusHeadline.textContent = "";
     statusDetail.textContent = "";
+    statusDetail.classList.add("hidden");
+    lastActivity.textContent = "";
+    lastActivity.classList.add("hidden");
     statusIndicators.replaceChildren();
-    workspaceMetrics.replaceChildren();
     recentActivitySection.classList.add("hidden");
     recentActivityList.replaceChildren();
     return;
   }
 
-  const selectedCount = state.selectedWorkspaceIds.length;
   sessionSummary.textContent = `${state.session.user.email} • ${state.settings.backendUrl}`;
-  workspaceSummary.textContent = selectedCount === 0
-    ? "No workspaces selected yet. Use Settings to choose the scope."
-    : `${selectedCount} workspace${selectedCount === 1 ? "" : "s"} selected.`;
-  statusHeadline.textContent = statusModel.headline;
-  statusDetail.textContent = statusModel.detail;
+  const showDetail = shouldShowStatusDetail(statusModel.tone);
+  statusDetail.textContent = showDetail ? statusModel.detail : "";
+  statusDetail.classList.toggle("hidden", !showDetail);
   renderIndicators(statusModel);
-  renderMetrics(statusModel);
+  renderLastActivity(statusModel);
   renderRecentActivity(statusModel);
   acknowledgeActivityIfNeeded(state);
 }
@@ -112,26 +108,19 @@ function clearError(): void {
 function renderIndicators(model: ReturnType<typeof getPopupStatusModel>): void {
   statusIndicators.replaceChildren();
   statusIndicators.appendChild(createPill(model.statusLabel, model.tone));
-  if (model.showOnline) {
-    statusIndicators.appendChild(createIndicator("Online", "ui-indicator-dot"));
-  }
   if (model.showNewActivity) {
     statusIndicators.appendChild(createIndicator("New updates", "ui-activity-dot", true));
   }
-  if (model.lastActivityLabel) {
-    const meta = document.createElement("span");
-    meta.className = "ui-muted";
-    meta.textContent = `Last activity ${model.lastActivityLabel}`;
-    statusIndicators.appendChild(meta);
-  }
 }
 
-function renderMetrics(model: ReturnType<typeof getPopupStatusModel>): void {
-  workspaceMetrics.replaceChildren(
-    createMetric(String(model.selectedWorkspaceCount), "Selected"),
-    createMetric(String(model.liveWorkspaceCount), "Live"),
-    createMetric(String(model.degradedWorkspaceCount), "Needs attention"),
-  );
+function renderLastActivity(model: ReturnType<typeof getPopupStatusModel>): void {
+  if (!model.lastActivityLabel) {
+    lastActivity.textContent = "";
+    lastActivity.classList.add("hidden");
+    return;
+  }
+  lastActivity.textContent = `Last activity ${model.lastActivityLabel}`;
+  lastActivity.classList.remove("hidden");
 }
 
 function renderRecentActivity(model: ReturnType<typeof getPopupStatusModel>): void {
@@ -174,18 +163,6 @@ function createIndicator(label: string, dotClassName: string, activity = false):
   dot.className = dotClassName;
   indicator.append(dot, document.createTextNode(label));
   return indicator;
-}
-
-function createMetric(value: string, label: string): HTMLElement {
-  const metric = document.createElement("div");
-  metric.className = "ui-kpi";
-  const strong = document.createElement("strong");
-  strong.textContent = value;
-  const copy = document.createElement("span");
-  copy.className = "ui-muted";
-  copy.textContent = label;
-  metric.append(strong, copy);
-  return metric;
 }
 
 function sendMessage<T>(message: { type: string; payload?: unknown }): Promise<T> {

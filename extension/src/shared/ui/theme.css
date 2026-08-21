@@ -328,26 +328,6 @@ small {
   line-height: 1.5;
 }
 
-.ui-kpi-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
-  gap: var(--ui-space-2);
-}
-
-.ui-kpi {
-  padding: 12px;
-  border-radius: var(--ui-radius-md);
-  background: rgba(24, 24, 32, 0.62);
-  border: 1px solid rgba(114, 124, 163, 0.18);
-}
-
-.ui-kpi strong {
-  display: block;
-  color: var(--ui-text-strong);
-  font-size: 20px;
-  margin-bottom: 4px;
-}
-
 .ui-stat-strip {
   display: flex;
   flex-wrap: wrap;

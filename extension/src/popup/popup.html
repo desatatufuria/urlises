@@ -41,23 +41,11 @@
     </section>
 
     <section id="signed-in" class="ui-grid hidden">
-      <section class="ui-surface ui-panel ui-grid">
-        <div class="ui-status-row">
-          <span class="ui-eyebrow">Session ready</span>
-          <div id="status-indicators" class="ui-inline-list"></div>
-        </div>
-        <div class="ui-grid ui-grid--compact">
-          <div id="session-summary" class="ui-card-copy"></div>
-          <div id="workspace-summary" class="ui-card-copy"></div>
-        </div>
-        <div class="ui-kpi-grid" id="workspace-metrics"></div>
-      </section>
-
-      <section class="ui-surface ui-panel ui-grid">
-        <div class="ui-grid ui-grid--compact">
-          <h2 id="status-headline" class="ui-card-title"></h2>
-          <p id="status-detail" class="ui-card-copy"></p>
-        </div>
+      <section class="ui-surface ui-panel ui-grid ui-grid--compact">
+        <div id="status-indicators" class="ui-status-row"></div>
+        <p id="last-activity" class="ui-muted hidden"></p>
+        <p id="status-detail" class="ui-card-copy hidden"></p>
+        <div id="session-summary" class="ui-card-copy"></div>
         <div class="ui-actions">
           <button id="open-options" class="ui-button-primary" type="button">Open settings</button>
           <button id="logout" class="ui-button-secondary" type="button">Sign out</button>
