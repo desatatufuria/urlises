@@ -227,6 +227,12 @@ small {
   gap: var(--ui-space-2);
 }
 
+.ui-actions input {
+  flex: 1;
+  min-width: 0;
+  width: auto;
+}
+
 .ui-button-primary {
   background: linear-gradient(135deg, #7e9cd8 0%, #6a7fb8 100%);
   color: #11111a;

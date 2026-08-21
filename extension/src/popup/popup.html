@@ -79,7 +79,10 @@
           </form>
           <div id="secret-link-result" class="ui-grid ui-grid--compact hidden">
             <p class="ui-card-copy">Share this link — it can only be opened once.</p>
-            <input id="secret-link-output" class="ui-copy" type="text" readonly />
+            <div class="ui-actions">
+              <input id="secret-link-output" class="ui-copy" type="text" readonly />
+              <button id="copy-secret-link" class="ui-button-secondary" type="button">Copy</button>
+            </div>
           </div>
           <p id="secret-create-error" class="ui-error" role="alert"></p>
         </div>

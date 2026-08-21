@@ -31,6 +31,7 @@ const secretContentInput = document.querySelector<HTMLTextAreaElement>("#secret-
 const secretPassphraseInput = document.querySelector<HTMLInputElement>("#secret-passphrase")!;
 const secretLinkResult = document.querySelector<HTMLElement>("#secret-link-result")!;
 const secretLinkOutput = document.querySelector<HTMLInputElement>("#secret-link-output")!;
+const copySecretLinkButton = document.querySelector<HTMLButtonElement>("#copy-secret-link")!;
 const secretCreateError = document.querySelector<HTMLElement>("#secret-create-error")!;
 
 let lastAcknowledgedRevision = 0;
@@ -68,6 +69,10 @@ toggleCreateSecretButton.addEventListener("click", () => {
 createSecretForm.addEventListener("submit", (event) => {
   event.preventDefault();
   void runCreateSecret().catch(showSecretCreateError);
+});
+
+copySecretLinkButton.addEventListener("click", () => {
+  void copySecretLink();
 });
 
 void bootstrap().catch(showError);
@@ -133,6 +138,26 @@ function renderSecretLink(token: string, publicBaseUrl: string, fragmentKey?: st
   const link = `${publicBaseUrl}/s/${token}${fragmentKey ? `#k=${encodeURIComponent(fragmentKey)}` : ""}`;
   secretLinkOutput.value = link;
   secretLinkResult.classList.remove("hidden");
+  copySecretLinkButton.textContent = "Copy";
+}
+
+async function copySecretLink(): Promise<void> {
+  const link = secretLinkOutput.value;
+  if (!link) {
+    return;
+  }
+
+  try {
+    await navigator.clipboard.writeText(link);
+  } catch {
+    secretLinkOutput.select();
+    document.execCommand("copy");
+  }
+
+  copySecretLinkButton.textContent = "Copied";
+  setTimeout(() => {
+    copySecretLinkButton.textContent = "Copy";
+  }, 2000);
 }
 
 function showSecretCreateError(error: unknown): void {
