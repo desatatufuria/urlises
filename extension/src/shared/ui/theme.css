@@ -19,80 +19,72 @@
   --ui-transition: 140ms ease;
 
   /* Default (unset data-theme, e.g. before the theme loads) falls back to
-     Slate Professional so there is no flash of unstyled color. */
-  --ui-bg: #14161c;
-  --ui-bg-elevated: rgba(26, 29, 38, 0.92);
-  --ui-bg-soft: rgba(38, 42, 54, 0.74);
-  --ui-surface-border: rgba(124, 132, 150, 0.22);
-  --ui-text: #c7cbd6;
-  --ui-text-muted: #7d8496;
-  --ui-text-strong: #f1f3f8;
-  --ui-accent: #6c8ef2;
-  --ui-accent-soft: rgba(108, 142, 242, 0.18);
+     Ink so there is no flash of unstyled color. */
+  --ui-bg: #101215;
+  --ui-bg-elevated: #181a1e;
+  --ui-bg-soft: #1d2024;
+  --ui-surface-border: rgba(255, 255, 255, 0.08);
+  --ui-text: #c9ced6;
+  --ui-text-muted: #8b939c;
+  --ui-text-strong: #f6f7f8;
+  --ui-accent: #3e5468;
+  --ui-accent-rgb: 62, 84, 104;
+  --ui-accent-ink: #eef2f5;
+  --ui-accent-soft: rgba(62, 84, 104, 0.22);
   --ui-success: #4fb787;
-  --ui-warning: #e0a940;
-  --ui-danger: #e5484d;
-  --ui-bg-gradient:
-    radial-gradient(circle at top, rgba(108, 142, 242, 0.16), transparent 36%),
-    radial-gradient(circle at 80% 0%, rgba(229, 72, 77, 0.1), transparent 28%),
-    linear-gradient(180deg, #14161c 0%, #1a1d26 100%);
+  --ui-warning: #d9a544;
+  --ui-danger: #e0575c;
 }
 
 :root[data-theme="slate"] {
-  --ui-bg: #14161c;
-  --ui-bg-elevated: rgba(26, 29, 38, 0.92);
-  --ui-bg-soft: rgba(38, 42, 54, 0.74);
-  --ui-surface-border: rgba(124, 132, 150, 0.22);
-  --ui-text: #c7cbd6;
-  --ui-text-muted: #7d8496;
-  --ui-text-strong: #f1f3f8;
-  --ui-accent: #6c8ef2;
-  --ui-accent-soft: rgba(108, 142, 242, 0.18);
+  --ui-bg: #101215;
+  --ui-bg-elevated: #181a1e;
+  --ui-bg-soft: #1d2024;
+  --ui-surface-border: rgba(255, 255, 255, 0.08);
+  --ui-text: #c9ced6;
+  --ui-text-muted: #8b939c;
+  --ui-text-strong: #f6f7f8;
+  --ui-accent: #3e5468;
+  --ui-accent-rgb: 62, 84, 104;
+  --ui-accent-ink: #eef2f5;
+  --ui-accent-soft: rgba(62, 84, 104, 0.22);
   --ui-success: #4fb787;
-  --ui-warning: #e0a940;
-  --ui-danger: #e5484d;
-  --ui-bg-gradient:
-    radial-gradient(circle at top, rgba(108, 142, 242, 0.16), transparent 36%),
-    radial-gradient(circle at 80% 0%, rgba(229, 72, 77, 0.1), transparent 28%),
-    linear-gradient(180deg, #14161c 0%, #1a1d26 100%);
+  --ui-warning: #d9a544;
+  --ui-danger: #e0575c;
 }
 
 :root[data-theme="indigo"] {
-  --ui-bg: #0e0f1a;
-  --ui-bg-elevated: rgba(22, 23, 38, 0.92);
-  --ui-bg-soft: rgba(32, 34, 54, 0.74);
-  --ui-surface-border: rgba(124, 127, 240, 0.18);
-  --ui-text: #cdd1e6;
-  --ui-text-muted: #7f83a3;
-  --ui-text-strong: #f4f5fb;
-  --ui-accent: #7c7ff0;
-  --ui-accent-soft: rgba(124, 127, 240, 0.18);
-  --ui-success: #45b88a;
-  --ui-warning: #d99a3e;
-  --ui-danger: #ea5262;
-  --ui-bg-gradient:
-    radial-gradient(circle at top, rgba(124, 127, 240, 0.16), transparent 36%),
-    radial-gradient(circle at 80% 0%, rgba(234, 82, 98, 0.1), transparent 28%),
-    linear-gradient(180deg, #0e0f1a 0%, #14151f 100%);
+  --ui-bg: #171512;
+  --ui-bg-elevated: #201d18;
+  --ui-bg-soft: #241f19;
+  --ui-surface-border: rgba(255, 255, 255, 0.07);
+  --ui-text: #d6cec2;
+  --ui-text-muted: #948d82;
+  --ui-text-strong: #f0ebe1;
+  --ui-accent: #b08d57;
+  --ui-accent-rgb: 176, 141, 87;
+  --ui-accent-ink: #1c1611;
+  --ui-accent-soft: rgba(176, 141, 87, 0.2);
+  --ui-success: #4fb787;
+  --ui-warning: #d9a544;
+  --ui-danger: #e0575c;
 }
 
 :root[data-theme="teal"] {
-  --ui-bg: #14181a;
-  --ui-bg-elevated: rgba(24, 30, 32, 0.92);
-  --ui-bg-soft: rgba(34, 42, 44, 0.74);
-  --ui-surface-border: rgba(122, 138, 142, 0.22);
-  --ui-text: #c4cdd0;
-  --ui-text-muted: #7a8a8e;
-  --ui-text-strong: #eef4f5;
-  --ui-accent: #3fb5b0;
-  --ui-accent-soft: rgba(63, 181, 176, 0.18);
-  --ui-success: #5cb583;
+  --ui-bg: #17120f;
+  --ui-bg-elevated: #201a16;
+  --ui-bg-soft: #241d18;
+  --ui-surface-border: rgba(255, 255, 255, 0.07);
+  --ui-text: #ded4cf;
+  --ui-text-muted: #a1938e;
+  --ui-text-strong: #f1e8e2;
+  --ui-accent: #9c4a44;
+  --ui-accent-rgb: 156, 74, 68;
+  --ui-accent-ink: #fbeeec;
+  --ui-accent-soft: rgba(156, 74, 68, 0.2);
+  --ui-success: #4fb787;
   --ui-warning: #d9a544;
-  --ui-danger: #e0555a;
-  --ui-bg-gradient:
-    radial-gradient(circle at top, rgba(63, 181, 176, 0.16), transparent 36%),
-    radial-gradient(circle at 80% 0%, rgba(224, 85, 90, 0.1), transparent 28%),
-    linear-gradient(180deg, #14181a 0%, #1a2022 100%);
+  --ui-danger: #e0575c;
 }
 
 * {
@@ -107,7 +99,7 @@ body {
 
 body {
   font-family: var(--ui-font-stack);
-  background: var(--ui-bg-gradient);
+  background: var(--ui-bg);
   color: var(--ui-text);
 }
 
@@ -164,8 +156,8 @@ input:focus,
 select:focus,
 textarea:focus {
   outline: none;
-  border-color: rgba(126, 156, 216, 0.78);
-  box-shadow: 0 0 0 3px rgba(126, 156, 216, 0.18);
+  border-color: rgba(var(--ui-accent-rgb), 0.78);
+  box-shadow: 0 0 0 3px rgba(var(--ui-accent-rgb), 0.18);
 }
 
 .ui-shell {
@@ -227,7 +219,6 @@ small {
   border: 1px solid var(--ui-surface-border);
   border-radius: var(--ui-radius-lg);
   box-shadow: var(--ui-shadow);
-  backdrop-filter: blur(16px);
 }
 
 .ui-surface--soft {
@@ -277,8 +268,8 @@ small {
 }
 
 .ui-button-primary {
-  background: linear-gradient(135deg, #7e9cd8 0%, #6a7fb8 100%);
-  color: #11111a;
+  background: var(--ui-accent);
+  color: var(--ui-accent-ink);
 }
 
 .ui-button-secondary {
@@ -335,8 +326,8 @@ small {
 
 .ui-pill--activity {
   background: var(--ui-accent-soft);
-  border-color: rgba(126, 156, 216, 0.28);
-  color: #c8d4f0;
+  border-color: rgba(var(--ui-accent-rgb), 0.32);
+  color: var(--ui-text-strong);
 }
 
 .ui-indicator {
@@ -362,7 +353,7 @@ small {
 
 .ui-activity-dot {
   background: var(--ui-accent);
-  box-shadow: 0 0 0 4px rgba(126, 156, 216, 0.16);
+  box-shadow: 0 0 0 4px rgba(var(--ui-accent-rgb), 0.2);
 }
 
 .ui-card-title,
@@ -427,7 +418,7 @@ small {
 
 .ui-banner--attention {
   border-color: rgba(195, 64, 67, 0.32);
-  background: linear-gradient(180deg, rgba(109, 41, 50, 0.34) 0%, rgba(31, 31, 40, 0.92) 100%);
+  background: rgba(224, 87, 92, 0.14);
 }
 
 .ui-card--workspace {
@@ -448,7 +439,7 @@ small {
 
 .ui-card--degraded {
   border-color: rgba(195, 64, 67, 0.3);
-  background: linear-gradient(180deg, rgba(109, 41, 50, 0.24) 0%, rgba(31, 31, 40, 0.94) 100%);
+  background: rgba(224, 87, 92, 0.1);
 }
 
 .ui-form {

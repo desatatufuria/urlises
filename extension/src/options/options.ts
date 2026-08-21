@@ -21,9 +21,9 @@ const logPanel = document.querySelector<HTMLElement>("#log-panel")!;
 let lastAcknowledgedRevision = 0;
 
 const THEME_OPTIONS: Array<{ value: UITheme; label: string; background: string; accent: string }> = [
-  { value: "slate", label: "Slate Professional", background: "#14161c", accent: "#6c8ef2" },
-  { value: "indigo", label: "Deep Indigo", background: "#0e0f1a", accent: "#7c7ff0" },
-  { value: "teal", label: "Graphite & Teal", background: "#14181a", accent: "#3fb5b0" },
+  { value: "slate", label: "Ink", background: "#101215", accent: "#3e5468" },
+  { value: "indigo", label: "Champagne", background: "#171512", accent: "#b08d57" },
+  { value: "teal", label: "Oxblood", background: "#17120f", accent: "#9c4a44" },
 ];
 
 document.querySelector<HTMLButtonElement>("#save-selection")!.addEventListener("click", () => {
