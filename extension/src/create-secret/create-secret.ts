@@ -28,6 +28,7 @@ const secretCreateError = document.querySelector<HTMLElement>("#secret-create-er
 const secretLinkResult = document.querySelector<HTMLElement>("#secret-link-result")!;
 const secretLinkOutput = document.querySelector<HTMLInputElement>("#secret-link-output")!;
 const copySecretLinkButton = document.querySelector<HTMLButtonElement>("#copy-secret-link")!;
+const createAnotherSecretButton = document.querySelector<HTMLButtonElement>("#create-another-secret")!;
 
 const sendEmailForm = document.querySelector<HTMLFormElement>("#send-email-form")!;
 const recipientEmailInput = document.querySelector<HTMLInputElement>("#recipient-email")!;
@@ -52,6 +53,10 @@ copySecretLinkButton.addEventListener("click", () => {
 sendEmailForm.addEventListener("submit", (event) => {
   event.preventDefault();
   void runSendSecretEmail().catch(showSendEmailError);
+});
+
+createAnotherSecretButton.addEventListener("click", () => {
+  resetToCreateForm();
 });
 
 renderContentLimitHint();
@@ -129,6 +134,17 @@ async function runCreateSecret(): Promise<void> {
   clearSendEmailFeedback();
   createSecretForm.reset();
   renderContentLimitHint();
+  createFormSection.classList.add("hidden");
+}
+
+function resetToCreateForm(): void {
+  createdToken = undefined;
+  createdFragmentKey = undefined;
+  secretLinkResult.classList.add("hidden");
+  clearSendEmailFeedback();
+  clearSecretCreateError();
+  createFormSection.classList.remove("hidden");
+  secretContentInput.focus();
 }
 
 function buildFragment(fragmentKey?: string): string | undefined {
