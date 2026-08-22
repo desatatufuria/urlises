@@ -137,7 +137,7 @@ func TestListByOrganizationRejectsNonAdmin(t *testing.T) {
 	organizationID := insertActivityTestOrganization(t, ctx, pool, "NonAdmin Co")
 	insertActivityTestMember(t, ctx, pool, organizationID, memberID, "member")
 
-	_, _, err := service.ListByOrganization(ctx, memberID, organizationID, "", 50)
+	_, _, err := service.ListByOrganization(ctx, memberID, organizationID, "", 50, CategoryAll)
 	if err == nil {
 		t.Fatal("expected non-admin ListByOrganization to be rejected")
 	}
@@ -158,7 +158,7 @@ func TestListByOrganizationAdminSeesRows(t *testing.T) {
 
 	insertActivityTestEvent(t, ctx, pool, organizationID, adminID, KindGroupCreated, "group", "group-a", time.Now().UTC().Add(-time.Minute))
 
-	events, _, err := service.ListByOrganization(ctx, adminID, organizationID, "", 50)
+	events, _, err := service.ListByOrganization(ctx, adminID, organizationID, "", 50, CategoryAll)
 	if err != nil {
 		t.Fatalf("ListByOrganization: %v", err)
 	}
@@ -184,7 +184,7 @@ func TestListByOrganizationOnlyReturnsRowsForRequestedOrg(t *testing.T) {
 	insertActivityTestEvent(t, ctx, pool, orgA, adminID, KindGroupCreated, "group", "org-a-group", time.Now().UTC())
 	insertActivityTestEvent(t, ctx, pool, orgB, adminID, KindGroupCreated, "group", "org-b-group", time.Now().UTC())
 
-	events, _, err := service.ListByOrganization(ctx, adminID, orgA, "", 50)
+	events, _, err := service.ListByOrganization(ctx, adminID, orgA, "", 50, CategoryAll)
 	if err != nil {
 		t.Fatalf("ListByOrganization: %v", err)
 	}
@@ -212,7 +212,7 @@ func TestListByOrganizationFirstPageCappedOrderedNewestFirst(t *testing.T) {
 			fmt.Sprintf("group-%d", i), base.Add(time.Duration(i)*time.Minute))
 	}
 
-	events, nextCursor, err := service.ListByOrganization(ctx, adminID, organizationID, "", 2)
+	events, nextCursor, err := service.ListByOrganization(ctx, adminID, organizationID, "", 2, CategoryAll)
 	if err != nil {
 		t.Fatalf("ListByOrganization: %v", err)
 	}
@@ -244,7 +244,7 @@ func TestListByOrganizationCursorAdvancesWithoutDuplicatesOrGaps(t *testing.T) {
 	insertActivityTestEvent(t, ctx, pool, organizationID, adminID, KindGroupCreated, "group", "tie-2", tie)
 	insertActivityTestEvent(t, ctx, pool, organizationID, adminID, KindGroupCreated, "group", "newest", tie.Add(time.Minute))
 
-	page1, cursor1, err := service.ListByOrganization(ctx, adminID, organizationID, "", 2)
+	page1, cursor1, err := service.ListByOrganization(ctx, adminID, organizationID, "", 2, CategoryAll)
 	if err != nil {
 		t.Fatalf("ListByOrganization page1: %v", err)
 	}
@@ -255,7 +255,7 @@ func TestListByOrganizationCursorAdvancesWithoutDuplicatesOrGaps(t *testing.T) {
 		t.Fatal("cursor1 is empty, want a non-empty cursor since a third row remains")
 	}
 
-	page2, cursor2, err := service.ListByOrganization(ctx, adminID, organizationID, cursor1, 2)
+	page2, cursor2, err := service.ListByOrganization(ctx, adminID, organizationID, cursor1, 2, CategoryAll)
 	if err != nil {
 		t.Fatalf("ListByOrganization page2: %v", err)
 	}
@@ -297,7 +297,7 @@ func TestListByOrganizationLimitClampsToValidRange(t *testing.T) {
 	}
 
 	// limit <= 0 must clamp up to at least 1, never an unbounded/zero-row query.
-	events, _, err := service.ListByOrganization(ctx, adminID, organizationID, "", 0)
+	events, _, err := service.ListByOrganization(ctx, adminID, organizationID, "", 0, CategoryAll)
 	if err != nil {
 		t.Fatalf("ListByOrganization limit=0: %v", err)
 	}
@@ -308,7 +308,7 @@ func TestListByOrganizationLimitClampsToValidRange(t *testing.T) {
 	// limit above the max (100) must clamp down, not return everything
 	// unbounded; with only 3 rows this proves the cap didn't error or drop
 	// legitimate rows below the actual count.
-	events, _, err = service.ListByOrganization(ctx, adminID, organizationID, "", 1000)
+	events, _, err = service.ListByOrganization(ctx, adminID, organizationID, "", 1000, CategoryAll)
 	if err != nil {
 		t.Fatalf("ListByOrganization limit=1000: %v", err)
 	}
@@ -329,7 +329,7 @@ func TestListByOrganizationFirstPageWithNoCursorWorks(t *testing.T) {
 
 	insertActivityTestEvent(t, ctx, pool, organizationID, adminID, KindGroupCreated, "group", "only-row", time.Now().UTC())
 
-	events, nextCursor, err := service.ListByOrganization(ctx, adminID, organizationID, "", 50)
+	events, nextCursor, err := service.ListByOrganization(ctx, adminID, organizationID, "", 50, CategoryAll)
 	if err != nil {
 		t.Fatalf("ListByOrganization: %v", err)
 	}
@@ -338,6 +338,104 @@ func TestListByOrganizationFirstPageWithNoCursorWorks(t *testing.T) {
 	}
 	if nextCursor != "" {
 		t.Fatalf("nextCursor = %q, want empty (no further page)", nextCursor)
+	}
+}
+
+func TestListByOrganizationCategoryFilterThreeStates(t *testing.T) {
+	t.Parallel()
+
+	ctx, pool := openActivityTestPool(t, "activity_list_category_filter_test")
+	service := NewService(pool)
+
+	adminID := insertActivityTestUser(t, ctx, pool, "admin-category-filter@example.com")
+	organizationID := insertActivityTestOrganization(t, ctx, pool, "Category Filter Co")
+	insertActivityTestMember(t, ctx, pool, organizationID, adminID, "admin")
+
+	base := time.Now().UTC().Add(-time.Hour)
+	insertActivityTestEvent(t, ctx, pool, organizationID, adminID, KindOrganizationCreated, "organization", "admin-row", base)
+	insertActivityTestEvent(t, ctx, pool, organizationID, adminID, KindBookmarkCreated, "bookmark", "bookmark-row", base.Add(time.Minute))
+	insertActivityTestEvent(t, ctx, pool, organizationID, adminID, KindFolderCreated, "folder", "folder-row", base.Add(2*time.Minute))
+	// future.something matches neither "bookmark." nor "folder." -- it must
+	// land in the administrative result by negation (Decision 9), even
+	// though no real Kind constant for it exists.
+	insertActivityTestEvent(t, ctx, pool, organizationID, adminID, Kind("future.something"), "misc", "future-row", base.Add(3*time.Minute))
+
+	all, _, err := service.ListByOrganization(ctx, adminID, organizationID, "", 50, CategoryAll)
+	if err != nil {
+		t.Fatalf("ListByOrganization category=all: %v", err)
+	}
+	if len(all) != 4 {
+		t.Fatalf("len(all) = %d, want 4 (every seeded row)", len(all))
+	}
+
+	bookmarks, _, err := service.ListByOrganization(ctx, adminID, organizationID, "", 50, CategoryBookmarks)
+	if err != nil {
+		t.Fatalf("ListByOrganization category=bookmarks: %v", err)
+	}
+	if len(bookmarks) != 2 {
+		t.Fatalf("len(bookmarks) = %d, want 2 (bookmark-row, folder-row)", len(bookmarks))
+	}
+	gotBookmarkTargets := map[string]bool{}
+	for _, e := range bookmarks {
+		gotBookmarkTargets[e.TargetID] = true
+	}
+	if !gotBookmarkTargets["bookmark-row"] || !gotBookmarkTargets["folder-row"] {
+		t.Fatalf("bookmarks targets = %v, want bookmark-row and folder-row", gotBookmarkTargets)
+	}
+
+	administrative, _, err := service.ListByOrganization(ctx, adminID, organizationID, "", 50, CategoryAdministrative)
+	if err != nil {
+		t.Fatalf("ListByOrganization category=administrative: %v", err)
+	}
+	if len(administrative) != 2 {
+		t.Fatalf("len(administrative) = %d, want 2 (admin-row, future-row)", len(administrative))
+	}
+	gotAdminTargets := map[string]bool{}
+	for _, e := range administrative {
+		gotAdminTargets[e.TargetID] = true
+	}
+	if !gotAdminTargets["admin-row"] || !gotAdminTargets["future-row"] {
+		t.Fatalf("administrative targets = %v, want admin-row and future-row (negation must catch the unclassified kind)", gotAdminTargets)
+	}
+}
+
+func TestListByOrganizationFilteredPaginationStaysWithinCategory(t *testing.T) {
+	t.Parallel()
+
+	ctx, pool := openActivityTestPool(t, "activity_list_filtered_pagination_test")
+	service := NewService(pool)
+
+	adminID := insertActivityTestUser(t, ctx, pool, "admin-filtered-pagination@example.com")
+	organizationID := insertActivityTestOrganization(t, ctx, pool, "Filtered Pagination Co")
+	insertActivityTestMember(t, ctx, pool, organizationID, adminID, "admin")
+
+	base := time.Now().UTC().Add(-time.Hour)
+	// Interleave administrative and bookmark rows newest-first: admin, bookmark, admin, bookmark.
+	insertActivityTestEvent(t, ctx, pool, organizationID, adminID, KindOrganizationCreated, "organization", "admin-older", base)
+	insertActivityTestEvent(t, ctx, pool, organizationID, adminID, KindBookmarkCreated, "bookmark", "bookmark-older", base.Add(time.Minute))
+	insertActivityTestEvent(t, ctx, pool, organizationID, adminID, KindOrganizationCreated, "organization", "admin-newer", base.Add(2*time.Minute))
+	insertActivityTestEvent(t, ctx, pool, organizationID, adminID, KindBookmarkCreated, "bookmark", "bookmark-newer", base.Add(3*time.Minute))
+
+	page1, cursor1, err := service.ListByOrganization(ctx, adminID, organizationID, "", 1, CategoryBookmarks)
+	if err != nil {
+		t.Fatalf("ListByOrganization page1: %v", err)
+	}
+	if len(page1) != 1 || page1[0].TargetID != "bookmark-newer" {
+		t.Fatalf("page1 = %+v, want a single bookmark-newer event (newest bookmark row)", page1)
+	}
+	if cursor1 == "" {
+		t.Fatal("cursor1 is empty, want a non-empty cursor since another bookmark row remains")
+	}
+
+	page2, cursor2, err := service.ListByOrganization(ctx, adminID, organizationID, cursor1, 1, CategoryBookmarks)
+	if err != nil {
+		t.Fatalf("ListByOrganization page2: %v", err)
+	}
+	if len(page2) != 1 || page2[0].TargetID != "bookmark-older" {
+		t.Fatalf("page2 = %+v, want a single bookmark-older event -- the admin-newer row between them must never surface", page2)
+	}
+	if cursor2 != "" {
+		t.Fatalf("cursor2 = %q, want empty (no further bookmark page)", cursor2)
 	}
 }
 

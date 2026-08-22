@@ -23,7 +23,7 @@ const defaultListLimit = 50
 // matching groups.routeService's / workspaces.routeService's narrow,
 // handler-local interface pattern.
 type routeService interface {
-	ListByOrganization(ctx context.Context, requesterUserID, organizationID, cursor string, limit int) ([]Event, string, error)
+	ListByOrganization(ctx context.Context, requesterUserID, organizationID, cursor string, limit int, category Category) ([]Event, string, error)
 }
 
 // RegisterRoutes registers the activity feed's single read-only,
@@ -38,8 +38,9 @@ func RegisterRoutes(mux *http.ServeMux, authMiddleware func(http.Handler) http.H
 
 		limit := parseListLimit(r.URL.Query().Get("limit"))
 		cursor := r.URL.Query().Get("cursor")
+		category := parseCategory(r.URL.Query().Get("category"))
 
-		events, nextCursor, err := service.ListByOrganization(r.Context(), principal.UserID, r.PathValue("organizationId"), cursor, limit)
+		events, nextCursor, err := service.ListByOrganization(r.Context(), principal.UserID, r.PathValue("organizationId"), cursor, limit, category)
 		if err != nil {
 			writeActivityError(w, err)
 			return
@@ -66,6 +67,23 @@ func parseListLimit(raw string) int {
 	}
 
 	return parsed
+}
+
+// parseCategory mirrors parseListLimit's forgiving style: absent, blank, or
+// unrecognised -> CategoryAll. Case- and whitespace-insensitive. A category
+// filter is a read-only convenience, never a validation gate, so an unknown
+// value must never fail the request -- it must fall back to the unfiltered
+// view (design.md: "a forgiving read filter must not break a bookmarked
+// admin URL").
+func parseCategory(raw string) Category {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case string(CategoryAdministrative):
+		return CategoryAdministrative
+	case string(CategoryBookmarks):
+		return CategoryBookmarks
+	default:
+		return CategoryAll
+	}
 }
 
 // writeActivityError maps a ListByOrganization error to the correct HTTP
