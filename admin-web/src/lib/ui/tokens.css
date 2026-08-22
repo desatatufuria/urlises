@@ -76,7 +76,7 @@ a { color: inherit; text-decoration: none; }
 .ui-nav { display: flex; align-items: stretch; gap: .25rem; }
 .ui-nav__link { padding: .4rem .55rem; color: var(--ui-muted); border-bottom: 2px solid transparent; font-size: .88rem; }
 .ui-nav__link:hover, .ui-nav__link--active { color: var(--ui-ink); border-bottom-color: var(--ui-accent); }
-.ui-inline-grid { display: grid; gap: 1rem; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.ui-inline-grid { display: grid; gap: 1rem; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; }
 .ui-inline-grid--actions { align-items: end; }
 .ui-split-layout { display: grid; gap: 1.5rem; }
 .ui-table-wrap { overflow-x: auto; border-top: 1px solid var(--ui-rule); }
