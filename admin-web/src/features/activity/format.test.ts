@@ -84,6 +84,20 @@ describe("formatActivityEvent", () => {
     ).toBe('Created the workspace "Launch Room" (shared).');
   });
 
+  it("workspace.deleted", () => {
+    expect(
+      formatActivityEvent(
+        event({ kind: "workspace.deleted", metadata: { workspaceName: "Launch Room", workspaceType: "shared" } }),
+      ),
+    ).toBe('Deleted the workspace "Launch Room".');
+  });
+
+  it("workspace.deleted with missing metadata degrades to a placeholder", () => {
+    expect(formatActivityEvent(event({ kind: "workspace.deleted", metadata: {} }))).toBe(
+      'Deleted the workspace "".',
+    );
+  });
+
   it("workspace_access.user_granted", () => {
     expect(
       formatActivityEvent(

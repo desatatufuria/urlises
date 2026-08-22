@@ -29,6 +29,8 @@ export function formatActivityEvent(event: ActivityEvent): string {
       return `Removed ${m.targetEmail ?? "a member"} (was ${m.previousRole ?? "?"}) from the organization.`;
     case "workspace.created":
       return `Created the workspace "${m.workspaceName ?? ""}" (${m.workspaceType ?? "unknown type"}).`;
+    case "workspace.deleted":
+      return `Deleted the workspace "${m.workspaceName ?? ""}".`;
     case "workspace_access.user_granted":
       return `Granted ${m.role ?? "?"} access to a user on workspace ${m.workspaceId ?? "?"}.`;
     case "workspace_access.user_revoked":
