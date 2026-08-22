@@ -168,6 +168,32 @@ describe("formatActivityEvent", () => {
     );
   });
 
+  it("organization.restored", () => {
+    expect(
+      formatActivityEvent(event({ kind: "organization.restored", metadata: { organizationName: "Acme" } })),
+    ).toBe('Restored the organization "Acme".');
+  });
+
+  it("organization.restored with missing metadata degrades to a placeholder", () => {
+    expect(formatActivityEvent(event({ kind: "organization.restored", metadata: {} }))).toBe(
+      'Restored the organization "".',
+    );
+  });
+
+  it("workspace.restored", () => {
+    expect(
+      formatActivityEvent(
+        event({ kind: "workspace.restored", metadata: { workspaceName: "Launch Room", workspaceType: "shared" } }),
+      ),
+    ).toBe('Restored the workspace "Launch Room".');
+  });
+
+  it("workspace.restored with missing metadata degrades to a placeholder", () => {
+    expect(formatActivityEvent(event({ kind: "workspace.restored", metadata: {} }))).toBe(
+      'Restored the workspace "".',
+    );
+  });
+
   it("degrades gracefully with missing metadata instead of rendering undefined", () => {
     const message = formatActivityEvent(event({ kind: "organization.created", metadata: {} }));
     expect(message).not.toContain("undefined");

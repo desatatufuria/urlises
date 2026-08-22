@@ -1,5 +1,5 @@
 import { apiRequest, newIdempotencyKey } from "./client";
-import type { OrganizationMember, OrganizationMembership, OrganizationRole, PendingInvitation } from "./types";
+import type { DeletedOrganization, OrganizationMember, OrganizationMembership, OrganizationRole, PendingInvitation } from "./types";
 
 interface RawInvitation {
   id: string;
@@ -81,6 +81,18 @@ export function deleteOrganization(token: string, organizationId: string) {
     method: "DELETE",
     token,
   });
+}
+
+export function restoreOrganization(token: string, organizationId: string) {
+  return apiRequest<void>(`/organizations/${organizationId}/restore`, {
+    method: "POST",
+    token,
+  });
+}
+
+export async function listDeletedOrganizations(token: string) {
+  const response = await apiRequest<{ organizations: DeletedOrganization[] }>("/organizations/deleted", { token });
+  return response.organizations;
 }
 
 export function patchOrganizationMember(

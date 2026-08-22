@@ -122,3 +122,30 @@ export interface WorkspaceAccessSnapshot {
   groupGrants: WorkspaceGroupGrant[];
   effectiveAccess: EffectiveWorkspaceUserAccess[];
 }
+
+// DeletedOrganization mirrors backend/internal/organizations/service.go's
+// DeletedOrganization struct JSON tags verbatim (checked, not guessed).
+// deletedByEmail is omitempty on the wire, so it is absent (undefined) or
+// null depending on how deleted_by_user_id resolved -- callers must treat
+// both the same way.
+export interface DeletedOrganization {
+  organizationId: string;
+  organizationName: string;
+  role: OrganizationRole;
+  deletedAt: string;
+  deletedByEmail?: string | null;
+  purgeAt: string;
+}
+
+// DeletedWorkspace mirrors backend/internal/workspaces/service.go's
+// DeletedWorkspace struct JSON tags verbatim.
+export interface DeletedWorkspace {
+  workspaceId: string;
+  workspaceName: string;
+  workspaceType: string;
+  organizationId: string;
+  organizationName: string;
+  deletedAt: string;
+  deletedByEmail?: string | null;
+  purgeAt: string;
+}

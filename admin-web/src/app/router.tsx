@@ -13,6 +13,7 @@ import { StateHome } from "../features/home/StateHome";
 import { AccountPage } from "../features/account/AccountPage";
 import { LoginPage } from "./views/LoginPage";
 import { OrganizationSetupPage } from "./views/OrganizationSetupPage";
+import { TrashPage } from "../features/trash/TrashPage";
 import { OrganizationCreatePage } from "./views/OrganizationCreatePage";
 import { RegisterPage } from "./views/RegisterPage";
 import { InvitationAcceptPage } from "./views/InvitationAcceptPage";
@@ -92,6 +93,15 @@ export const appRoutes: RouteObject[] = [
       {
         path: "setup/organization",
         element: <OrganizationSetupPage />,
+      },
+      {
+        // Sibling of setup/organization, deliberately NOT nested inside
+        // RequireAdminOrganization/AdminLayout below (see design.md's
+        // resolved Open Question): both of TrashPage's queries are
+        // requester-scoped, not active-organization-scoped, so a user with
+        // zero live organizations must still be able to reach /trash.
+        path: "trash",
+        element: <TrashPage />,
       },
       {
         element: <RequireAdminOrganization />,

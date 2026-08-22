@@ -1,5 +1,5 @@
 import { apiRequest, newIdempotencyKey } from "./client";
-import type { WorkspaceAccessSnapshot, WorkspaceSummary, WorkspaceRole } from "./types";
+import type { DeletedWorkspace, WorkspaceAccessSnapshot, WorkspaceSummary, WorkspaceRole } from "./types";
 
 export async function listWorkspaces(token: string, organizationId: string) {
   const response = await apiRequest<{ workspaces: WorkspaceSummary[] }>(`/organizations/${organizationId}/workspaces`, { token });
@@ -54,4 +54,16 @@ export function deleteWorkspace(token: string, workspaceId: string) {
     method: "DELETE",
     token,
   });
+}
+
+export function restoreWorkspace(token: string, workspaceId: string) {
+  return apiRequest<void>(`/workspaces/${workspaceId}/restore`, {
+    method: "POST",
+    token,
+  });
+}
+
+export async function listDeletedWorkspaces(token: string) {
+  const response = await apiRequest<{ workspaces: DeletedWorkspace[] }>("/workspaces/deleted", { token });
+  return response.workspaces;
 }
