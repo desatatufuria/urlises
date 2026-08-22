@@ -8,6 +8,7 @@ import { GroupsPage } from "../features/groups/GroupsPage";
 import { MembersPage } from "../features/members/MembersPage";
 import { WorkspacesPage } from "../features/workspaces/WorkspacesPage";
 import { SecretsPage } from "../features/secret-history/SecretsPage";
+import { ActivityPage } from "../features/activity/ActivityPage";
 import { StateHome } from "../features/home/StateHome";
 import { LoginPage } from "./views/LoginPage";
 import { OrganizationSetupPage } from "./views/OrganizationSetupPage";
@@ -115,6 +116,10 @@ export const appRoutes: RouteObject[] = [
               {
                 path: "access",
                 element: <AccessPage />,
+              },
+              {
+                path: "activity",
+                element: <ActivityPage />,
               },
               {
                 path: "secrets",
