@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/furia/shared-bookmark-sync/backend/internal/activity"
 	"github.com/furia/shared-bookmark-sync/backend/internal/database"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -17,7 +18,7 @@ func TestCreateOrganizationBootstrapsCreatorAsOwner(t *testing.T) {
 	t.Parallel()
 
 	ctx, pool := openOrganizationsTestPool(t, "organizations_test")
-	service := NewService(pool)
+	service := NewService(pool, activity.NewService(pool))
 	userID := insertOrganizationsTestUser(t, ctx, pool, "creator@example.com")
 
 	membership, err := service.CreateOrganization(ctx, userID, CreateOrganizationInput{Name: "OdA Core"})
@@ -49,7 +50,7 @@ func TestPatchMemberRejectsRemovingLastOwner(t *testing.T) {
 	t.Parallel()
 
 	ctx, pool := openOrganizationsTestPool(t, "organizations_test")
-	service := NewService(pool)
+	service := NewService(pool, activity.NewService(pool))
 	ownerID := insertOrganizationsTestUser(t, ctx, pool, "owner@example.com")
 	organizationID := insertOrganizationsTestOrganization(t, ctx, pool, "Only Owner Org")
 	insertOrganizationsTestMember(t, ctx, pool, organizationID, ownerID, "owner")
@@ -75,7 +76,7 @@ func TestCreateInvitationSetsExpiryAndInviterContext(t *testing.T) {
 	t.Parallel()
 
 	ctx, pool := openOrganizationsTestPool(t, "organizations_invite_expiry_test")
-	service := NewService(pool)
+	service := NewService(pool, activity.NewService(pool))
 	adminID := insertOrganizationsTestUser(t, ctx, pool, "admin@example.com")
 	organizationID := insertOrganizationsTestOrganization(t, ctx, pool, "Acme Corp")
 	insertOrganizationsTestMember(t, ctx, pool, organizationID, adminID, "admin")
@@ -118,7 +119,7 @@ func TestCreateInvitationInviterNamePopulatedWhenPresent(t *testing.T) {
 	t.Parallel()
 
 	ctx, pool := openOrganizationsTestPool(t, "organizations_invite_expiry_test")
-	service := NewService(pool)
+	service := NewService(pool, activity.NewService(pool))
 	organizationID := insertOrganizationsTestOrganization(t, ctx, pool, "Beta Org")
 
 	var adminID string
@@ -141,6 +142,65 @@ func TestCreateInvitationInviterNamePopulatedWhenPresent(t *testing.T) {
 	if created.InviterName != "Ada Lovelace" {
 		t.Fatalf("InviterName = %q, want %q", created.InviterName, "Ada Lovelace")
 	}
+}
+
+// Phase 3: Organizations Wiring — RED: CreateOrganizationTx (invoked via
+// CreateOrganization's begin/commit wrapper) records a KindOrganizationCreated
+// event scoped to the newly created organization, atomic with the commit.
+func TestCreateOrganizationRecordsActivityEvent(t *testing.T) {
+	t.Parallel()
+
+	ctx, pool := openOrganizationsTestPool(t, "organizations_activity_create_test")
+	service := NewService(pool, activity.NewService(pool))
+	userID := insertOrganizationsTestUser(t, ctx, pool, "creator-activity@example.com")
+
+	membership, err := service.CreateOrganization(ctx, userID, CreateOrganizationInput{Name: "Activity Org"})
+	if err != nil {
+		t.Fatalf("create organization: %v", err)
+	}
+
+	assertOrganizationsTestActivityEvent(t, ctx, pool, membership.OrganizationID, userID, activity.KindOrganizationCreated, "organization", membership.OrganizationID)
+}
+
+// Phase 3: Organizations Wiring — RED: PatchMember's role-change branch
+// records a KindOrganizationMemberRoleChanged event.
+func TestPatchMemberRoleChangeRecordsActivityEvent(t *testing.T) {
+	t.Parallel()
+
+	ctx, pool := openOrganizationsTestPool(t, "organizations_activity_role_test")
+	service := NewService(pool, activity.NewService(pool))
+	ownerID := insertOrganizationsTestUser(t, ctx, pool, "role-activity-owner@example.com")
+	memberID := insertOrganizationsTestUser(t, ctx, pool, "role-activity-member@example.com")
+	organizationID := insertOrganizationsTestOrganization(t, ctx, pool, "Activity Role Org")
+	insertOrganizationsTestMember(t, ctx, pool, organizationID, ownerID, "owner")
+	insertOrganizationsTestMember(t, ctx, pool, organizationID, memberID, "member")
+
+	adminRole := "admin"
+	if _, err := service.PatchMember(ctx, ownerID, organizationID, PatchMemberInput{UserID: memberID, Role: &adminRole}); err != nil {
+		t.Fatalf("patch member role: %v", err)
+	}
+
+	assertOrganizationsTestActivityEvent(t, ctx, pool, organizationID, ownerID, activity.KindOrganizationMemberRoleChanged, "organization_member", memberID)
+}
+
+// Phase 3: Organizations Wiring — RED: PatchMember's remove branch records a
+// KindOrganizationMemberRemoved event.
+func TestPatchMemberRemovalRecordsActivityEvent(t *testing.T) {
+	t.Parallel()
+
+	ctx, pool := openOrganizationsTestPool(t, "organizations_activity_remove_test")
+	service := NewService(pool, activity.NewService(pool))
+	ownerID := insertOrganizationsTestUser(t, ctx, pool, "remove-activity-owner@example.com")
+	memberID := insertOrganizationsTestUser(t, ctx, pool, "remove-activity-member@example.com")
+	organizationID := insertOrganizationsTestOrganization(t, ctx, pool, "Activity Remove Org")
+	insertOrganizationsTestMember(t, ctx, pool, organizationID, ownerID, "owner")
+	insertOrganizationsTestMember(t, ctx, pool, organizationID, memberID, "member")
+
+	if _, err := service.PatchMember(ctx, ownerID, organizationID, PatchMemberInput{UserID: memberID, Remove: true}); err != nil {
+		t.Fatalf("remove member: %v", err)
+	}
+
+	assertOrganizationsTestActivityEvent(t, ctx, pool, organizationID, ownerID, activity.KindOrganizationMemberRemoved, "organization_member", memberID)
 }
 
 func openOrganizationsTestPool(t *testing.T, prefix string) (context.Context, *pgxpool.Pool) {
@@ -255,4 +315,25 @@ func loadOrganizationsTestMemberRole(t *testing.T, ctx context.Context, pool *pg
 	}
 
 	return role
+}
+
+// assertOrganizationsTestActivityEvent asserts exactly one activity_events
+// row exists matching the given organization/actor/kind/target, per the
+// design's Call-Site Wiring table for organizations/service.go.
+func assertOrganizationsTestActivityEvent(t *testing.T, ctx context.Context, pool *pgxpool.Pool, organizationID, actorUserID string, kind activity.Kind, targetType, targetID string) {
+	t.Helper()
+
+	var count int
+	err := pool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM activity_events
+		WHERE organization_id = $1 AND actor_user_id = $2 AND kind = $3 AND target_type = $4 AND target_id = $5
+	`, organizationID, actorUserID, string(kind), targetType, targetID).Scan(&count)
+	if err != nil {
+		t.Fatalf("count activity events: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("activity event count = %d, want 1 (organizationId=%s actorUserId=%s kind=%s targetType=%s targetId=%s)",
+			count, organizationID, actorUserID, kind, targetType, targetID)
+	}
 }

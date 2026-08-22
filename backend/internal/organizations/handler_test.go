@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/furia/shared-bookmark-sync/backend/internal/activity"
 	"github.com/furia/shared-bookmark-sync/backend/internal/auth"
 	"github.com/furia/shared-bookmark-sync/backend/internal/config"
 	"github.com/furia/shared-bookmark-sync/backend/internal/httpapi"
@@ -155,7 +156,7 @@ func invitationHandlerTestMux(userID string, pool *pgxpool.Pool, notifier invita
 		})
 	}
 	executor := httpapi.NewIdempotencyExecutor(pool)
-	RegisterRoutes(mux, authn, NewService(pool), notifier, executor)
+	RegisterRoutes(mux, authn, NewService(pool, activity.NewService(pool)), notifier, executor)
 	return mux
 }
 
@@ -368,7 +369,7 @@ func TestResendInvitationRouteRejectsNonPending(t *testing.T) {
 	organizationID := insertOrganizationsTestOrganization(t, ctx, pool, "Resend Route Org 2")
 	insertOrganizationsTestMember(t, ctx, pool, organizationID, adminID, "admin")
 
-	service := NewService(pool)
+	service := NewService(pool, activity.NewService(pool))
 	created, err := service.CreateInvitation(ctx, adminID, organizationID, CreateInvitationInput{Email: "resend-invitee2@example.com", Role: "member"})
 	if err != nil {
 		t.Fatalf("create invitation: %v", err)
@@ -401,7 +402,7 @@ func TestResendInvitationRouteRequiresAdmin(t *testing.T) {
 	insertOrganizationsTestMember(t, ctx, pool, organizationID, adminID, "admin")
 	insertOrganizationsTestMember(t, ctx, pool, organizationID, memberID, "member")
 
-	service := NewService(pool)
+	service := NewService(pool, activity.NewService(pool))
 	created, err := service.CreateInvitation(ctx, adminID, organizationID, CreateInvitationInput{Email: "resend-target3@example.com", Role: "member"})
 	if err != nil {
 		t.Fatalf("create invitation: %v", err)

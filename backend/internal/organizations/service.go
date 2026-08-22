@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/furia/shared-bookmark-sync/backend/internal/access"
+	"github.com/furia/shared-bookmark-sync/backend/internal/activity"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -34,7 +35,8 @@ type dbQuerier interface {
 }
 
 type Service struct {
-	pool *pgxpool.Pool
+	pool     *pgxpool.Pool
+	activity *activity.Service
 }
 
 type Membership struct {
@@ -126,8 +128,8 @@ type invitationRecord struct {
 	UpdatedAt        string
 }
 
-func NewService(pool *pgxpool.Pool) *Service {
-	return &Service{pool: pool}
+func NewService(pool *pgxpool.Pool, activityService *activity.Service) *Service {
+	return &Service{pool: pool, activity: activityService}
 }
 
 func (s *Service) ListMemberships(ctx context.Context, userID string) ([]Membership, error) {
@@ -203,6 +205,13 @@ func (s *Service) CreateOrganizationTx(ctx context.Context, tx pgx.Tx, userID st
 	if err != nil {
 		return Membership{}, fmt.Errorf("create organization: %w", err)
 	}
+
+	if err := s.activity.Record(ctx, tx, membership.OrganizationID, userID, activity.KindOrganizationCreated, "organization", membership.OrganizationID, map[string]any{
+		"organizationName": membership.OrganizationName,
+	}); err != nil {
+		return Membership{}, fmt.Errorf("record organization created activity: %w", err)
+	}
+
 	return membership, nil
 }
 
@@ -328,6 +337,12 @@ func (s *Service) PatchMember(ctx context.Context, requesterUserID, organization
 		`, organizationID, userID); err != nil {
 			return OrganizationMember{}, fmt.Errorf("delete organization member: %w", err)
 		}
+		if err := s.activity.Record(ctx, tx, organizationID, requesterUserID, activity.KindOrganizationMemberRemoved, "organization_member", userID, map[string]any{
+			"targetEmail":  currentMember.Email,
+			"previousRole": string(currentRole),
+		}); err != nil {
+			return OrganizationMember{}, fmt.Errorf("record organization member removed activity: %w", err)
+		}
 		if err := tx.Commit(ctx); err != nil {
 			return OrganizationMember{}, fmt.Errorf("commit remove member tx: %w", err)
 		}
@@ -342,6 +357,14 @@ func (s *Service) PatchMember(ctx context.Context, requesterUserID, organization
 	updatedMember, err := updateOrganizationMemberRole(ctx, tx, organizationID, userID, nextRole)
 	if err != nil {
 		return OrganizationMember{}, err
+	}
+
+	if err := s.activity.Record(ctx, tx, organizationID, requesterUserID, activity.KindOrganizationMemberRoleChanged, "organization_member", userID, map[string]any{
+		"role":         string(nextRole),
+		"previousRole": string(currentRole),
+		"targetEmail":  currentMember.Email,
+	}); err != nil {
+		return OrganizationMember{}, fmt.Errorf("record organization member role changed activity: %w", err)
 	}
 
 	if err := tx.Commit(ctx); err != nil {
@@ -467,6 +490,13 @@ func (s *Service) CreateInvitationTx(ctx context.Context, tx pgx.Tx, requesterUs
 		return InvitationCreation{}, fmt.Errorf("load invitation context: %w", err)
 	}
 
+	if err := s.activity.Record(ctx, tx, organizationID, requesterUserID, activity.KindInvitationCreated, "invitation", invitation.ID, map[string]any{
+		"email": invitation.Email,
+		"role":  invitation.Role,
+	}); err != nil {
+		return InvitationCreation{}, fmt.Errorf("record invitation created activity: %w", err)
+	}
+
 	return InvitationCreation{
 		Invitation:       invitation,
 		OrganizationName: organizationName,
@@ -548,6 +578,12 @@ func (s *Service) ResendInvitation(ctx context.Context, requesterUserID, organiz
 			return InvitationCreation{}, ErrNotFound
 		}
 		return InvitationCreation{}, fmt.Errorf("load resend invitation context: %w", err)
+	}
+
+	if err := s.activity.Record(ctx, tx, organizationID, requesterUserID, activity.KindInvitationResent, "invitation", invitation.ID, map[string]any{
+		"email": invitation.Email,
+	}); err != nil {
+		return InvitationCreation{}, fmt.Errorf("record invitation resent activity: %w", err)
 	}
 
 	if err := tx.Commit(ctx); err != nil {
@@ -663,6 +699,13 @@ func (s *Service) AcceptInvitation(ctx context.Context, userID, token string) (A
 		WHERE id = $1
 	`, record.ID, userID); err != nil {
 		return AcceptedInvitation{}, fmt.Errorf("mark invitation accepted: %w", err)
+	}
+
+	if err := s.activity.Record(ctx, tx, record.OrganizationID, userID, activity.KindInvitationAccepted, "invitation", record.ID, map[string]any{
+		"email": record.Email,
+		"role":  string(record.Role),
+	}); err != nil {
+		return AcceptedInvitation{}, fmt.Errorf("record invitation accepted activity: %w", err)
 	}
 
 	if err := tx.Commit(ctx); err != nil {
