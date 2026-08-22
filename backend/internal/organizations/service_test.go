@@ -203,6 +203,149 @@ func TestPatchMemberRemovalRecordsActivityEvent(t *testing.T) {
 	assertOrganizationsTestActivityEvent(t, ctx, pool, organizationID, ownerID, activity.KindOrganizationMemberRemoved, "organization_member", memberID)
 }
 
+// Phase 2 (Slice 2): Cancel Pending Invitation — RED: the happy path
+// transitions a pending invitation to cancelled and records an
+// invitation.cancelled activity row, atomic with the status change.
+func TestCancelInvitationTransitionsPendingToCancelledAndRecordsActivity(t *testing.T) {
+	t.Parallel()
+
+	ctx, pool := openOrganizationsTestPool(t, "organizations_cancel_invite_test")
+	service := NewService(pool, activity.NewService(pool))
+	adminID := insertOrganizationsTestUser(t, ctx, pool, "cancel-admin@example.com")
+	organizationID := insertOrganizationsTestOrganization(t, ctx, pool, "Cancel Invite Org")
+	insertOrganizationsTestMember(t, ctx, pool, organizationID, adminID, "admin")
+	invitationID := insertOrganizationsTestInvitation(t, ctx, pool, organizationID, "invitee@example.com", "member", "pending", adminID, "cancel-token-1")
+
+	if err := service.CancelInvitation(ctx, adminID, organizationID, invitationID); err != nil {
+		t.Fatalf("cancel invitation: %v", err)
+	}
+
+	status := loadOrganizationsTestInvitationStatus(t, ctx, pool, invitationID)
+	if status != "cancelled" {
+		t.Fatalf("invitation status = %q, want cancelled", status)
+	}
+
+	assertOrganizationsTestActivityEvent(t, ctx, pool, organizationID, adminID, activity.KindInvitationCancelled, "invitation", invitationID)
+}
+
+// Phase 2 (Slice 2) — RED: a non-admin member is forbidden from cancelling,
+// and the invitation status is left untouched.
+func TestCancelInvitationRequiresAdmin(t *testing.T) {
+	t.Parallel()
+
+	ctx, pool := openOrganizationsTestPool(t, "organizations_cancel_invite_test")
+	service := NewService(pool, activity.NewService(pool))
+	adminID := insertOrganizationsTestUser(t, ctx, pool, "cancel-admin2@example.com")
+	memberID := insertOrganizationsTestUser(t, ctx, pool, "cancel-member2@example.com")
+	organizationID := insertOrganizationsTestOrganization(t, ctx, pool, "Cancel Invite Org 2")
+	insertOrganizationsTestMember(t, ctx, pool, organizationID, adminID, "admin")
+	insertOrganizationsTestMember(t, ctx, pool, organizationID, memberID, "member")
+	invitationID := insertOrganizationsTestInvitation(t, ctx, pool, organizationID, "invitee2@example.com", "member", "pending", adminID, "cancel-token-2")
+
+	err := service.CancelInvitation(ctx, memberID, organizationID, invitationID)
+	if err != ErrForbidden {
+		t.Fatalf("err = %v, want %v", err, ErrForbidden)
+	}
+
+	status := loadOrganizationsTestInvitationStatus(t, ctx, pool, invitationID)
+	if status != "pending" {
+		t.Fatalf("invitation status = %q, want pending (unchanged)", status)
+	}
+}
+
+// Phase 2 (Slice 2) — RED: already-cancelled, accepted, or expired
+// invitations are rejected with ErrInvitationNotPending and no activity row
+// is recorded.
+func TestCancelInvitationRejectsNonPendingInvitations(t *testing.T) {
+	t.Parallel()
+
+	ctx, pool := openOrganizationsTestPool(t, "organizations_cancel_invite_test")
+	service := NewService(pool, activity.NewService(pool))
+	adminID := insertOrganizationsTestUser(t, ctx, pool, "cancel-admin3@example.com")
+	organizationID := insertOrganizationsTestOrganization(t, ctx, pool, "Cancel Invite Org 3")
+	insertOrganizationsTestMember(t, ctx, pool, organizationID, adminID, "admin")
+
+	for _, status := range []string{"cancelled", "accepted", "expired"} {
+		status := status
+		t.Run(status, func(t *testing.T) {
+			invitationID := insertOrganizationsTestInvitation(t, ctx, pool, organizationID, status+"@example.com", "member", status, adminID, "cancel-token-status-"+status)
+
+			err := service.CancelInvitation(ctx, adminID, organizationID, invitationID)
+			if err != ErrInvitationNotPending {
+				t.Fatalf("err = %v, want %v", err, ErrInvitationNotPending)
+			}
+
+			var count int
+			if err := pool.QueryRow(ctx, `
+				SELECT COUNT(*) FROM activity_events
+				WHERE target_type = 'invitation' AND target_id = $1
+			`, invitationID).Scan(&count); err != nil {
+				t.Fatalf("count activity events: %v", err)
+			}
+			if count != 0 {
+				t.Fatalf("activity event count = %d, want 0 (no activity for a rejected cancel)", count)
+			}
+		})
+	}
+}
+
+// Phase 2 (Slice 2) — RED: an unknown invitation ID returns ErrNotFound.
+func TestCancelInvitationUnknownInvitationReturnsNotFound(t *testing.T) {
+	t.Parallel()
+
+	ctx, pool := openOrganizationsTestPool(t, "organizations_cancel_invite_test")
+	service := NewService(pool, activity.NewService(pool))
+	adminID := insertOrganizationsTestUser(t, ctx, pool, "cancel-admin4@example.com")
+	organizationID := insertOrganizationsTestOrganization(t, ctx, pool, "Cancel Invite Org 4")
+	insertOrganizationsTestMember(t, ctx, pool, organizationID, adminID, "admin")
+
+	err := service.CancelInvitation(ctx, adminID, organizationID, "00000000-0000-0000-0000-000000000000")
+	if err != ErrNotFound {
+		t.Fatalf("err = %v, want %v", err, ErrNotFound)
+	}
+}
+
+// Phase 2 (Slice 2) — RED: ListInvitations, after a cancel, still returns
+// the row with status='cancelled' while continuing to exclude
+// accepted/expired invitations.
+func TestListInvitationsIncludesCancelledExcludesAcceptedAndExpired(t *testing.T) {
+	t.Parallel()
+
+	ctx, pool := openOrganizationsTestPool(t, "organizations_cancel_invite_test")
+	service := NewService(pool, activity.NewService(pool))
+	adminID := insertOrganizationsTestUser(t, ctx, pool, "list-admin@example.com")
+	organizationID := insertOrganizationsTestOrganization(t, ctx, pool, "List Invite Org")
+	insertOrganizationsTestMember(t, ctx, pool, organizationID, adminID, "admin")
+
+	pendingID := insertOrganizationsTestInvitation(t, ctx, pool, organizationID, "pending@example.com", "member", "pending", adminID, "list-token-pending")
+	insertOrganizationsTestInvitation(t, ctx, pool, organizationID, "accepted@example.com", "member", "accepted", adminID, "list-token-accepted")
+	insertOrganizationsTestInvitation(t, ctx, pool, organizationID, "expired@example.com", "member", "expired", adminID, "list-token-expired")
+
+	if err := service.CancelInvitation(ctx, adminID, organizationID, pendingID); err != nil {
+		t.Fatalf("cancel invitation: %v", err)
+	}
+
+	invitations, err := service.ListInvitations(ctx, adminID, organizationID)
+	if err != nil {
+		t.Fatalf("list invitations: %v", err)
+	}
+
+	statuses := make(map[string]string, len(invitations))
+	for _, invitation := range invitations {
+		statuses[invitation.Email] = invitation.Status
+	}
+
+	if statuses["pending@example.com"] != "cancelled" {
+		t.Fatalf("cancelled invitation missing or wrong status: %v", statuses)
+	}
+	if _, ok := statuses["accepted@example.com"]; ok {
+		t.Fatalf("accepted invitation must stay excluded: %v", statuses)
+	}
+	if _, ok := statuses["expired@example.com"]; ok {
+		t.Fatalf("expired invitation must stay excluded: %v", statuses)
+	}
+}
+
 func openOrganizationsTestPool(t *testing.T, prefix string) (context.Context, *pgxpool.Pool) {
 	t.Helper()
 	if testing.Short() {
@@ -299,6 +442,38 @@ func insertOrganizationsTestMember(t *testing.T, ctx context.Context, pool *pgxp
 	`, organizationID, userID, role); err != nil {
 		t.Fatalf("insert organization member: %v", err)
 	}
+}
+
+// insertOrganizationsTestInvitation inserts an invitation row directly with
+// an arbitrary status, bypassing the service so tests can construct
+// already-accepted/cancelled/expired fixtures that CreateInvitation cannot
+// produce on its own. token must be unique per call.
+func insertOrganizationsTestInvitation(t *testing.T, ctx context.Context, pool *pgxpool.Pool, organizationID, email, role, status, invitedByUserID, token string) string {
+	t.Helper()
+
+	var invitationID string
+	err := pool.QueryRow(ctx, `
+		INSERT INTO invitations (organization_id, email, role, token, status, invited_by_user_id)
+		VALUES ($1, $2, $3, $4, $5, $6)
+		RETURNING id
+	`, organizationID, email, role, token, status, invitedByUserID).Scan(&invitationID)
+	if err != nil {
+		t.Fatalf("insert invitation: %v", err)
+	}
+
+	return invitationID
+}
+
+func loadOrganizationsTestInvitationStatus(t *testing.T, ctx context.Context, pool *pgxpool.Pool, invitationID string) string {
+	t.Helper()
+
+	var status string
+	err := pool.QueryRow(ctx, `SELECT status FROM invitations WHERE id = $1`, invitationID).Scan(&status)
+	if err != nil {
+		t.Fatalf("query invitation status: %v", err)
+	}
+
+	return status
 }
 
 func loadOrganizationsTestMemberRole(t *testing.T, ctx context.Context, pool *pgxpool.Pool, organizationID, userID string) string {

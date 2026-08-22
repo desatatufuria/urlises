@@ -246,6 +246,121 @@ describe("members page", () => {
     expect(await screen.findByText(/resend failed/i)).toBeInTheDocument();
   });
 
+  it("cancels a pending invitation and shows a confirmation notice, keeping the row with an updated status", async () => {
+    vi.stubGlobal("confirm", vi.fn(() => true));
+    const invitation = {
+      id: "invite-3",
+      organizationId: "org-1",
+      email: "cancel-me@example.com",
+      role: "member",
+      status: "pending",
+      invitedByUserId: "user-1",
+      invitedByEmail: "owner@example.com",
+      createdAt: "2026-07-03T22:00:00Z",
+      expiresAt: "2026-07-10T22:00:00Z",
+    };
+    let cancelCalls = 0;
+    let currentStatus = "pending";
+
+    fetchMock.mockImplementation((input, init) => {
+      const url = String(input);
+      const method = init?.method ?? "GET";
+
+      if (url.endsWith("/organizations/org-1/members")) {
+        return jsonResponse({ members: [] });
+      }
+      if (url.endsWith("/organizations/org-1/invitations") && method === "GET") {
+        return jsonResponse({ invitations: [{ ...invitation, status: currentStatus }] });
+      }
+      if (url.endsWith("/organizations/org-1/invitations/invite-3/cancel") && method === "POST") {
+        cancelCalls += 1;
+        currentStatus = "cancelled";
+        return Promise.resolve(new Response(null, { status: 204 }));
+      }
+      return jsonResponse({ error: "not found" }, 404);
+    });
+
+    renderAppRoute("/members");
+
+    await screen.findByText("cancel-me@example.com");
+    await userEvent.click(screen.getByRole("button", { name: /cancel invitation to cancel-me@example.com/i }));
+
+    expect(await screen.findByText(/invitation cancelled/i)).toBeInTheDocument();
+    expect(cancelCalls).toBe(1);
+    expect(await screen.findByText("cancelled")).toBeInTheDocument();
+    expect(screen.getByText("cancel-me@example.com")).toBeInTheDocument();
+  });
+
+  it("shows an error notice when cancelling an invitation fails, keeping the row", async () => {
+    vi.stubGlobal("confirm", vi.fn(() => true));
+    const invitation = {
+      id: "invite-4",
+      organizationId: "org-1",
+      email: "keep-me@example.com",
+      role: "member",
+      status: "pending",
+      invitedByUserId: "user-1",
+      invitedByEmail: "owner@example.com",
+      createdAt: "2026-07-03T22:00:00Z",
+      expiresAt: "2026-07-10T22:00:00Z",
+    };
+
+    fetchMock.mockImplementation((input, init) => {
+      const url = String(input);
+      const method = init?.method ?? "GET";
+
+      if (url.endsWith("/organizations/org-1/members")) {
+        return jsonResponse({ members: [] });
+      }
+      if (url.endsWith("/organizations/org-1/invitations") && method === "GET") {
+        return jsonResponse({ invitations: [invitation] });
+      }
+      if (url.endsWith("/organizations/org-1/invitations/invite-4/cancel") && method === "POST") {
+        return jsonResponse({ error: "invitation is not pending" }, 400);
+      }
+      return jsonResponse({ error: "not found" }, 404);
+    });
+
+    renderAppRoute("/members");
+
+    await screen.findByText("keep-me@example.com");
+    await userEvent.click(screen.getByRole("button", { name: /cancel invitation to keep-me@example.com/i }));
+
+    expect(await screen.findByText(/cancel failed/i)).toBeInTheDocument();
+    expect(screen.getByText("keep-me@example.com")).toBeInTheDocument();
+  });
+
+  it("only shows Cancel and Resend actions for pending invitations, not cancelled ones", async () => {
+    const invitation = {
+      id: "invite-5",
+      organizationId: "org-1",
+      email: "already-cancelled@example.com",
+      role: "member",
+      status: "cancelled",
+      invitedByUserId: "user-1",
+      invitedByEmail: "owner@example.com",
+      createdAt: "2026-07-03T22:00:00Z",
+      expiresAt: "2026-07-10T22:00:00Z",
+    };
+
+    fetchMock.mockImplementation((input) => {
+      const url = String(input);
+      if (url.endsWith("/organizations/org-1/members")) {
+        return jsonResponse({ members: [] });
+      }
+      if (url.endsWith("/organizations/org-1/invitations")) {
+        return jsonResponse({ invitations: [invitation] });
+      }
+      return jsonResponse({ error: "not found" }, 404);
+    });
+
+    renderAppRoute("/members");
+
+    await screen.findByText("already-cancelled@example.com");
+    expect(screen.queryByRole("button", { name: /cancel invitation to already-cancelled@example.com/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /resend invitation to already-cancelled@example.com/i })).not.toBeInTheDocument();
+  });
+
   it("does not sign out after a self role change while the org membership remains", async () => {
     vi.stubGlobal("confirm", vi.fn(() => true));
     fetchMock.mockImplementation((input, init) => {
