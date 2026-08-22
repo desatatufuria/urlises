@@ -64,13 +64,13 @@ Each unit is developed, tested, and merged into the previous unit's branch befor
 
 ## Phase 1: Workspace Delete UX Parity (Slice 1 — frontend only)
 
-- [ ] 1.1 RED: `admin-web/src/features/workspaces/WorkspacesPage.test.tsx` — Delete opens `?panel=workspace-delete&workspace={id}` and sends nothing on open.
-- [ ] 1.2 RED: same file — confirm button stays disabled on partial/mismatched/whitespace-only input into `ConfirmByTyping`.
-- [ ] 1.3 RED: same file — exact-name match enables the button and fires exactly one delete mutation on submit.
-- [ ] 1.4 RED: same file — switching the selected workspace row resets typed text (the `key={selectedWorkspaceId}` remount).
-- [ ] 1.5 RED: same file — closing the panel without confirming sends no request.
-- [ ] 1.6 RED: same file — backend rejection shows the `notice` `DataState` and resets busy/panel state without removing the row.
-- [ ] 1.7 GREEN: `WorkspacesPage.tsx` — replace `window.confirm()` (line 108) with a `ContextPanel` opened via `?panel=workspace-delete&workspace={id}`, `key={selectedWorkspaceId}`, embedding `ConfirmByTyping(expected=workspace.workspaceName)`; keep `deletingWorkspaceId` busy flag and `notice` banner unchanged.
+- [x] 1.1 RED: `admin-web/src/features/workspaces/WorkspacesPage.test.tsx` — Delete opens `?panel=workspace-delete&workspace={id}` and sends nothing on open.
+- [x] 1.2 RED: same file — confirm button stays disabled on partial/mismatched/whitespace-only input into `ConfirmByTyping`.
+- [x] 1.3 RED: same file — exact-name match enables the button and fires exactly one delete mutation on submit.
+- [x] 1.4 RED: same file — switching the selected workspace row resets typed text (the `key={selectedWorkspaceId}` remount).
+- [x] 1.5 RED: same file — closing the panel without confirming sends no request.
+- [x] 1.6 RED: same file — backend rejection shows the `notice` `DataState` and resets busy/panel state without removing the row.
+- [x] 1.7 GREEN: `WorkspacesPage.tsx` — replace `window.confirm()` (line 108) with a `ContextPanel` opened via `?panel=workspace-delete&workspace={id}`, `key={selectedWorkspaceId}`, embedding `ConfirmByTyping(expected=workspace.workspaceName)`; keep `deletingWorkspaceId` busy flag and `notice` banner unchanged.
 
 ## Phase 2: Soft Delete + Immediate Inaccessibility (Slice 2 — recommend splitting into 2a/2b, see forecast)
 
