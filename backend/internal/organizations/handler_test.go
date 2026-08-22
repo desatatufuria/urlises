@@ -21,14 +21,17 @@ import (
 )
 
 type organizationsRouteStub struct {
-	requester            string
-	invitations          []PendingInvitation
-	err                  error
-	cancelErr            error
-	deleteErr            error
-	restoreErr           error
-	deletedOrganizations []DeletedOrganization
-	listDeletedErr       error
+	requester                 string
+	invitations               []PendingInvitation
+	err                       error
+	cancelErr                 error
+	deleteErr                 error
+	restoreErr                error
+	deletedOrganizations      []DeletedOrganization
+	listDeletedErr            error
+	secretRecipientsRequester string
+	secretRecipients          []MemberName
+	secretRecipientsErr       error
 }
 
 func TestCreationRoutesRequireIdempotencyKey(t *testing.T) {
@@ -88,6 +91,10 @@ func (s *organizationsRouteStub) RestoreOrganization(_ context.Context, requeste
 func (s *organizationsRouteStub) ListDeletedOrganizations(_ context.Context, requester string) ([]DeletedOrganization, error) {
 	s.requester = requester
 	return s.deletedOrganizations, s.listDeletedErr
+}
+func (s *organizationsRouteStub) ListSecretRecipients(_ context.Context, requesterUserID string) ([]MemberName, error) {
+	s.secretRecipientsRequester = requesterUserID
+	return s.secretRecipients, s.secretRecipientsErr
 }
 
 func organizationPrincipal(next http.Handler) http.Handler {
@@ -719,6 +726,93 @@ func TestCancelInvitationRouteUnknownInvitationReturnsNotFound(t *testing.T) {
 	mux.ServeHTTP(cancelW, cancelReq)
 	if cancelW.Code != http.StatusNotFound {
 		t.Fatalf("cancel status=%d body=%s, want 404", cancelW.Code, cancelW.Body.String())
+	}
+}
+
+// B3.5 — RED: GET /me/secret-recipients returns 401 with no body leakage
+// when unauthenticated, and 200 with a raw-JSON body (not a decoded struct)
+// containing userId/email/name keys and no "role" key anywhere, when
+// authenticated.
+func TestListSecretRecipientsRouteEnvelopeAuthAndNoRoleLeak(t *testing.T) {
+	stub := &organizationsRouteStub{secretRecipients: []MemberName{{UserID: "user-1", Email: "peer@example.com", Name: "Peer Colleague"}}}
+	mux := http.NewServeMux()
+	RegisterRoutes(mux, organizationPrincipal, stub, nil)
+
+	recorder := httptest.NewRecorder()
+	mux.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/me/secret-recipients", nil))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status=%d, want 200", recorder.Code)
+	}
+	body := recorder.Body.String()
+	if !contains(body, "userId") || !contains(body, "email") || !contains(body, "name") {
+		t.Fatalf("body=%s, want userId/email/name keys present", body)
+	}
+	if contains(body, `"role"`) {
+		t.Fatalf("body=%s, must never contain a \"role\" key", body)
+	}
+
+	mux = http.NewServeMux()
+	RegisterRoutes(mux, func(next http.Handler) http.Handler { return next }, stub, nil)
+	recorder = httptest.NewRecorder()
+	mux.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/me/secret-recipients", nil))
+	if recorder.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthorized status=%d, want 401", recorder.Code)
+	}
+	if recorder.Body.Len() == 0 {
+		t.Fatalf("unauthorized body must not be empty (should carry the standard error envelope)")
+	}
+	if contains(recorder.Body.String(), "peer@example.com") {
+		t.Fatalf("unauthorized body=%s, must not leak any recipient data", recorder.Body.String())
+	}
+}
+
+// B3.6 — RED: locks Decision 3's "no client-supplied org id" property. The
+// stub receives exactly principal.UserID and no organization id argument
+// anywhere in the call.
+func TestListSecretRecipientsRouteCallsServiceWithOnlyRequesterID(t *testing.T) {
+	stub := &organizationsRouteStub{}
+	mux := http.NewServeMux()
+	RegisterRoutes(mux, organizationPrincipal, stub, nil)
+
+	recorder := httptest.NewRecorder()
+	mux.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/me/secret-recipients", nil))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status=%d, want 200", recorder.Code)
+	}
+	if stub.secretRecipientsRequester != "admin-1" {
+		t.Fatalf("stub received requester=%q, want %q (only principal.UserID, no org id)", stub.secretRecipientsRequester, "admin-1")
+	}
+}
+
+// B3.7 — RED: registering every route on one mux, GET /me/secret-recipients
+// resolves without shadowing or being shadowed by GET /me-shaped patterns
+// this package does not own (auth's GET /me and GET /me/preferences), and
+// without disturbing this package's own routes.
+func TestListSecretRecipientsRouteDoesNotShadowOrGetShadowed(t *testing.T) {
+	stub := &organizationsRouteStub{secretRecipients: []MemberName{{UserID: "user-1", Email: "peer@example.com"}}}
+	mux := http.NewServeMux()
+	RegisterRoutes(mux, organizationPrincipal, stub, nil)
+	// auth's /me/* routes are a different package; simulate their exact
+	// literal patterns on the same mux to prove no collision.
+	mux.HandleFunc("GET /me", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusTeapot) })
+	mux.HandleFunc("GET /me/preferences", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusTeapot) })
+
+	recorder := httptest.NewRecorder()
+	mux.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/me/secret-recipients", nil))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("GET /me/secret-recipients status=%d, want 200 (must not be shadowed)", recorder.Code)
+	}
+
+	meRecorder := httptest.NewRecorder()
+	mux.ServeHTTP(meRecorder, httptest.NewRequest(http.MethodGet, "/me", nil))
+	if meRecorder.Code != http.StatusTeapot {
+		t.Fatalf("GET /me status=%d, want 418 (must not be shadowed by /me/secret-recipients)", meRecorder.Code)
+	}
+
+	prefsRecorder := httptest.NewRecorder()
+	mux.ServeHTTP(prefsRecorder, httptest.NewRequest(http.MethodGet, "/me/preferences", nil))
+	if prefsRecorder.Code != http.StatusTeapot {
+		t.Fatalf("GET /me/preferences status=%d, want 418 (must not be shadowed by /me/secret-recipients)", prefsRecorder.Code)
 	}
 }
 

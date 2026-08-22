@@ -509,6 +509,11 @@ small {
   gap: 6px;
 }
 
+.ui-option-list {
+  max-height: 160px;
+  overflow-y: auto;
+}
+
 .ui-log {
   display: grid;
   gap: 1px;
