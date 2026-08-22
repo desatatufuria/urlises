@@ -12,6 +12,7 @@ export type ActivityKind =
   | "organization_member.role_changed"
   | "organization_member.removed"
   | "workspace.created"
+  | "workspace.deleted"
   | "workspace_access.user_granted"
   | "workspace_access.user_revoked"
   | "workspace_access.group_granted"

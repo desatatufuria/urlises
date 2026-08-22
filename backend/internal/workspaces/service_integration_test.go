@@ -347,6 +347,111 @@ func TestRevokeGroupAccessRecordsActivityEvent(t *testing.T) {
 	assertWorkspacesTestActivityEvent(t, ctx, pool, organizationID, adminID, activity.KindWorkspaceAccessGroupRevoked, "workspace_group_access", groupID)
 }
 
+// Phase 3 (Slice 3) — RED: a non-admin member is forbidden from deleting a
+// workspace, and the workspace row remains intact.
+func TestDeleteWorkspaceRequiresAdmin(t *testing.T) {
+	t.Parallel()
+
+	ctx, pool := openWorkspacesTestPool(t)
+	service := NewService(pool, nil, activity.NewService(pool))
+	adminID := insertWorkspacesTestUser(t, ctx, pool, "delete-admin@example.com")
+	memberID := insertWorkspacesTestUser(t, ctx, pool, "delete-member@example.com")
+	organizationID := insertWorkspacesTestOrganization(t, ctx, pool, "Delete Workspace Org")
+	insertWorkspacesTestMember(t, ctx, pool, organizationID, adminID, "admin")
+	insertWorkspacesTestMember(t, ctx, pool, organizationID, memberID, "member")
+
+	workspace, err := service.Create(ctx, adminID, organizationID, CreateWorkspaceInput{Name: "Doomed Workspace", Type: "team"})
+	if err != nil {
+		t.Fatalf("create workspace: %v", err)
+	}
+
+	err = service.Delete(ctx, memberID, workspace.WorkspaceID)
+	if err != ErrForbidden {
+		t.Fatalf("err = %v, want %v", err, ErrForbidden)
+	}
+
+	if countWorkspacesTestRows(t, ctx, pool, "workspaces", "id", workspace.WorkspaceID) != 1 {
+		t.Fatalf("expected workspace to remain intact after a forbidden delete attempt")
+	}
+}
+
+// Phase 3 (Slice 3) — RED: an unknown workspace ID returns ErrNotFound.
+func TestDeleteWorkspaceUnknownReturnsNotFound(t *testing.T) {
+	t.Parallel()
+
+	ctx, pool := openWorkspacesTestPool(t)
+	service := NewService(pool, nil, activity.NewService(pool))
+	adminID := insertWorkspacesTestUser(t, ctx, pool, "delete-admin2@example.com")
+
+	err := service.Delete(ctx, adminID, "00000000-0000-0000-0000-000000000000")
+	if err != ErrNotFound {
+		t.Fatalf("err = %v, want %v", err, ErrNotFound)
+	}
+}
+
+// Phase 3 (Slice 3) — RED: an admin deleting a workspace cascades away every
+// child table (folders, bookmarks, workspace_cursors, sync_events,
+// workspace_user_access, workspace_group_access) and records a
+// workspace.deleted activity row in the same transaction.
+func TestDeleteWorkspaceCascadesAndRecordsActivity(t *testing.T) {
+	t.Parallel()
+
+	ctx, pool := openWorkspacesTestPool(t)
+	service := NewService(pool, nil, activity.NewService(pool))
+	adminID := insertWorkspacesTestUser(t, ctx, pool, "delete-admin3@example.com")
+	viewerID := insertWorkspacesTestUser(t, ctx, pool, "delete-viewer3@example.com")
+	organizationID := insertWorkspacesTestOrganization(t, ctx, pool, "Cascade Delete Org")
+	insertWorkspacesTestMember(t, ctx, pool, organizationID, adminID, "admin")
+	insertWorkspacesTestMember(t, ctx, pool, organizationID, viewerID, "member")
+	groupID := insertWorkspacesTestGroup(t, ctx, pool, organizationID, "Cascade Group")
+
+	workspace, err := service.Create(ctx, adminID, organizationID, CreateWorkspaceInput{Name: "Cascade Workspace", Type: "team"})
+	if err != nil {
+		t.Fatalf("create workspace: %v", err)
+	}
+	workspaceID := workspace.WorkspaceID
+
+	if _, err := service.GrantUserAccess(ctx, adminID, workspaceID, viewerID, UpdateUserAccessInput{Role: "viewer"}); err != nil {
+		t.Fatalf("grant user access: %v", err)
+	}
+	if _, err := service.GrantGroupAccess(ctx, adminID, workspaceID, groupID, UpdateGroupAccessInput{Role: "viewer"}); err != nil {
+		t.Fatalf("grant group access: %v", err)
+	}
+
+	folderID := insertWorkspacesTestFolder(t, ctx, pool, workspaceID, "Folder A")
+	insertWorkspacesTestBookmark(t, ctx, pool, workspaceID, folderID, "Bookmark A", "https://example.com/a")
+	insertWorkspacesTestWorkspaceCursor(t, ctx, pool, workspaceID)
+	insertWorkspacesTestSyncEvent(t, ctx, pool, organizationID, workspaceID, adminID)
+
+	if err := service.Delete(ctx, adminID, workspaceID); err != nil {
+		t.Fatalf("delete workspace: %v", err)
+	}
+
+	if countWorkspacesTestRows(t, ctx, pool, "workspaces", "id", workspaceID) != 0 {
+		t.Fatalf("expected workspace row to be gone")
+	}
+	if countWorkspacesTestRows(t, ctx, pool, "folders", "workspace_id", workspaceID) != 0 {
+		t.Fatalf("expected folders to cascade away")
+	}
+	if countWorkspacesTestRows(t, ctx, pool, "bookmarks", "workspace_id", workspaceID) != 0 {
+		t.Fatalf("expected bookmarks to cascade away")
+	}
+	if countWorkspacesTestRows(t, ctx, pool, "workspace_cursors", "workspace_id", workspaceID) != 0 {
+		t.Fatalf("expected workspace_cursors to cascade away")
+	}
+	if countWorkspacesTestRows(t, ctx, pool, "sync_events", "workspace_id", workspaceID) != 0 {
+		t.Fatalf("expected sync_events to cascade away")
+	}
+	if countWorkspacesTestRows(t, ctx, pool, "workspace_user_access", "workspace_id", workspaceID) != 0 {
+		t.Fatalf("expected workspace_user_access to cascade away")
+	}
+	if countWorkspacesTestRows(t, ctx, pool, "workspace_group_access", "workspace_id", workspaceID) != 0 {
+		t.Fatalf("expected workspace_group_access to cascade away")
+	}
+
+	assertWorkspacesTestActivityEvent(t, ctx, pool, organizationID, adminID, activity.KindWorkspaceDeleted, "workspace", workspaceID)
+}
+
 func openWorkspacesTestPool(t *testing.T) (context.Context, *pgxpool.Pool) {
 	t.Helper()
 	if testing.Short() {
@@ -470,6 +575,70 @@ func insertWorkspacesTestGroupMember(t *testing.T, ctx context.Context, pool *pg
 	`, groupID, userID); err != nil {
 		t.Fatalf("insert group member: %v", err)
 	}
+}
+
+func insertWorkspacesTestFolder(t *testing.T, ctx context.Context, pool *pgxpool.Pool, workspaceID, name string) string {
+	t.Helper()
+
+	var folderID string
+	err := pool.QueryRow(ctx, `
+		INSERT INTO folders (workspace_id, name, position)
+		VALUES ($1, $2, 0)
+		RETURNING id
+	`, workspaceID, name).Scan(&folderID)
+	if err != nil {
+		t.Fatalf("insert folder: %v", err)
+	}
+
+	return folderID
+}
+
+func insertWorkspacesTestBookmark(t *testing.T, ctx context.Context, pool *pgxpool.Pool, workspaceID, folderID, title, url string) {
+	t.Helper()
+
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO bookmarks (workspace_id, folder_id, title, url, position)
+		VALUES ($1, $2, $3, $4, 0)
+	`, workspaceID, folderID, title, url); err != nil {
+		t.Fatalf("insert bookmark: %v", err)
+	}
+}
+
+func insertWorkspacesTestWorkspaceCursor(t *testing.T, ctx context.Context, pool *pgxpool.Pool, workspaceID string) {
+	t.Helper()
+
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO workspace_cursors (workspace_id, current_cursor)
+		VALUES ($1, 1)
+	`, workspaceID); err != nil {
+		t.Fatalf("insert workspace cursor: %v", err)
+	}
+}
+
+func insertWorkspacesTestSyncEvent(t *testing.T, ctx context.Context, pool *pgxpool.Pool, organizationID, workspaceID, userID string) {
+	t.Helper()
+
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO sync_events (event_id, organization_id, workspace_id, user_id, origin_client_id, cursor, event_type, entity_type, entity_id, payload)
+		VALUES ($1, $2, $3, $4, $5, 1, 'created', 'bookmark', gen_random_uuid(), '{}'::jsonb)
+	`, "event-"+workspaceID, organizationID, workspaceID, userID, "origin-client"); err != nil {
+		t.Fatalf("insert sync event: %v", err)
+	}
+}
+
+// countWorkspacesTestRows counts rows in table where column = id. table and
+// column are always static string literals from call sites in this file,
+// never user input.
+func countWorkspacesTestRows(t *testing.T, ctx context.Context, pool *pgxpool.Pool, table, column, id string) int {
+	t.Helper()
+
+	var count int
+	query := fmt.Sprintf("SELECT COUNT(*) FROM %s WHERE %s = $1", table, column)
+	if err := pool.QueryRow(ctx, query, id).Scan(&count); err != nil {
+		t.Fatalf("count rows in %s: %v", table, err)
+	}
+
+	return count
 }
 
 // assertWorkspacesTestActivityEvent asserts exactly one activity_events row

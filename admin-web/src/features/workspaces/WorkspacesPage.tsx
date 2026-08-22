@@ -3,7 +3,7 @@ import { useOrganization } from "../../app/providers/OrganizationProvider";
 import { Badge } from "../../lib/ui/components/Badge";
 import { DataState } from "../../lib/ui/components/DataState";
 import { Table } from "../../lib/ui/components/Table";
-import { useCreateWorkspaceMutation } from "./mutations";
+import { useCreateWorkspaceMutation, useDeleteWorkspaceMutation } from "./mutations";
 import { useWorkspaces } from "./queries";
 import { WorkspaceForm } from "./WorkspaceForm";
 import { useState } from "react";
@@ -14,6 +14,7 @@ export function WorkspacesPage() {
   const { session } = useAuth();
   const { activeOrganization } = useOrganization();
   const [notice, setNotice] = useState<{ tone: "neutral" | "danger"; title: string; description: string } | null>(null);
+  const [deletingWorkspaceId, setDeletingWorkspaceId] = useState<string | null>(null);
   const [searchParams, setSearchParams] = useSearchParams();
   const createOpen = searchParams.get("panel") === "workspace-create";
   const closePanel = () => setSearchParams((current) => { const next = new URLSearchParams(current); next.delete("panel"); return next; });
@@ -22,6 +23,7 @@ export function WorkspacesPage() {
   const organizationId = activeOrganization?.organizationId;
   const workspacesQuery = useWorkspaces(token, organizationId);
   const createWorkspaceMutation = useCreateWorkspaceMutation(token, organizationId);
+  const deleteWorkspaceMutation = useDeleteWorkspaceMutation(token, organizationId);
 
   if (!token || !organizationId) {
     return <DataState tone="danger" title="Organization context missing" description="Choose an admin organization before managing workspaces." />;
@@ -93,9 +95,43 @@ export function WorkspacesPage() {
                   )}
                 </td>
                 <td>
-                  <Link className="ui-button ui-button-secondary" to={`/access?panel=access&workspace=${workspace.workspaceId}`}>
-                    Manage access
-                  </Link>
+                  <div className="ui-actions-row">
+                    <Link className="ui-button ui-button-secondary" to={`/access?panel=access&workspace=${workspace.workspaceId}`}>
+                      Manage access
+                    </Link>
+                    <button
+                      className="ui-button ui-button-secondary"
+                      type="button"
+                      disabled={deletingWorkspaceId === workspace.workspaceId}
+                      aria-label={`Delete ${workspace.workspaceName}`}
+                      onClick={() => {
+                        if (!window.confirm(`Delete the workspace "${workspace.workspaceName}"? This cannot be undone.`)) {
+                          return;
+                        }
+                        setNotice(null);
+                        setDeletingWorkspaceId(workspace.workspaceId);
+                        void deleteWorkspaceMutation
+                          .mutateAsync(workspace.workspaceId)
+                          .then(() => {
+                            setNotice({
+                              tone: "neutral",
+                              title: "Workspace deleted",
+                              description: `${workspace.workspaceName} and all of its contents have been removed.`,
+                            });
+                          })
+                          .catch((error) => {
+                            setNotice({
+                              tone: "danger",
+                              title: "Workspace deletion rejected",
+                              description: error instanceof Error ? error.message : "The backend rejected the deletion request.",
+                            });
+                          })
+                          .finally(() => setDeletingWorkspaceId(null));
+                      }}
+                    >
+                      {deletingWorkspaceId === workspace.workspaceId ? "Deleting…" : "Delete"}
+                    </button>
+                  </div>
                 </td>
               </tr>
             ))}

@@ -83,18 +83,18 @@ Each unit is developed, tested, and merged into the previous unit's branch befor
 
 ## Phase 3: Delete Workspace (Slice 3)
 
-- [ ] 3.1 RED: `backend/internal/workspaces/service_test.go` — `Delete`: admin gate via `mapAccessError`; cascade emptiness asserted per child table (folders, bookmarks, `workspace_cursors`, `sync_events`, `workspace_user_access`, `workspace_group_access`); `RowsAffected()==0 → ErrNotFound`; `workspace.deleted` activity row present.
-- [ ] 3.2 GREEN: `backend/internal/workspaces/service.go` — `Delete(ctx, requesterUserID, workspaceID) error` via `loadWorkspaceMetadataRecord` + `access.RequireOrganizationAdmin`.
-- [ ] 3.3 RED: `backend/internal/workspaces/handler_test.go` — `DELETE /workspaces/{workspaceId}`: 204 success; 403 non-admin; 404 unknown/cross-org.
-- [ ] 3.4 GREEN: `backend/internal/workspaces/handler.go` — `routeService` +`Delete`; register `DELETE /workspaces/{workspaceId}` → 204.
-- [ ] 3.5 GREEN: `backend/internal/activity/service.go` — add `KindWorkspaceDeleted Kind = "workspace.deleted"`.
-- [ ] 3.6 GREEN: `admin-web/src/lib/api/activity.ts` — add `"workspace.deleted"` to `ActivityKind`.
-- [ ] 3.7 RED: `admin-web/src/features/activity/format.test.ts` — `formatActivityEvent` renders `workspace.deleted` with representative and missing metadata.
-- [ ] 3.8 GREEN: `admin-web/src/features/activity/format.ts` — add the `"workspace.deleted"` case branch.
-- [ ] 3.9 GREEN: `admin-web/src/lib/api/workspaces.ts` — `deleteWorkspace(token, workspaceId)`.
-- [ ] 3.10 RED: `admin-web/src/features/workspaces/WorkspacesPage.test.tsx` — admin deletes a workspace (busy state, list invalidated without it); confirm-dismissal sends no request; a failed request surfaces an error and the row returns to normal.
-- [ ] 3.11 GREEN: `admin-web/src/features/workspaces/mutations.ts` — `useDeleteWorkspaceMutation` invalidating `organization(orgId).workspaces` + `["workspaces"]`, mirroring `useDeleteGroupMutation`.
-- [ ] 3.12 GREEN: `admin-web/src/features/workspaces/WorkspacesPage.tsx` — `ui-button-secondary` "Delete" beside "Manage access", `window.confirm()` naming the workspace, `deletingWorkspaceId` busy state.
+- [x] 3.1 RED: `backend/internal/workspaces/service_test.go` — `Delete`: admin gate via `mapAccessError`; cascade emptiness asserted per child table (folders, bookmarks, `workspace_cursors`, `sync_events`, `workspace_user_access`, `workspace_group_access`); `RowsAffected()==0 → ErrNotFound`; `workspace.deleted` activity row present.
+- [x] 3.2 GREEN: `backend/internal/workspaces/service.go` — `Delete(ctx, requesterUserID, workspaceID) error` via `loadWorkspaceMetadataRecord` + `access.RequireOrganizationAdmin`.
+- [x] 3.3 RED: `backend/internal/workspaces/handler_test.go` — `DELETE /workspaces/{workspaceId}`: 204 success; 403 non-admin; 404 unknown/cross-org.
+- [x] 3.4 GREEN: `backend/internal/workspaces/handler.go` — `routeService` +`Delete`; register `DELETE /workspaces/{workspaceId}` → 204.
+- [x] 3.5 GREEN: `backend/internal/activity/service.go` — add `KindWorkspaceDeleted Kind = "workspace.deleted"`.
+- [x] 3.6 GREEN: `admin-web/src/lib/api/activity.ts` — add `"workspace.deleted"` to `ActivityKind`.
+- [x] 3.7 RED: `admin-web/src/features/activity/format.test.ts` — `formatActivityEvent` renders `workspace.deleted` with representative and missing metadata.
+- [x] 3.8 GREEN: `admin-web/src/features/activity/format.ts` — add the `"workspace.deleted"` case branch.
+- [x] 3.9 GREEN: `admin-web/src/lib/api/workspaces.ts` — `deleteWorkspace(token, workspaceId)`.
+- [x] 3.10 RED: `admin-web/src/features/workspaces/WorkspacesPage.test.tsx` — admin deletes a workspace (busy state, list invalidated without it); confirm-dismissal sends no request; a failed request surfaces an error and the row returns to normal.
+- [x] 3.11 GREEN: `admin-web/src/features/workspaces/mutations.ts` — `useDeleteWorkspaceMutation` invalidating `organization(orgId).workspaces` + `["workspaces"]`, mirroring `useDeleteGroupMutation`.
+- [x] 3.12 GREEN: `admin-web/src/features/workspaces/WorkspacesPage.tsx` — `ui-button-secondary` "Delete" beside "Manage access", `window.confirm()` naming the workspace, `deletingWorkspaceId` busy state.
 
 ## Phase 4: Delete Organization, Guarded (Slice 4)
 

@@ -33,6 +33,7 @@ const (
 	KindOrganizationMemberRoleChanged Kind = "organization_member.role_changed"
 	KindOrganizationMemberRemoved     Kind = "organization_member.removed"
 	KindWorkspaceCreated              Kind = "workspace.created"
+	KindWorkspaceDeleted              Kind = "workspace.deleted"
 	KindWorkspaceAccessUserGranted    Kind = "workspace_access.user_granted"
 	KindWorkspaceAccessUserRevoked    Kind = "workspace_access.user_revoked"
 	KindWorkspaceAccessGroupGranted   Kind = "workspace_access.group_granted"

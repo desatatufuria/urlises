@@ -54,6 +54,10 @@ func (s *workspacesRouteStub) GetAccessSnapshot(_ context.Context, requester, _ 
 	s.requester = requester
 	return s.snapshot, s.err
 }
+func (s *workspacesRouteStub) Delete(_ context.Context, requester, _ string) error {
+	s.requester = requester
+	return s.err
+}
 func workspacePrincipal(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		next.ServeHTTP(w, r.WithContext(auth.ContextWithPrincipal(r.Context(), auth.Principal{UserID: "admin-1"})))
@@ -79,6 +83,34 @@ func TestWorkspaceAccessReadRouteEnvelopeAndStatuses(t *testing.T) {
 	rr = httptest.NewRecorder()
 	mux.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/workspaces/workspace-1/access", nil))
 	if rr.Code != http.StatusUnauthorized {
+		t.Fatalf("status=%d", rr.Code)
+	}
+}
+
+// Phase 3 (Slice 3) — RED: DELETE /workspaces/{workspaceId} returns 204 on
+// success, 403 on ErrForbidden, and 404 on ErrNotFound.
+func TestDeleteWorkspaceRouteStatuses(t *testing.T) {
+	stub := &workspacesRouteStub{}
+	mux := http.NewServeMux()
+	RegisterRoutes(mux, workspacePrincipal, stub)
+
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, httptest.NewRequest(http.MethodDelete, "/workspaces/workspace-1", nil))
+	if rr.Code != http.StatusNoContent || stub.requester != "admin-1" {
+		t.Fatalf("status=%d requester=%q", rr.Code, stub.requester)
+	}
+
+	stub.err = ErrForbidden
+	rr = httptest.NewRecorder()
+	mux.ServeHTTP(rr, httptest.NewRequest(http.MethodDelete, "/workspaces/workspace-1", nil))
+	if rr.Code != http.StatusForbidden {
+		t.Fatalf("status=%d", rr.Code)
+	}
+
+	stub.err = ErrNotFound
+	rr = httptest.NewRecorder()
+	mux.ServeHTTP(rr, httptest.NewRequest(http.MethodDelete, "/workspaces/workspace-1", nil))
+	if rr.Code != http.StatusNotFound {
 		t.Fatalf("status=%d", rr.Code)
 	}
 }
