@@ -50,7 +50,12 @@ func TestActivityAuditCreateBookmarkRecordsOneEvent(t *testing.T) {
 	activityService := activity.NewService(pool)
 	store := NewPostgresStore(pool, bookmarkService, nil, activityService, nil)
 
-	result, err := store.CreateBookmark(ctx, userID, workspaceID, bookmarks.CreateBookmarkInput{Title: "Design Doc", URL: "https://example.com/design"}, Metadata{
+	folder, err := bookmarkService.CreateFolder(ctx, userID, workspaceID, bookmarks.CreateFolderInput{Name: "Create Bookmark Folder"})
+	if err != nil {
+		t.Fatalf("create folder: %v", err)
+	}
+
+	result, err := store.CreateBookmark(ctx, userID, workspaceID, bookmarks.CreateBookmarkInput{FolderID: folder.ID, Title: "Design Doc", URL: "https://example.com/design"}, Metadata{
 		EventID:        "evt-bookmark-create",
 		OriginClientID: "client-a",
 	})
@@ -91,7 +96,12 @@ func TestActivityAuditUpdateBookmarkRecordsOneEvent(t *testing.T) {
 	activityService := activity.NewService(pool)
 	store := NewPostgresStore(pool, bookmarkService, nil, activityService, nil)
 
-	created, err := store.CreateBookmark(ctx, userID, workspaceID, bookmarks.CreateBookmarkInput{Title: "Original", URL: "https://example.com/original"}, Metadata{
+	folder, err := bookmarkService.CreateFolder(ctx, userID, workspaceID, bookmarks.CreateFolderInput{Name: "Update Bookmark Folder"})
+	if err != nil {
+		t.Fatalf("create folder: %v", err)
+	}
+
+	created, err := store.CreateBookmark(ctx, userID, workspaceID, bookmarks.CreateBookmarkInput{FolderID: folder.ID, Title: "Original", URL: "https://example.com/original"}, Metadata{
 		EventID:        "evt-bookmark-update-create",
 		OriginClientID: "client-a",
 	})
@@ -135,7 +145,12 @@ func TestActivityAuditDeleteBookmarkRecordsEventWithPreDeleteMetadata(t *testing
 	activityService := activity.NewService(pool)
 	store := NewPostgresStore(pool, bookmarkService, nil, activityService, nil)
 
-	created, err := store.CreateBookmark(ctx, userID, workspaceID, bookmarks.CreateBookmarkInput{Title: "To Delete", URL: "https://example.com/to-delete"}, Metadata{
+	folder, err := bookmarkService.CreateFolder(ctx, userID, workspaceID, bookmarks.CreateFolderInput{Name: "Delete Bookmark Folder"})
+	if err != nil {
+		t.Fatalf("create folder: %v", err)
+	}
+
+	created, err := store.CreateBookmark(ctx, userID, workspaceID, bookmarks.CreateBookmarkInput{FolderID: folder.ID, Title: "To Delete", URL: "https://example.com/to-delete"}, Metadata{
 		EventID:        "evt-bookmark-delete-create",
 		OriginClientID: "client-a",
 	})
@@ -405,8 +420,13 @@ func TestActivityAuditRetryCreateBookmarkThroughRunMutationDoesNotDoubleRecord(t
 	activityService := activity.NewService(pool)
 	store := NewPostgresStore(pool, bookmarkService, nil, activityService, nil)
 
+	folder, err := bookmarkService.CreateFolder(ctx, userID, workspaceID, bookmarks.CreateFolderInput{Name: "Retry Create Folder"})
+	if err != nil {
+		t.Fatalf("create folder: %v", err)
+	}
+
 	metadata := Metadata{EventID: "evt-bookmark-retry-create", OriginClientID: "client-a"}
-	input := bookmarks.CreateBookmarkInput{Title: "Retry Me", URL: "https://example.com/retry"}
+	input := bookmarks.CreateBookmarkInput{FolderID: folder.ID, Title: "Retry Me", URL: "https://example.com/retry"}
 
 	first, err := store.CreateBookmark(ctx, userID, workspaceID, input, metadata)
 	if err != nil {
@@ -456,7 +476,12 @@ func TestActivityAuditRetryDeleteBookmarkThroughRunDeleteMutationDoesNotDoubleRe
 	activityService := activity.NewService(pool)
 	store := NewPostgresStore(pool, bookmarkService, nil, activityService, nil)
 
-	created, err := store.CreateBookmark(ctx, userID, workspaceID, bookmarks.CreateBookmarkInput{Title: "Delete Retry Me", URL: "https://example.com/delete-retry"}, Metadata{
+	folder, err := bookmarkService.CreateFolder(ctx, userID, workspaceID, bookmarks.CreateFolderInput{Name: "Retry Delete Folder"})
+	if err != nil {
+		t.Fatalf("create folder: %v", err)
+	}
+
+	created, err := store.CreateBookmark(ctx, userID, workspaceID, bookmarks.CreateBookmarkInput{FolderID: folder.ID, Title: "Delete Retry Me", URL: "https://example.com/delete-retry"}, Metadata{
 		EventID:        "evt-bookmark-retry-delete-create",
 		OriginClientID: "client-a",
 	})
@@ -606,7 +631,12 @@ func TestActivityAuditFailureAbortsCreateBookmarkMutationTransaction(t *testing.
 	bookmarkService := bookmarks.NewService(pool, access.NewService(pool))
 	store := NewPostgresStore(pool, bookmarkService, nil, failingActivityRecorder{}, nil)
 
-	_, err := store.CreateBookmark(ctx, userID, workspaceID, bookmarks.CreateBookmarkInput{Title: "Should Not Persist", URL: "https://example.com/aborted"}, Metadata{
+	folder, err := bookmarkService.CreateFolder(ctx, userID, workspaceID, bookmarks.CreateFolderInput{Name: "Aborted Mutation Folder"})
+	if err != nil {
+		t.Fatalf("create folder: %v", err)
+	}
+
+	_, err = store.CreateBookmark(ctx, userID, workspaceID, bookmarks.CreateBookmarkInput{FolderID: folder.ID, Title: "Should Not Persist", URL: "https://example.com/aborted"}, Metadata{
 		EventID:        "evt-bookmark-audit-failure",
 		OriginClientID: "client-a",
 	})
@@ -656,7 +686,12 @@ func TestActivityAuditCreateBookmarkReturnsEnvelopeWithUnchangedFields(t *testin
 	activityService := activity.NewService(pool)
 	store := NewPostgresStore(pool, bookmarkService, nil, activityService, nil)
 
-	result, err := store.CreateBookmark(ctx, userID, workspaceID, bookmarks.CreateBookmarkInput{Title: "Envelope Check", URL: "https://example.com/envelope"}, Metadata{
+	folder, err := bookmarkService.CreateFolder(ctx, userID, workspaceID, bookmarks.CreateFolderInput{Name: "Envelope Check Folder"})
+	if err != nil {
+		t.Fatalf("create folder: %v", err)
+	}
+
+	result, err := store.CreateBookmark(ctx, userID, workspaceID, bookmarks.CreateBookmarkInput{FolderID: folder.ID, Title: "Envelope Check", URL: "https://example.com/envelope"}, Metadata{
 		EventID:        "evt-envelope-fields",
 		OriginClientID: "client-envelope",
 	})

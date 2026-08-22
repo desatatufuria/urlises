@@ -42,11 +42,16 @@ func TestReplayEventsAndBookmarkMutationRejectAfterOrganizationSoftDelete(t *tes
 	workspaceService := workspaces.NewService(pool, access.NewService(pool), activity.NewService(pool))
 	store := NewPostgresStore(pool, bookmarkService, workspaceService, noopActivityRecorder{}, nil)
 
+	folder, err := bookmarkService.CreateFolder(ctx, userID, workspaceID, bookmarks.CreateFolderInput{Name: "Soft Delete Reject Folder"})
+	if err != nil {
+		t.Fatalf("create folder: %v", err)
+	}
+
 	// Live baseline: both paths succeed before the organization is trashed.
 	if _, err := store.ReplayEvents(ctx, userID, workspaceID, 0); err != nil {
 		t.Fatalf("replay events before soft delete: %v", err)
 	}
-	if _, err := bookmarkService.CreateBookmark(ctx, userID, workspaceID, bookmarks.CreateBookmarkInput{Title: "Live", URL: "https://example.com/live"}); err != nil {
+	if _, err := bookmarkService.CreateBookmark(ctx, userID, workspaceID, bookmarks.CreateBookmarkInput{FolderID: folder.ID, Title: "Live", URL: "https://example.com/live"}); err != nil {
 		t.Fatalf("create bookmark before soft delete: %v", err)
 	}
 

@@ -687,7 +687,7 @@ func TestCancelInvitationRouteRequiresAdmin(t *testing.T) {
 func TestCancelInvitationRouteRejectsNonPending(t *testing.T) {
 	ctx, pool := openOrganizationsTestPool(t, "organizations_handler_cancel_test")
 	adminID := insertOrganizationsTestUser(t, ctx, pool, "cancel-route-admin3@example.com")
-	inviteeID := insertOrganizationsTestUser(t, ctx, pool, "cancel-route-invitee3@example.com")
+	inviteeID := insertOrganizationsTestUser(t, ctx, pool, "cancel-target3@example.com")
 	organizationID := insertOrganizationsTestOrganization(t, ctx, pool, "Cancel Route Org 3")
 	insertOrganizationsTestMember(t, ctx, pool, organizationID, adminID, "admin")
 

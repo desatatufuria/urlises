@@ -95,6 +95,8 @@ func TestMigrationFrom000002ReconcilesLegacyPendingInvitations(t *testing.T) {
 		"000010_secrets.sql",
 		"000011_secrets_sent_to_email.sql",
 		"000012_activity_events.sql",
+		"000013_user_deactivation.sql",
+		"000014_soft_delete.sql",
 	})
 	migrateDirectory(t, ctx, pool, productionMigrationsDirectory(t))
 	assertRecordedMigrations(t, ctx, pool, []string{
@@ -110,6 +112,8 @@ func TestMigrationFrom000002ReconcilesLegacyPendingInvitations(t *testing.T) {
 		"000010_secrets.sql",
 		"000011_secrets_sent_to_email.sql",
 		"000012_activity_events.sql",
+		"000013_user_deactivation.sql",
+		"000014_soft_delete.sql",
 	})
 }
 
@@ -154,6 +158,8 @@ func TestRecorded000003FixForwardExpiresPendingInvitation(t *testing.T) {
 		"000010_secrets.sql",
 		"000011_secrets_sent_to_email.sql",
 		"000012_activity_events.sql",
+		"000013_user_deactivation.sql",
+		"000014_soft_delete.sql",
 	})
 	var appliedAfter0003, appliedAfter0004 time.Time
 	if err := pool.QueryRow(ctx, `SELECT applied_at FROM schema_migrations WHERE filename = '000003_admin_remediation.sql'`).Scan(&appliedAfter0003); err != nil {

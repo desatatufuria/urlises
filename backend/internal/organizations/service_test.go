@@ -802,6 +802,12 @@ func TestRestoreOrganizationPlainMemberIsForbidden(t *testing.T) {
 	organizationID := insertOrganizationsTestOrganization(t, ctx, pool, "Restore Forbidden Org")
 	insertOrganizationsTestMember(t, ctx, pool, organizationID, ownerID, "owner")
 	insertOrganizationsTestMember(t, ctx, pool, organizationID, memberID, "member")
+	// The member also belongs to a second, live organization -- otherwise
+	// deleting organizationID would orphan them and DeleteOrganization would
+	// reject it before this test ever reaches the restore-authorization
+	// assertion it actually exercises.
+	otherOrgID := insertOrganizationsTestOrganization(t, ctx, pool, "Restore Forbidden Member's Other Org")
+	insertOrganizationsTestMember(t, ctx, pool, otherOrgID, memberID, "member")
 
 	if err := service.DeleteOrganization(ctx, ownerID, organizationID); err != nil {
 		t.Fatalf("soft delete organization: %v", err)
@@ -998,6 +1004,12 @@ func TestListDeletedOrganizationsPlainMemberGetsEmptyResult(t *testing.T) {
 	organizationID := insertOrganizationsTestOrganization(t, ctx, pool, "Trash Member Org")
 	insertOrganizationsTestMember(t, ctx, pool, organizationID, ownerID, "owner")
 	insertOrganizationsTestMember(t, ctx, pool, organizationID, memberID, "member")
+	// The member also belongs to a second, live organization -- otherwise
+	// deleting organizationID would orphan them and DeleteOrganization would
+	// reject it before this test ever reaches the trash-listing assertion it
+	// actually exercises.
+	otherOrgID := insertOrganizationsTestOrganization(t, ctx, pool, "Trash Member's Other Org")
+	insertOrganizationsTestMember(t, ctx, pool, otherOrgID, memberID, "member")
 	if err := service.DeleteOrganization(ctx, ownerID, organizationID); err != nil {
 		t.Fatalf("soft delete organization: %v", err)
 	}
@@ -1566,6 +1578,12 @@ func TestDeleteOrganizationRouteHTTPContractUnchangedBySoftDeleteConversion(t *t
 	organizationID := insertOrganizationsTestOrganization(t, ctx, pool, "HTTP Contract Org")
 	insertOrganizationsTestMember(t, ctx, pool, organizationID, ownerID, "owner")
 	insertOrganizationsTestMember(t, ctx, pool, organizationID, memberID, "member")
+	// The member also belongs to a second, live organization -- otherwise
+	// deleting organizationID would orphan them and DeleteOrganization would
+	// reject it before this test ever reaches the HTTP-contract assertions it
+	// actually exercises.
+	otherOrgID := insertOrganizationsTestOrganization(t, ctx, pool, "HTTP Contract Member's Other Org")
+	insertOrganizationsTestMember(t, ctx, pool, otherOrgID, memberID, "member")
 
 	currentUserID := memberID
 	dynamicPrincipal := func(next http.Handler) http.Handler {
