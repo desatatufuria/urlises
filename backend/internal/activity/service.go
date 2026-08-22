@@ -1,10 +1,11 @@
 // Package activity records and lists org-scoped audit/activity events for
-// notable mutations (organization, workspace, group changes). Recording is
-// atomic with the mutation it describes: Record writes inside the caller's
-// existing transaction, immediately before that transaction's own commit —
-// never after commit, never through a post-commit/best-effort path. This
-// package has zero callers in this work unit; organizations/workspaces/
-// groups are wired in later units.
+// notable mutations (organization, workspace, group changes, and — once
+// bookmark-activity-audit's sync wiring lands — bookmark/folder mutations
+// via sync.PostgresStore.recordEvent). Recording is atomic with the
+// mutation it describes: Record writes inside the caller's existing
+// transaction, immediately before that transaction's own commit — never
+// after commit, never through a post-commit/best-effort path. This
+// package is wired from organizations, workspaces, and groups today.
 package activity
 
 import (
@@ -52,6 +53,17 @@ const (
 	// KindWorkspaceDeleted.
 	KindOrganizationRestored Kind = "organization.restored"
 	KindWorkspaceRestored    Kind = "workspace.restored"
+	// KindBookmarkCreated, KindBookmarkUpdated, KindBookmarkDeleted,
+	// KindFolderCreated, KindFolderUpdated and KindFolderDeleted are the
+	// bookmark-activity-audit Kinds recorded by sync.PostgresStore.recordEvent
+	// for the 8 bookmark/folder mutation call sites (design.md Interfaces /
+	// Contracts).
+	KindBookmarkCreated Kind = "bookmark.created"
+	KindBookmarkUpdated Kind = "bookmark.updated"
+	KindBookmarkDeleted Kind = "bookmark.deleted"
+	KindFolderCreated   Kind = "folder.created"
+	KindFolderUpdated   Kind = "folder.updated"
+	KindFolderDeleted   Kind = "folder.deleted"
 )
 
 // minListLimit and maxListLimit are the clamp bounds ListByOrganization
