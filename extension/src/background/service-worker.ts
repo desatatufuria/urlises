@@ -8,6 +8,7 @@ import {
   handleBookmarkRemoved,
   initializeBackground,
   listSecrets,
+  listSecretRecipients,
   loadOptionsState,
   login,
   markActivitySeen,
@@ -95,6 +96,9 @@ chrome.runtime.onMessage.addListener((message: { type: string; payload?: unknown
         return;
       case "secrets/list":
         sendResponse(await listSecrets());
+        return;
+      case "secrets/recipients":
+        sendResponse(await listSecretRecipients());
         return;
       case "preferences/set-theme":
         sendResponse(await setUiTheme((message.payload as { uiTheme: "slate" | "indigo" | "teal" }).uiTheme));

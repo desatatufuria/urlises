@@ -65,26 +65,26 @@ Each unit is developed, tested, and merged into the previous unit's branch befor
 
 ## Phase E1: Extension — Types, API, Background Wiring
 
-- [ ] E1.1 GREEN: `extension/src/shared/types.ts` — add `SecretRecipient{userId,email,name?}`, placed beside `OrganizationMembership`/`WorkspaceAccess`, with the "mirrors `organizations.MemberName`, no role/org attribution" doc comment.
-- [ ] E1.2 RED: `extension/tests/secret-recipients.test.mjs` (new) — `api.getSecretRecipients` issues `GET /me/secret-recipients` with the bearer header and unwraps `recipients` (mirrors `list-secrets.test.mjs:37`).
-- [ ] E1.3 GREEN: `extension/src/shared/api.ts` — implement `getSecretRecipients(backendUrl, session)` per design.md's exact signature, following `getOrganizations`' shape.
-- [ ] E1.4 RED: same test file — `projection.listSecretRecipients` rejects with `/sign in required/` without a session; returns raw entries with one (mirrors `list-secrets.test.mjs:56,65`).
-- [ ] E1.5 GREEN: `extension/src/background/projection.ts` — implement `listSecretRecipients()` following `listSecrets`' shape.
-- [ ] E1.6 GREEN: `extension/src/background/service-worker.ts` — add `case "secrets/recipients": sendResponse(await listSecretRecipients()); return;` next to `secrets/create`/`secrets/send-email`/`secrets/list`.
+- [x] E1.1 GREEN: `extension/src/shared/types.ts` — add `SecretRecipient{userId,email,name?}`, placed beside `OrganizationMembership`/`WorkspaceAccess`, with the "mirrors `organizations.MemberName`, no role/org attribution" doc comment.
+- [x] E1.2 RED: `extension/tests/secret-recipients.test.mjs` (new) — `api.getSecretRecipients` issues `GET /me/secret-recipients` with the bearer header and unwraps `recipients` (mirrors `list-secrets.test.mjs:37`).
+- [x] E1.3 GREEN: `extension/src/shared/api.ts` — implement `getSecretRecipients(backendUrl, session)` per design.md's exact signature, following `getOrganizations`' shape.
+- [x] E1.4 RED: same test file — `projection.listSecretRecipients` rejects with `/sign in required/` without a session; returns raw entries with one (mirrors `list-secrets.test.mjs:56,65`).
+- [x] E1.5 GREEN: `extension/src/background/projection.ts` — implement `listSecretRecipients()` following `listSecrets`' shape.
+- [x] E1.6 GREEN: `extension/src/background/service-worker.ts` — add `case "secrets/recipients": sendResponse(await listSecretRecipients()); return;` next to `secrets/create`/`secrets/send-email`/`secrets/list`.
 
 ## Phase E2: Extension — Pure Filter Module
 
-- [ ] E2.1 RED: same test file — `filterRecipients` table-driven: empty/whitespace query ⇒ `[]`; email substring match; name substring match; case-insensitive; prefix ranks before mid-string; capped at `MAX_RECIPIENT_SUGGESTIONS`; no match ⇒ `[]`; empty candidate list ⇒ `[]`.
-- [ ] E2.2 GREEN: `extension/src/create-secret/recipient-filter.ts` (new) — implement `MAX_RECIPIENT_SUGGESTIONS = 8` and `filterRecipients(candidates, query)` per design.md's exact signature and ranking rule.
+- [x] E2.1 RED: same test file — `filterRecipients` table-driven: empty/whitespace query ⇒ `[]`; email substring match; name substring match; case-insensitive; prefix ranks before mid-string; capped at `MAX_RECIPIENT_SUGGESTIONS`; no match ⇒ `[]`; empty candidate list ⇒ `[]`.
+- [x] E2.2 GREEN: `extension/src/create-secret/recipient-filter.ts` (new) — implement `MAX_RECIPIENT_SUGGESTIONS = 8` and `filterRecipients(candidates, query)` per design.md's exact signature and ranking rule.
 
 ## Phase E3: Extension — Picker Markup + DOM Wiring (untested per design's declared gap)
 
-- [ ] E3.1 GREEN: `extension/src/create-secret/create-secret.html` — insert `#recipient-picker` (input + `<ul>`) and `#recipient-picker-hint` inside `#secret-link-result`, after the `<hr class="ui-divider" />` and before `#send-email-form` (Decision 12 — sibling, not nested).
-- [ ] E3.2 GREEN: `extension/src/shared/ui/theme.css` — add the one new `.ui-option-list` class (max-height + overflow-y).
-- [ ] E3.3 GREEN: `extension/src/create-secret/create-secret.ts` — add `RecipientDirectoryState` type (`loading`/`ready`/`error`) and fire-and-forget `void loadRecipients()` call inside `bootstrap()`, never awaited (Decision 13).
-- [ ] E3.4 GREEN: `create-secret.ts` — implement `renderRecipientPicker()` covering the 6-row degradation table (hidden/empty-hint/`Type to search N colleagues.`/`No colleague matches — type the full address.`/M≤8 options/`Colleague search is unavailable — type the address.`); `#recipient-email` is never `.disabled`.
-- [ ] E3.5 GREEN: `create-secret.ts` — add the delegated `click` listener on `#recipient-options` that sets `recipientEmailInput.value`, clears the filter, collapses the list, and focuses `#recipient-email`; do not edit `runSendSecretEmail`.
-- [ ] E3.6 GREEN: `create-secret.ts` — add `clearRecipientPicker()` and call it from `resetToCreateForm()` and after a successful send.
+- [x] E3.1 GREEN: `extension/src/create-secret/create-secret.html` — insert `#recipient-picker` (input + `<ul>`) and `#recipient-picker-hint` inside `#secret-link-result`, after the `<hr class="ui-divider" />` and before `#send-email-form` (Decision 12 — sibling, not nested).
+- [x] E3.2 GREEN: `extension/src/shared/ui/theme.css` — add the one new `.ui-option-list` class (max-height + overflow-y).
+- [x] E3.3 GREEN: `extension/src/create-secret/create-secret.ts` — add `RecipientDirectoryState` type (`loading`/`ready`/`error`) and fire-and-forget `void loadRecipients()` call inside `bootstrap()`, never awaited (Decision 13).
+- [x] E3.4 GREEN: `create-secret.ts` — implement `renderRecipientPicker()` covering the 6-row degradation table (hidden/empty-hint/`Type to search N colleagues.`/`No colleague matches — type the full address.`/M≤8 options/`Colleague search is unavailable — type the address.`); `#recipient-email` is never `.disabled`.
+- [x] E3.5 GREEN: `create-secret.ts` — add the delegated `click` listener on `#recipient-options` that sets `recipientEmailInput.value`, clears the filter, collapses the list, and focuses `#recipient-email`; do not edit `runSendSecretEmail`.
+- [x] E3.6 GREEN: `create-secret.ts` — add `clearRecipientPicker()` and call it from `resetToCreateForm()` and after a successful send.
 
 ## Phase 5: Verification
 
