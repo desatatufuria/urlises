@@ -136,22 +136,22 @@ Each unit is developed, tested, and merged into the previous unit's branch befor
 - [x] 3.12 GREEN: `workspaces/service.go` — `ListDeleted` running the Trash workspaces query.
 - [x] 3.13 RED: `workspaces/handler_test.go` — `POST /workspaces/{workspaceId}/restore` → 204/403/404; `GET /workspaces/deleted` → 200; route-precedence test that `/workspaces/deleted` does not match `{workspaceId}`.
 - [x] 3.14 GREEN: `workspaces/handler.go` — `routeService` +`Restore`,+`ListDeleted`; register both routes.
-- [ ] 3.15 RED: `admin-web/src/features/activity/format.test.ts` — renders `organization.restored` and `workspace.restored` with representative and missing metadata. **BLOCKED this batch**: apply instructions explicitly forbade touching admin-web files this unit, which conflicts with this task's numeric inclusion in "3a" — see apply-progress risks.
-- [ ] 3.16 GREEN: `admin-web/src/features/activity/format.ts` — add both case branches; `admin-web/src/lib/api/activity.ts` — add both to `ActivityKind`. **BLOCKED this batch**, same reason as 3.15.
+- [x] 3.15 RED: `admin-web/src/features/activity/format.test.ts` — renders `organization.restored` and `workspace.restored` with representative and missing metadata.
+- [x] 3.16 GREEN: `admin-web/src/features/activity/format.ts` — add both case branches; `admin-web/src/lib/api/activity.ts` — add both to `ActivityKind`.
 
 ### 3b — Trash frontend feature + wiring
 
-- [ ] 3.17 GREEN: `admin-web/src/lib/api/organizations.ts` — `restoreOrganization(token, organizationId)`, `listDeletedOrganizations(token)`.
-- [ ] 3.18 GREEN: `admin-web/src/lib/api/workspaces.ts` — `restoreWorkspace(token, workspaceId)`, `listDeletedWorkspaces(token)`.
-- [ ] 3.19 GREEN: `admin-web/src/lib/api/queryKeys.ts` — `trash.organizations`, `trash.workspaces` (top-level, not org-scoped).
-- [ ] 3.20 GREEN: `admin-web/src/features/trash/queries.ts` (new) — `useDeletedOrganizations`, `useDeletedWorkspaces`.
-- [ ] 3.21 GREEN: `admin-web/src/features/trash/mutations.ts` (new) — `useRestoreOrganizationMutation` (invalidates `trash.organizations`+`auth.organizations`, calls `refreshOrganizations()`), `useRestoreWorkspaceMutation` (invalidates `trash.workspaces`+`organization(orgId).workspaces`+`["workspaces"]`).
-- [ ] 3.22 RED: `admin-web/src/features/trash/TrashPage.test.tsx` (new) — both lists render; days-remaining derives from `purgeAt`; missing `deletedByEmail` degrades gracefully; Restore disables its row while pending (no `ConfirmByTyping` — restore is non-destructive); org restore triggers `refreshOrganizations`.
-- [ ] 3.23 GREEN: `admin-web/src/features/trash/TrashPage.tsx` (new) — two `Table`s (name, deleted, deleted by, days remaining, Restore), `restoringId` busy state, `notice` `DataState` — the `WorkspacesPage` shape.
-- [ ] 3.24 GREEN: `admin-web/src/app/router.tsx` — register `{ path: "trash", element: <TrashPage /> }` as a SIBLING of `setup/organization`, directly under `RequireSession` — NOT nested inside `AdminLayout`/`RequireAdminOrganization` (resolved Open Question; makes Trash reachable with zero live organizations).
-- [ ] 3.25 GREEN: `admin-web/src/app/shell/AdminLayout.tsx` — `{ to: "/trash", label: "Trash" }` before the trailing Account item.
-- [ ] 3.26 GREEN: `admin-web/src/app/views/OrganizationSetupPage.tsx` — "Recover a deleted organization" link to `/trash`.
-- [ ] 3.27 GREEN: `openspec/changes/lifecycle-management/specs/lifecycle-management/spec.md` — complete the delete-permanence correction (restore/trash now documented).
+- [x] 3.17 GREEN: `admin-web/src/lib/api/organizations.ts` — `restoreOrganization(token, organizationId)`, `listDeletedOrganizations(token)`.
+- [x] 3.18 GREEN: `admin-web/src/lib/api/workspaces.ts` — `restoreWorkspace(token, workspaceId)`, `listDeletedWorkspaces(token)`.
+- [x] 3.19 GREEN: `admin-web/src/lib/api/queryKeys.ts` — `trash.organizations`, `trash.workspaces` (top-level, not org-scoped).
+- [x] 3.20 GREEN: `admin-web/src/features/trash/queries.ts` (new) — `useDeletedOrganizations`, `useDeletedWorkspaces`.
+- [x] 3.21 GREEN: `admin-web/src/features/trash/mutations.ts` (new) — `useRestoreOrganizationMutation` (invalidates `trash.organizations`+`auth.organizations`, calls `refreshOrganizations()`), `useRestoreWorkspaceMutation` (invalidates `trash.workspaces`+`organization(orgId).workspaces`+`["workspaces"]`).
+- [x] 3.22 RED: `admin-web/src/features/trash/TrashPage.test.tsx` (new) — both lists render; days-remaining derives from `purgeAt`; missing `deletedByEmail` degrades gracefully; Restore disables its row while pending (no `ConfirmByTyping` — restore is non-destructive); org restore triggers `refreshOrganizations`.
+- [x] 3.23 GREEN: `admin-web/src/features/trash/TrashPage.tsx` (new) — two `Table`s (name, deleted, deleted by, days remaining, Restore), `restoringId` busy state, `notice` `DataState` — the `WorkspacesPage` shape.
+- [x] 3.24 GREEN: `admin-web/src/app/router.tsx` — register `{ path: "trash", element: <TrashPage /> }` as a SIBLING of `setup/organization`, directly under `RequireSession` — NOT nested inside `AdminLayout`/`RequireAdminOrganization` (resolved Open Question; makes Trash reachable with zero live organizations).
+- [x] 3.25 GREEN: `admin-web/src/app/shell/AdminLayout.tsx` — `{ to: "/trash", label: "Trash" }` before the trailing Account item.
+- [x] 3.26 GREEN: `admin-web/src/app/views/OrganizationSetupPage.tsx` — "Recover a deleted organization" link to `/trash`.
+- [x] 3.27 GREEN: `openspec/changes/lifecycle-management/specs/lifecycle-management/spec.md` — complete the delete-permanence correction (restore/trash now documented).
 
 ## Phase 4: Scheduled Purge (Slice 4)
 

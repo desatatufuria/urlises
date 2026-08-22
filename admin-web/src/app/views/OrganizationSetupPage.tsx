@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from "react";
-import { Navigate, useNavigate } from "react-router-dom";
+import { Link, Navigate, useNavigate } from "react-router-dom";
 import { AppShell } from "../../lib/ui/components/AppShell";
 import { DataState } from "../../lib/ui/components/DataState";
 import { FormRow } from "../../lib/ui/components/FormRow";
@@ -49,6 +49,9 @@ export function OrganizationSetupPage() {
             <button className="ui-button ui-button-primary" disabled={submitting} type="submit">{submitting ? "Creating organization…" : "Create organization"}</button>
             {error ? <DataState tone="danger" title="Organization setup failed" description={error} compact /> : null}
           </form>
+          <p className="ui-copy">
+            Deleted your last organization by mistake? <Link to="/trash">Recover a deleted organization</Link>.
+          </p>
           <button className="ui-button ui-button-secondary" onClick={() => void signOut()} type="button">Sign out</button>
         </section>
       </AppShell>
