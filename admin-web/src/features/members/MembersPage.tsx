@@ -89,6 +89,10 @@ export function MembersPage() {
                 value={member.role}
                 onChange={(event) => {
                   const nextRole = event.target.value as OrganizationRole;
+                  if (!window.confirm(`Change ${member.email}'s role to ${nextRole}?`)) {
+                    event.target.value = member.role;
+                    return;
+                  }
                   setNotice(null);
                   setUpdatingUserId(member.userId);
                   void updateRoleMutation
@@ -223,7 +227,7 @@ export function MembersPage() {
             <p className="ui-copy">
               {section === "members"
                 ? "Role changes stay server-authoritative. Rejected updates keep the previous state visible."
-                : "Pending invitations remain part of the people workflow."}
+                : "Resend an invitation before it expires, or check who sent it."}
             </p>
           </header>
           {section === "members" ? renderMembersSection() : renderInvitationsSection()}

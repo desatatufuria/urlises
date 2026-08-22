@@ -7,7 +7,7 @@ import { useCreateWorkspaceMutation } from "./mutations";
 import { useWorkspaces } from "./queries";
 import { WorkspaceForm } from "./WorkspaceForm";
 import { useState } from "react";
-import { useSearchParams } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { ContextPanel } from "../../lib/ui/components/ContextPanel";
 
 export function WorkspacesPage() {
@@ -64,7 +64,7 @@ export function WorkspacesPage() {
         ) : null}
 
         {!workspacesQuery.isPending && !workspacesQuery.isError && (workspacesQuery.data?.length ?? 0) > 0 ? (
-          <Table columns={["Workspace", "Type", "Current role", "Grant sources"]}>
+          <Table columns={["Workspace", "Type", "Current role", "Grant sources", "Actions"]}>
             {workspacesQuery.data?.map((workspace) => (
               <tr key={workspace.workspaceId}>
                 <td>
@@ -79,7 +79,24 @@ export function WorkspacesPage() {
                 <td>
                   <Badge tone={workspace.role === "admin" ? "accent" : "neutral"}>{workspace.role}</Badge>
                 </td>
-                <td>{workspace.sources?.join(", ") || "creator-only access"}</td>
+                <td>
+                  {workspace.sources && workspace.sources.length > 0 ? (
+                    <div className="ui-inline-badges">
+                      {workspace.sources.map((source) => (
+                        <Badge key={`${workspace.workspaceId}-${source}`} tone="neutral">
+                          {source}
+                        </Badge>
+                      ))}
+                    </div>
+                  ) : (
+                    "creator-only access"
+                  )}
+                </td>
+                <td>
+                  <Link className="ui-button ui-button-secondary" to={`/access?panel=access&workspace=${workspace.workspaceId}`}>
+                    Manage access
+                  </Link>
+                </td>
               </tr>
             ))}
           </Table>

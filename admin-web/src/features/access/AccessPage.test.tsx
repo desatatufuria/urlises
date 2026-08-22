@@ -296,7 +296,9 @@ describe("access page", () => {
     expect(screen.getByRole("button", { name: /^grant access$/i })).toBeDisabled();
   });
 
-  it("updates and revokes direct and group grants", async () => {
+  it("updates and revokes direct and group grants after confirming", async () => {
+    const confirmSpy = vi.fn(() => true);
+    vi.stubGlobal("confirm", confirmSpy);
     const snapshot = {
       workspace: { workspaceId: "workspace-1", workspaceName: "Launch Room", workspaceType: "shared", organizationId: "org-1", organizationName: "Acme", role: "admin" },
       userGrants: [{ userId: "user-2", email: "editor@example.com", role: "viewer" }],
@@ -316,14 +318,89 @@ describe("access page", () => {
       return jsonResponse({ error: "not found" }, 404);
     });
     renderAppRoute("/access?panel=access&workspace=workspace-1");
+    await userEvent.click(await screen.findByRole("button", { name: /show raw grants/i }));
     await userEvent.selectOptions(await screen.findByLabelText(/direct role for editor@example.com/i), "editor");
+    expect(confirmSpy).toHaveBeenCalledWith("Change editor@example.com's access to Launch Room from viewer to editor?");
     expect(await screen.findByText(/direct grant updated/i)).toBeInTheDocument();
     await userEvent.selectOptions(screen.getByLabelText(/group role for operators/i), "admin");
+    expect(confirmSpy).toHaveBeenCalledWith("Change Operators's access to Launch Room from viewer to admin?");
     expect(await screen.findByText(/group grant updated/i)).toBeInTheDocument();
     const removes = screen.getAllByRole("button", { name: /^remove$/i });
     await userEvent.click(removes[0]);
+    expect(confirmSpy).toHaveBeenCalledWith("Remove editor@example.com's direct access to Launch Room?");
     expect(await screen.findByText(/direct grant removed/i)).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: /^remove$/i }));
+    expect(confirmSpy).toHaveBeenCalledWith("Remove Operators's group access to Launch Room?");
     expect(await screen.findByText(/group grant removed/i)).toBeInTheDocument();
+  });
+
+  it("cancels a role change or removal when the confirmation is dismissed", async () => {
+    vi.stubGlobal("confirm", vi.fn(() => false));
+    const snapshot = {
+      workspace: { workspaceId: "workspace-1", workspaceName: "Launch Room", workspaceType: "shared", organizationId: "org-1", organizationName: "Acme", role: "admin" },
+      userGrants: [{ userId: "user-2", email: "editor@example.com", role: "viewer" }],
+      groupGrants: [{ groupId: "group-1", groupName: "Operators", role: "viewer" }],
+      effectiveAccess: [],
+    };
+    let putCalls = 0;
+    let deleteCalls = 0;
+    fetchMock.mockImplementation((input, init) => {
+      const url = String(input); const method = init?.method ?? "GET";
+      if (url.endsWith("/organizations/org-1/workspaces")) return jsonResponse({ workspaces: [{ workspaceId: "workspace-1", workspaceName: "Launch Room", workspaceType: "shared", organizationId: "org-1", organizationName: "Acme", role: "admin" }] });
+      if (url.endsWith("/organizations/org-1/members")) return jsonResponse({ members: [{ userId: "user-2", email: "editor@example.com", role: "member" }] });
+      if (url.endsWith("/organizations/org-1/groups")) return jsonResponse({ groups: [{ id: "group-1", organizationId: "org-1", name: "Operators" }] });
+      if (url.endsWith("/workspaces/workspace-1/access") && method === "GET") return jsonResponse(snapshot);
+      if (url.includes("/workspaces/workspace-1/users/user-2/access") && method === "PUT") { putCalls += 1; return jsonResponse({}); }
+      if (url.includes("/workspaces/workspace-1/users/user-2/access") && method === "DELETE") { deleteCalls += 1; return Promise.resolve(new Response(null, { status: 204 })); }
+      return jsonResponse({ error: "not found" }, 404);
+    });
+    renderAppRoute("/access?panel=access&workspace=workspace-1");
+    await userEvent.click(await screen.findByRole("button", { name: /show raw grants/i }));
+    const select = await screen.findByLabelText(/direct role for editor@example.com/i);
+    await userEvent.selectOptions(select, "editor");
+    expect(putCalls).toBe(0);
+    await waitFor(() => expect(select).toHaveValue("viewer"));
+
+    const removeButtons = screen.getAllByRole("button", { name: /^remove$/i });
+    await userEvent.click(removeButtons[0]);
+    expect(deleteCalls).toBe(0);
+  });
+
+  it("shows the effective access review first and keeps raw grant tables collapsed by default", async () => {
+    fetchMock.mockImplementation((input) => {
+      const url = String(input);
+      if (url.endsWith("/organizations/org-1/workspaces")) {
+        return jsonResponse({ workspaces: [{ workspaceId: "workspace-1", workspaceName: "Launch Room", workspaceType: "shared", organizationId: "org-1", organizationName: "Acme", role: "admin" }] });
+      }
+      if (url.endsWith("/organizations/org-1/members")) return jsonResponse({ members: [{ userId: "user-2", email: "editor@example.com", role: "member" }] });
+      if (url.endsWith("/organizations/org-1/groups")) return jsonResponse({ groups: [{ id: "group-1", organizationId: "org-1", name: "Operators" }] });
+      if (url.endsWith("/workspaces/workspace-1/access")) {
+        return jsonResponse({
+          workspace: { workspaceId: "workspace-1", workspaceName: "Launch Room", workspaceType: "shared", organizationId: "org-1", organizationName: "Acme", role: "admin" },
+          userGrants: [{ userId: "user-2", email: "editor@example.com", role: "viewer" }],
+          groupGrants: [{ groupId: "group-1", groupName: "Operators", role: "viewer" }],
+          effectiveAccess: [{ userId: "user-2", email: "editor@example.com", role: "viewer", sources: ["direct"] }],
+        });
+      }
+      return jsonResponse({ error: "not found" }, 404);
+    });
+
+    renderAppRoute("/access?panel=access&workspace=workspace-1");
+
+    await screen.findByText(/effective access review/i);
+    expect(screen.queryByText(/direct user grants/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/^group grants$/i)).not.toBeInTheDocument();
+
+    const toggle = screen.getByRole("button", { name: /show raw grants/i });
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+
+    await userEvent.click(toggle);
+
+    expect(await screen.findByText(/direct user grants/i)).toBeInTheDocument();
+    expect(screen.getByText(/^group grants$/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /hide raw grants/i })).toHaveAttribute("aria-expanded", "true");
+
+    await userEvent.click(screen.getByRole("button", { name: /hide raw grants/i }));
+    expect(screen.queryByText(/direct user grants/i)).not.toBeInTheDocument();
   });
 });

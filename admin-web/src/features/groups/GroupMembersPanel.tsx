@@ -137,18 +137,21 @@ export function GroupMembersPanel({
         }}
       >
         <div className="ui-inline-grid ui-inline-grid--actions">
-          <FormRow label="Add organization member">
-            <select aria-label="Add member to group" disabled={saving || availableMembers.length === 0} value={selectedUserId} onChange={(event) => setSelectedUserId(event.target.value)}>
-              {availableMembers.length === 0 ? <option value="">No more members available</option> : null}
-              {availableMembers.map((member) => (
-                <option key={member.userId} value={member.userId}>
-                  {member.email}
-                </option>
-              ))}
-            </select>
-          </FormRow>
+          {availableMembers.length > 0 ? (
+            <FormRow label="Add organization member">
+              <select aria-label="Add member to group" disabled={saving} value={selectedUserId} onChange={(event) => setSelectedUserId(event.target.value)}>
+                {availableMembers.map((member) => (
+                  <option key={member.userId} value={member.userId}>
+                    {member.email}
+                  </option>
+                ))}
+              </select>
+            </FormRow>
+          ) : (
+            <DataState compact title="Everyone already belongs to this group" description="All organization members already belong to this group." />
+          )}
           <div className="ui-actions-row ui-actions-row--end">
-            <button className="ui-button ui-button-primary" disabled={saving || !selectedUserId} type="submit">
+            <button className="ui-button ui-button-primary" disabled={saving || !selectedUserId || availableMembers.length === 0} type="submit">
               Add member
             </button>
           </div>

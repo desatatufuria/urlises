@@ -123,6 +123,33 @@ describe("groups page", () => {
     expect(await screen.findByText(/group deleted/i)).toBeInTheDocument();
   });
 
+  it("shows an empty state instead of a placeholder option when everyone already belongs to the group", async () => {
+    const groupMembers = [{ groupId: "group-1", userId: "user-1", email: "owner@example.com", name: "Owner" }];
+
+    fetchMock.mockImplementation((input, init) => {
+      const url = String(input);
+      const method = init?.method ?? "GET";
+
+      if (url.endsWith("/organizations/org-1/groups") && method === "GET") {
+        return jsonResponse({ groups: [{ id: "group-1", organizationId: "org-1", name: "Operators" }] });
+      }
+      if (url.endsWith("/organizations/org-1/members")) {
+        return jsonResponse({ members: [{ userId: "user-1", email: "owner@example.com", name: "Owner", role: "owner" }] });
+      }
+      if (url.endsWith("/groups/group-1/members") && method === "GET") {
+        return jsonResponse({ members: groupMembers });
+      }
+
+      return jsonResponse({ error: "not found" }, 404);
+    });
+
+    renderAppRoute("/groups?panel=group&group=group-1");
+
+    expect(await screen.findByText(/everyone already belongs to this group/i)).toBeInTheDocument();
+    expect(screen.queryByLabelText(/add member to group/i)).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^add member$/i })).toBeDisabled();
+  });
+
   it.each(["create", "rename", "delete"])("preserves the current group state when %s fails", async (operation) => {
     vi.stubGlobal("confirm", vi.fn(() => true));
     fetchMock.mockImplementation((input, init) => {
