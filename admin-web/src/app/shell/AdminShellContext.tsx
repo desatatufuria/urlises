@@ -1,5 +1,6 @@
-import { NavLink } from "react-router-dom";
+import { NavLink, useLocation } from "react-router-dom";
 import { Badge } from "../../lib/ui/components/Badge";
+import { DropdownMenu } from "../../lib/ui/components/DropdownMenu";
 import { ThemeToggle } from "../../lib/ui/components/ThemeToggle";
 import { useColorScheme } from "../../lib/ui/useColorScheme";
 import { useAuth } from "../providers/AuthProvider";
@@ -11,10 +12,16 @@ export const navItems = [
   { to: "/groups", label: "Groups" },
   { to: "/workspaces", label: "Workspaces" },
   { to: "/access", label: "Access" },
-  { to: "/activity", label: "Activity" },
   { to: "/secrets", label: "Secrets" },
+] as const;
+
+// Collapsed into the "History" nav submenu instead of sitting flat in
+// navItems -- Activity is the audit trail of what happened, Trash is what's
+// no longer there pending recovery; both are "look back", not day-to-day
+// navigation, so they share one dropdown.
+const historyItems = [
+  { to: "/activity", label: "Activity" },
   { to: "/trash", label: "Trash" },
-  { to: "/account", label: "Account" },
 ] as const;
 
 /**
@@ -28,6 +35,10 @@ export function AdminShellContext() {
   const { principal, signOut } = useAuth();
   const { activeOrganization, adminOrganizations, setActiveOrganizationId } = useOrganization();
   const { preference, setPreference } = useColorScheme();
+  const { pathname } = useLocation();
+
+  const historyActive = pathname.startsWith("/activity") || pathname.startsWith("/trash");
+  const accountLabel = principal?.name ?? principal?.email ?? "Account";
 
   return (
     <>
@@ -43,15 +54,59 @@ export function AdminShellContext() {
             {item.label}
           </NavLink>
         ))}
+        <DropdownMenu
+          label="History"
+          triggerClassName={`ui-nav__link ui-dropdown__nav-trigger${historyActive ? " ui-nav__link--active" : ""}`}
+        >
+          {(close) => (
+            <>
+              {historyItems.map((item) => (
+                <NavLink key={item.to} className="ui-dropdown__item" to={item.to} onClick={close}>
+                  {item.label}
+                </NavLink>
+              ))}
+            </>
+          )}
+        </DropdownMenu>
         {adminOrganizations.length > 0 ? <NavLink className={({ isActive }) => `ui-nav__link${isActive ? " ui-nav__link--active" : ""}`} to="/organizations/new">Create organization</NavLink> : null}
       </nav>
       <div className="ui-context-actions">
-        <select aria-label="Active organization" className="ui-select" value={activeOrganization?.organizationId ?? ""} onChange={(event) => setActiveOrganizationId(event.target.value)}>
-          {adminOrganizations.map((organization) => <option key={organization.organizationId} value={organization.organizationId}>{organization.organizationName}</option>)}
-        </select>
-        <ThemeToggle preference={preference} onChange={setPreference} />
-        <Badge tone="neutral">{activeOrganization?.role ?? "admin"}</Badge>
-        <button aria-label={`Sign out ${principal?.name ?? principal?.email ?? ""}`} className="ui-button ui-button-secondary" onClick={() => void signOut()} type="button">Sign out</button>
+        <DropdownMenu
+          ariaLabel={accountLabel}
+          label={(
+            <>
+              <span className="ui-account-trigger__label">{accountLabel}</span>
+              <span aria-hidden="true">▾</span>
+            </>
+          )}
+          panelClassName="ui-dropdown__panel--end"
+          triggerClassName="ui-button ui-button-secondary ui-account-trigger"
+        >
+          {(close) => (
+            <>
+              <div className="ui-dropdown__meta">
+                <Badge tone="neutral">{activeOrganization?.role ?? "admin"}</Badge>
+                <span className="ui-muted">{activeOrganization?.organizationName ?? "Control"}</span>
+              </div>
+              <select
+                aria-label="Active organization"
+                className="ui-select"
+                value={activeOrganization?.organizationId ?? ""}
+                onChange={(event) => {
+                  setActiveOrganizationId(event.target.value);
+                  close();
+                }}
+              >
+                {adminOrganizations.map((organization) => <option key={organization.organizationId} value={organization.organizationId}>{organization.organizationName}</option>)}
+              </select>
+              <ThemeToggle preference={preference} onChange={setPreference} />
+              <NavLink className="ui-dropdown__item" to="/account" onClick={close}>Account</NavLink>
+              <div className="ui-dropdown__divider">
+                <button aria-label={`Sign out ${principal?.name ?? principal?.email ?? ""}`} className="ui-button ui-button-secondary" onClick={() => { close(); void signOut(); }} type="button">Sign out</button>
+              </div>
+            </>
+          )}
+        </DropdownMenu>
       </div>
     </>
   );

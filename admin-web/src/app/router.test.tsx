@@ -102,11 +102,13 @@ describe("admin router", () => {
       return jsonResponse({ error: "not found" }, 404);
     });
 
+    const user = userEvent.setup();
     renderAppRoute("/workspaces", defaultAdminSnapshot);
 
     expect((await screen.findAllByRole("heading", { name: /workspaces/i })).length).toBeGreaterThan(0);
     expect(screen.getByRole("navigation", { name: /admin sections/i })).toBeInTheDocument();
     expect(screen.getByText("URLises")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /owner/i }));
     expect(screen.getByRole("combobox", { name: "Active organization" })).toHaveDisplayValue("Acme");
     expect(screen.getByRole("link", { name: "Overview" })).toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "Invitations" })).not.toBeInTheDocument();
@@ -211,6 +213,7 @@ describe("admin router", () => {
   it("switches the applied theme when a color scheme toggle button is clicked", async () => {
     const user = userEvent.setup();
     renderAppRoute("/", defaultAdminSnapshot);
+    await user.click(await screen.findByRole("button", { name: /owner/i }));
     const systemButton = await screen.findByRole("button", { name: "Match system theme" });
     expect(systemButton).toHaveAttribute("aria-pressed", "true");
 
