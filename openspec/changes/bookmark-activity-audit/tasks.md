@@ -73,24 +73,24 @@ Each unit is developed, tested, and merged into the previous unit's branch befor
 - [x] A1.4 GREEN: `backend/internal/sync/postgres.go` — add `activityKindByEventType` map and the `activityRecorder` interface (declared next to `workspaceAccessChecker`).
 - [x] A1.5 GREEN: `backend/internal/sync/postgres.go` — add `activity activityRecorder` field to `PostgresStore`; update `NewPostgresStore` to accept it (Decision 6: no nil guard).
 - [x] A1.6 GREEN: `backend/internal/sync/postgres.go` — add `folderAuditMetadata(f bookmarks.Folder)` and `bookmarkAuditMetadata(b bookmarks.Bookmark)` helpers.
-- [ ] A1.7 DEFERRED to A2a: `backend/internal/sync/postgres.go` — `folderDeletePayload`/`bookmarkDeletePayload` gain `name`/`title,url` columns on the existing pre-delete SELECT and return a 3rd `audit map[string]any` value; sync payload keys stay byte-identical. Explicit scope narrowing for this apply batch: the delete-payload helpers are bound up with `recordEvent`'s `auditMetadata` wiring (A2a.3), so they move there instead of landing unused in A1.
+- [x] A1.7 DEFERRED to A2a: `backend/internal/sync/postgres.go` — `folderDeletePayload`/`bookmarkDeletePayload` gain `name`/`title,url` columns on the existing pre-delete SELECT and return a 3rd `audit map[string]any` value; sync payload keys stay byte-identical. Explicit scope narrowing for this apply batch: the delete-payload helpers are bound up with `recordEvent`'s `auditMetadata` wiring (A2a.3), so they move there instead of landing unused in A1.
 - [x] A1.8 GREEN: `backend/cmd/api/main.go:129` — pass `activityService` into `syncapi.NewPostgresStore(...)`.
 - [x] A1.9 GREEN: `backend/internal/sync/{postgres_integration,bookmark_routes,handler,replay}_test.go` — update every `NewPostgresStore` call site to pass the new `activityRecorder` argument (mechanical; nil or a no-op stub as each test already does for `publisher`). Only `postgres_integration_test.go` had call sites (5); `bookmark_routes_test.go`/`handler_test.go`/`replay_test.go` don't call `NewPostgresStore` directly, so no changes were needed there.
 
 ## Phase A2a: `recordEvent` Wiring + Core Mutation Audit Tests
 
-- [ ] A2a.1 GREEN: `backend/internal/sync/postgres.go` — restructure `recordEvent`'s SQL into the `inserted` CTE + outer SELECT joining `mutation_context` (per design.md's corrected SQL); `organization_id` and `workspace_name` reach the outer SELECT; placeholders `$1`-`$8` and the zero-row fail-closed behavior are unchanged.
-- [ ] A2a.2 GREEN: `backend/internal/sync/postgres.go` — `recordEvent` gains the `auditMetadata map[string]any` parameter; looks up `activityKindByEventType[eventType]` (error on miss, before the INSERT); calls `s.activity.Record(...)` inside the same `tx` with `auditMetadata` copied + `workspaceId`/`workspaceName` injected.
-- [ ] A2a.3 GREEN: `backend/internal/sync/postgres.go` — thread `auditMetadata` through all 8 call sites (6 direct mutation methods + `ApplyPreparedFolderPatchTx`/`ApplyPreparedBookmarkPatchTx` appliers), using `folderAuditMetadata`/`bookmarkAuditMetadata` and the delete-payload helpers' new `audit` return value.
-- [ ] A2a.4 RED: `backend/internal/sync/activity_audit_integration_test.go` (new) — bookmark create: exactly one `activity_events` row, `kind=bookmark.created`, `target_type=bookmark`, `organization_id` = the workspace's org, `actor_user_id` = real principal, metadata has `title`,`url`,`workspaceId`,`workspaceName`.
-- [ ] A2a.5 RED: same file — bookmark update: `kind=bookmark.updated`, same assertions.
-- [ ] A2a.6 RED: same file — bookmark delete: `kind=bookmark.deleted`, metadata `title`/`url` reflect the pre-delete state.
-- [ ] A2a.7 RED: same file — folder create: `kind=folder.created`, `target_type=folder`, metadata has `name`,`workspaceId`,`workspaceName`, no `url`.
-- [ ] A2a.8 RED: same file — folder update: `kind=folder.updated`, same assertions.
-- [ ] A2a.9 RED: same file — folder delete: `kind=folder.deleted`, metadata `name` reflects the pre-delete state.
-- [ ] A2a.10 RED: same file — no-op prepared patch (`patch.NoOp == true`) produces zero `sync_events` rows and zero `activity_events` rows.
-- [ ] A2a.11 RED: same file — unknown `eventType` passed to `recordEvent` returns an error and leaves a clean rollback (no `sync_events` row, no `activity_events` row, no cursor bump).
-- [ ] A2a.12 GREEN: verify A2a.4–A2a.11 pass against the A2a.1–A2a.3 implementation; no further production code expected.
+- [x] A2a.1 GREEN: `backend/internal/sync/postgres.go` — restructure `recordEvent`'s SQL into the `inserted` CTE + outer SELECT joining `mutation_context` (per design.md's corrected SQL); `organization_id` and `workspace_name` reach the outer SELECT; placeholders `$1`-`$8` and the zero-row fail-closed behavior are unchanged.
+- [x] A2a.2 GREEN: `backend/internal/sync/postgres.go` — `recordEvent` gains the `auditMetadata map[string]any` parameter; looks up `activityKindByEventType[eventType]` (error on miss, before the INSERT); calls `s.activity.Record(...)` inside the same `tx` with `auditMetadata` copied + `workspaceId`/`workspaceName` injected.
+- [x] A2a.3 GREEN: `backend/internal/sync/postgres.go` — thread `auditMetadata` through all 8 call sites (6 direct mutation methods + `ApplyPreparedFolderPatchTx`/`ApplyPreparedBookmarkPatchTx` appliers), using `folderAuditMetadata`/`bookmarkAuditMetadata` and the delete-payload helpers' new `audit` return value.
+- [x] A2a.4 RED: `backend/internal/sync/activity_audit_integration_test.go` (new) — bookmark create: exactly one `activity_events` row, `kind=bookmark.created`, `target_type=bookmark`, `organization_id` = the workspace's org, `actor_user_id` = real principal, metadata has `title`,`url`,`workspaceId`,`workspaceName`.
+- [x] A2a.5 RED: same file — bookmark update: `kind=bookmark.updated`, same assertions.
+- [x] A2a.6 RED: same file — bookmark delete: `kind=bookmark.deleted`, metadata `title`/`url` reflect the pre-delete state.
+- [x] A2a.7 RED: same file — folder create: `kind=folder.created`, `target_type=folder`, metadata has `name`,`workspaceId`,`workspaceName`, no `url`.
+- [x] A2a.8 RED: same file — folder update: `kind=folder.updated`, same assertions.
+- [x] A2a.9 RED: same file — folder delete: `kind=folder.deleted`, metadata `name` reflects the pre-delete state.
+- [x] A2a.10 RED: same file — no-op prepared patch (`patch.NoOp == true`) produces zero `sync_events` rows and zero `activity_events` rows.
+- [x] A2a.11 RED: same file — unknown `eventType` passed to `recordEvent` returns an error and leaves a clean rollback (no `sync_events` row, no `activity_events` row, no cursor bump).
+- [x] A2a.12 GREEN: verify A2a.4–A2a.11 pass against the A2a.1–A2a.3 implementation; no further production code expected.
 
 ## Phase A2b: Retry/Dedup + Audit-Failure Regression Tests
 
