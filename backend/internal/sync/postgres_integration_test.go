@@ -19,6 +19,7 @@ import (
 	"github.com/furia/shared-bookmark-sync/backend/internal/database"
 	"github.com/furia/shared-bookmark-sync/backend/internal/httpapi"
 	"github.com/furia/shared-bookmark-sync/backend/internal/workspaces"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -39,7 +40,7 @@ func TestReplayEventsAndBookmarkMutationRejectAfterOrganizationSoftDelete(t *tes
 
 	bookmarkService := bookmarks.NewService(pool, access.NewService(pool))
 	workspaceService := workspaces.NewService(pool, access.NewService(pool), activity.NewService(pool))
-	store := NewPostgresStore(pool, bookmarkService, workspaceService, nil)
+	store := NewPostgresStore(pool, bookmarkService, workspaceService, noopActivityRecorder{}, nil)
 
 	// Live baseline: both paths succeed before the organization is trashed.
 	if _, err := store.ReplayEvents(ctx, userID, workspaceID, 0); err != nil {
@@ -197,7 +198,7 @@ func TestCreateFolderCreatesCursorAndSyncEventWhenWorkspaceCursorRowDoesNotExist
 	workspaceID := insertSyncTestWorkspace(t, ctx, pool)
 	insertSyncWorkspaceAccess(t, ctx, pool, workspaceID, userID, "editor")
 
-	store := NewPostgresStore(pool, bookmarks.NewService(pool, access.NewService(pool)), nil, nil)
+	store := NewPostgresStore(pool, bookmarks.NewService(pool, access.NewService(pool)), nil, noopActivityRecorder{}, nil)
 	result, err := store.CreateFolder(ctx, userID, workspaceID, bookmarks.CreateFolderInput{Name: "First sync folder"}, Metadata{
 		EventID:        "evt-first-folder",
 		OriginClientID: "client-a",
@@ -267,7 +268,7 @@ func TestApplyPreparedPatchesTxRecordsOnlyMutationsAndReturnsPostCommit(t *testi
 		t.Fatal(err)
 	}
 	publisher := &recordingPublisher{pool: pool}
-	store := NewPostgresStore(pool, bookmarkService, nil, publisher)
+	store := NewPostgresStore(pool, bookmarkService, nil, noopActivityRecorder{}, publisher)
 
 	before := syncWriteCounts(t, ctx, pool)
 	tx, err := pool.Begin(ctx)
@@ -372,7 +373,7 @@ func TestFolderPatchRouteExecutesPreparedTransaction(t *testing.T) {
 		t.Fatal(err)
 	}
 	publisher := &recordingPublisher{pool: pool}
-	service := NewService(NewPostgresStore(pool, bookmarkService, nil, publisher))
+	service := NewService(NewPostgresStore(pool, bookmarkService, nil, noopActivityRecorder{}, publisher))
 	mux := http.NewServeMux()
 	RegisterBookmarkRoutes(mux, func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -455,7 +456,7 @@ func TestBookmarkPatchRouteExecutesPreparedTransaction(t *testing.T) {
 		t.Fatal(err)
 	}
 	publisher := &recordingPublisher{pool: pool}
-	service := NewService(NewPostgresStore(pool, bookmarkService, nil, publisher))
+	service := NewService(NewPostgresStore(pool, bookmarkService, nil, noopActivityRecorder{}, publisher))
 	mux := http.NewServeMux()
 	RegisterBookmarkRoutes(mux, func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -520,6 +521,18 @@ func TestBookmarkPatchRouteExecutesPreparedTransaction(t *testing.T) {
 	if forbiddenResult.Code != http.StatusForbidden || syncWriteCounts(t, ctx, pool) != before {
 		t.Fatalf("forbidden rejection = status %d body %s", forbiddenResult.Code, forbiddenResult.Body.String())
 	}
+}
+
+// noopActivityRecorder is a pass-through activityRecorder stub for tests
+// that don't exercise activity/audit recording: Record always returns nil,
+// so these tests' behavior is unchanged from before the activityRecorder
+// constructor param existed (mirrors the nil-publisher pattern used
+// elsewhere in this file, but never nil itself — design.md Decision 6 gives
+// PostgresStore.activity no nil guard).
+type noopActivityRecorder struct{}
+
+func (noopActivityRecorder) Record(ctx context.Context, tx pgx.Tx, orgID, actorUserID string, kind activity.Kind, targetType, targetID string, metadata map[string]any) error {
+	return nil
 }
 
 type recordingPublisher struct {

@@ -22,16 +22,18 @@ type activityRouteStub struct {
 	organizationID string
 	cursor         string
 	limit          int
+	category       Category
 	events         []Event
 	nextCursor     string
 	err            error
 }
 
-func (s *activityRouteStub) ListByOrganization(_ context.Context, requesterUserID, organizationID, cursor string, limit int) ([]Event, string, error) {
+func (s *activityRouteStub) ListByOrganization(_ context.Context, requesterUserID, organizationID, cursor string, limit int, category Category) ([]Event, string, error) {
 	s.requester = requesterUserID
 	s.organizationID = organizationID
 	s.cursor = cursor
 	s.limit = limit
+	s.category = category
 	return s.events, s.nextCursor, s.err
 }
 
@@ -198,6 +200,78 @@ func TestActivityRouteMalformedCursorReturns400NotAPanicOr500(t *testing.T) {
 
 	if rr.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want %d, body=%s", rr.Code, http.StatusBadRequest, rr.Body.String())
+	}
+}
+
+func TestActivityRouteCategoryOmittedDefaultsToAll(t *testing.T) {
+	stub := &activityRouteStub{events: []Event{}}
+	mux := http.NewServeMux()
+	RegisterRoutes(mux, activityPrincipal, stub)
+
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/organizations/org-1/activity", nil))
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, body=%s", rr.Code, rr.Body.String())
+	}
+	if stub.category != CategoryAll {
+		t.Fatalf("category forwarded = %q, want %q (omitted category must default to all)", stub.category, CategoryAll)
+	}
+}
+
+func TestActivityRouteCategoryBookmarksForwardedVerbatim(t *testing.T) {
+	stub := &activityRouteStub{events: []Event{}}
+	mux := http.NewServeMux()
+	RegisterRoutes(mux, activityPrincipal, stub)
+
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/organizations/org-1/activity?category=bookmarks", nil))
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, body=%s", rr.Code, rr.Body.String())
+	}
+	if stub.category != CategoryBookmarks {
+		t.Fatalf("category forwarded = %q, want %q", stub.category, CategoryBookmarks)
+	}
+}
+
+func TestActivityRouteUnknownCategoryDefaultsToAllWith200NotBadRequest(t *testing.T) {
+	stub := &activityRouteStub{events: []Event{}}
+	mux := http.NewServeMux()
+	RegisterRoutes(mux, activityPrincipal, stub)
+
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/organizations/org-1/activity?category=nonsense", nil))
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d (an unknown category must never 400 -- it must fall back to all), body=%s", rr.Code, http.StatusOK, rr.Body.String())
+	}
+	if stub.category != CategoryAll {
+		t.Fatalf("category forwarded = %q, want %q (unrecognised category must default to all)", stub.category, CategoryAll)
+	}
+}
+
+func TestParseCategory(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  string
+		want Category
+	}{
+		{name: "empty", raw: "", want: CategoryAll},
+		{name: "all", raw: "all", want: CategoryAll},
+		{name: "administrative", raw: "administrative", want: CategoryAdministrative},
+		{name: "bookmarks", raw: "bookmarks", want: CategoryBookmarks},
+		{name: "uppercase is case-insensitive", raw: "BOOKMARKS", want: CategoryBookmarks},
+		{name: "surrounding whitespace is trimmed", raw: "  bookmarks  ", want: CategoryBookmarks},
+		{name: "unrecognised value falls back to all", raw: "garbage", want: CategoryAll},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := parseCategory(tt.raw); got != tt.want {
+				t.Fatalf("parseCategory(%q) = %q, want %q", tt.raw, got, tt.want)
+			}
+		})
 	}
 }
 

@@ -10,6 +10,7 @@ import (
 	"hash/fnv"
 	"time"
 
+	"github.com/furia/shared-bookmark-sync/backend/internal/activity"
 	"github.com/furia/shared-bookmark-sync/backend/internal/bookmarks"
 	"github.com/furia/shared-bookmark-sync/backend/internal/workspaces"
 	"github.com/jackc/pgx/v5"
@@ -20,20 +21,60 @@ type workspaceAccessChecker interface {
 	GetAccessibleWorkspace(ctx context.Context, userID, workspaceID string) (workspaces.WorkspaceAccess, error)
 }
 
+// activityRecorder is the subset of *activity.Service this store depends on,
+// mirroring workspaceAccessChecker's narrow-interface pattern above. The
+// activity import is type-only (activity.Kind); activity does not import
+// sync, so there is no cycle.
+type activityRecorder interface {
+	Record(ctx context.Context, tx pgx.Tx, orgID, actorUserID string, kind activity.Kind,
+		targetType, targetID string, metadata map[string]any) error
+}
+
 type PostgresStore struct {
 	pool       *pgxpool.Pool
 	bookmarks  *bookmarks.Service
 	workspaces workspaceAccessChecker
+	activity   activityRecorder // NEW — never nil; see design.md Decision 6
 	publisher  Publisher
 }
 
-func NewPostgresStore(pool *pgxpool.Pool, bookmarkService *bookmarks.Service, workspaceService workspaceAccessChecker, publisher Publisher) *PostgresStore {
+func NewPostgresStore(pool *pgxpool.Pool, bookmarkService *bookmarks.Service,
+	workspaceService workspaceAccessChecker, activityService activityRecorder,
+	publisher Publisher) *PostgresStore {
 	return &PostgresStore{
 		pool:       pool,
 		bookmarks:  bookmarkService,
 		workspaces: workspaceService,
+		activity:   activityService,
 		publisher:  publisher,
 	}
+}
+
+// activityKindByEventType is the ONLY bridge between sync's wire-protocol
+// event_type vocabulary and activity's audit Kind vocabulary. They read alike
+// today by convention, not by contract — this table is what makes the
+// relationship explicit, reviewable, and fail-closed.
+var activityKindByEventType = map[string]activity.Kind{
+	"folder.created":   activity.KindFolderCreated,
+	"folder.updated":   activity.KindFolderUpdated,
+	"folder.deleted":   activity.KindFolderDeleted,
+	"bookmark.created": activity.KindBookmarkCreated,
+	"bookmark.updated": activity.KindBookmarkUpdated,
+	"bookmark.deleted": activity.KindBookmarkDeleted,
+}
+
+// folderAuditMetadata projects the audit-relevant fields off a Folder
+// (design.md "Recorded metadata" table). It is deliberately a narrow
+// projection, never the full resource blob (design.md Decision A).
+func folderAuditMetadata(f bookmarks.Folder) map[string]any {
+	return map[string]any{"name": f.Name}
+}
+
+// bookmarkAuditMetadata projects the audit-relevant fields off a Bookmark
+// (design.md "Recorded metadata" table). It is deliberately a narrow
+// projection, never the full resource blob (design.md Decision A).
+func bookmarkAuditMetadata(b bookmarks.Bookmark) map[string]any {
+	return map[string]any{"title": b.Title, "url": b.URL}
 }
 
 func (s *PostgresStore) CreateFolder(ctx context.Context, userID, workspaceID string, input bookmarks.CreateFolderInput, metadata Metadata) (MutationResult[bookmarks.Folder], error) {
@@ -45,7 +86,7 @@ func (s *PostgresStore) CreateFolder(ctx context.Context, userID, workspaceID st
 			return MutationResult[bookmarks.Folder]{}, err
 		}
 
-		result, err := s.recordEvent(ctx, tx, userID, workspaceID, eventID, metadata.OriginClientID, "folder.created", "folder", folder.ID, folder)
+		result, err := s.recordEvent(ctx, tx, userID, workspaceID, eventID, metadata.OriginClientID, "folder.created", "folder", folder.ID, folder, folderAuditMetadata(folder))
 		if err != nil {
 			return MutationResult[bookmarks.Folder]{}, err
 		}
@@ -63,7 +104,7 @@ func (s *PostgresStore) UpdateFolder(ctx context.Context, userID, folderID strin
 			return MutationResult[bookmarks.Folder]{}, err
 		}
 
-		result, err := s.recordEvent(ctx, tx, userID, folder.WorkspaceID, eventID, metadata.OriginClientID, "folder.updated", "folder", folder.ID, folder)
+		result, err := s.recordEvent(ctx, tx, userID, folder.WorkspaceID, eventID, metadata.OriginClientID, "folder.updated", "folder", folder.ID, folder, folderAuditMetadata(folder))
 		if err != nil {
 			return MutationResult[bookmarks.Folder]{}, err
 		}
@@ -76,7 +117,7 @@ func (s *PostgresStore) DeleteFolder(ctx context.Context, userID, folderID strin
 	return runDeleteMutation(ctx, s, folderID+":"+metadata.EventID, metadata, func(ctx context.Context, tx pgx.Tx, eventID string) (DeleteResult, error) {
 		return loadDuplicateDeleteByEntity(ctx, tx, eventID, "folder", folderID)
 	}, func(ctx context.Context, tx pgx.Tx, eventID string) (DeleteResult, error) {
-		payload, workspaceID, err := s.folderDeletePayload(ctx, tx, folderID)
+		payload, audit, workspaceID, err := s.folderDeletePayload(ctx, tx, folderID)
 		if err != nil {
 			return DeleteResult{}, err
 		}
@@ -84,7 +125,7 @@ func (s *PostgresStore) DeleteFolder(ctx context.Context, userID, folderID strin
 			return DeleteResult{}, err
 		}
 
-		event, err := s.recordEvent(ctx, tx, userID, workspaceID, eventID, metadata.OriginClientID, "folder.deleted", "folder", folderID, payload)
+		event, err := s.recordEvent(ctx, tx, userID, workspaceID, eventID, metadata.OriginClientID, "folder.deleted", "folder", folderID, payload, audit)
 		if err != nil {
 			return DeleteResult{}, err
 		}
@@ -102,7 +143,7 @@ func (s *PostgresStore) CreateBookmark(ctx context.Context, userID, workspaceID 
 			return MutationResult[bookmarks.Bookmark]{}, err
 		}
 
-		result, err := s.recordEvent(ctx, tx, userID, workspaceID, eventID, metadata.OriginClientID, "bookmark.created", "bookmark", bookmark.ID, bookmark)
+		result, err := s.recordEvent(ctx, tx, userID, workspaceID, eventID, metadata.OriginClientID, "bookmark.created", "bookmark", bookmark.ID, bookmark, bookmarkAuditMetadata(bookmark))
 		if err != nil {
 			return MutationResult[bookmarks.Bookmark]{}, err
 		}
@@ -120,7 +161,7 @@ func (s *PostgresStore) UpdateBookmark(ctx context.Context, userID, bookmarkID s
 			return MutationResult[bookmarks.Bookmark]{}, err
 		}
 
-		result, err := s.recordEvent(ctx, tx, userID, bookmark.WorkspaceID, eventID, metadata.OriginClientID, "bookmark.updated", "bookmark", bookmark.ID, bookmark)
+		result, err := s.recordEvent(ctx, tx, userID, bookmark.WorkspaceID, eventID, metadata.OriginClientID, "bookmark.updated", "bookmark", bookmark.ID, bookmark, bookmarkAuditMetadata(bookmark))
 		if err != nil {
 			return MutationResult[bookmarks.Bookmark]{}, err
 		}
@@ -152,7 +193,7 @@ func (s *PostgresStore) ApplyPreparedFolderPatchTx(ctx context.Context, tx pgx.T
 	if err != nil {
 		return PreparedMutationResult[bookmarks.Folder]{}, err
 	}
-	event, err := s.recordEvent(ctx, tx, userID, folder.WorkspaceID, eventID, metadata.OriginClientID, "folder.updated", "folder", folder.ID, folder)
+	event, err := s.recordEvent(ctx, tx, userID, folder.WorkspaceID, eventID, metadata.OriginClientID, "folder.updated", "folder", folder.ID, folder, folderAuditMetadata(folder))
 	if err != nil {
 		return PreparedMutationResult[bookmarks.Folder]{}, err
 	}
@@ -174,7 +215,7 @@ func (s *PostgresStore) ApplyPreparedBookmarkPatchTx(ctx context.Context, tx pgx
 	if err != nil {
 		return PreparedMutationResult[bookmarks.Bookmark]{}, err
 	}
-	event, err := s.recordEvent(ctx, tx, userID, bookmark.WorkspaceID, eventID, metadata.OriginClientID, "bookmark.updated", "bookmark", bookmark.ID, bookmark)
+	event, err := s.recordEvent(ctx, tx, userID, bookmark.WorkspaceID, eventID, metadata.OriginClientID, "bookmark.updated", "bookmark", bookmark.ID, bookmark, bookmarkAuditMetadata(bookmark))
 	if err != nil {
 		return PreparedMutationResult[bookmarks.Bookmark]{}, err
 	}
@@ -185,7 +226,7 @@ func (s *PostgresStore) DeleteBookmark(ctx context.Context, userID, bookmarkID s
 	return runDeleteMutation(ctx, s, bookmarkID+":"+metadata.EventID, metadata, func(ctx context.Context, tx pgx.Tx, eventID string) (DeleteResult, error) {
 		return loadDuplicateDeleteByEntity(ctx, tx, eventID, "bookmark", bookmarkID)
 	}, func(ctx context.Context, tx pgx.Tx, eventID string) (DeleteResult, error) {
-		payload, workspaceID, err := s.bookmarkDeletePayload(ctx, tx, bookmarkID)
+		payload, audit, workspaceID, err := s.bookmarkDeletePayload(ctx, tx, bookmarkID)
 		if err != nil {
 			return DeleteResult{}, err
 		}
@@ -193,7 +234,7 @@ func (s *PostgresStore) DeleteBookmark(ctx context.Context, userID, bookmarkID s
 			return DeleteResult{}, err
 		}
 
-		event, err := s.recordEvent(ctx, tx, userID, workspaceID, eventID, metadata.OriginClientID, "bookmark.deleted", "bookmark", bookmarkID, payload)
+		event, err := s.recordEvent(ctx, tx, userID, workspaceID, eventID, metadata.OriginClientID, "bookmark.deleted", "bookmark", bookmarkID, payload, audit)
 		if err != nil {
 			return DeleteResult{}, err
 		}
@@ -341,7 +382,12 @@ func runDeleteMutation(ctx context.Context, s *PostgresStore, lockKey string, me
 	return result, nil
 }
 
-func (s *PostgresStore) recordEvent(ctx context.Context, tx pgx.Tx, userID, workspaceID, eventID, originClientID, eventType, entityType, entityID string, payload any) (Envelope, error) {
+func (s *PostgresStore) recordEvent(ctx context.Context, tx pgx.Tx, userID, workspaceID, eventID, originClientID, eventType, entityType, entityID string, payload any, auditMetadata map[string]any) (Envelope, error) {
+	kind, ok := activityKindByEventType[eventType]
+	if !ok {
+		return Envelope{}, fmt.Errorf("record sync event: unmapped event type %q", eventType)
+	}
+
 	rawPayload, err := json.Marshal(payload)
 	if err != nil {
 		return Envelope{}, fmt.Errorf("marshal sync payload: %w", err)
@@ -349,9 +395,10 @@ func (s *PostgresStore) recordEvent(ctx context.Context, tx pgx.Tx, userID, work
 
 	var envelope Envelope
 	var createdAt time.Time
+	var organizationID, workspaceName string
 	err = tx.QueryRow(ctx, `
 		WITH mutation_context AS (
-			SELECT w.organization_id AS organization_id, d.id AS device_id
+			SELECT w.organization_id AS organization_id, w.name AS workspace_name, d.id AS device_id
 			FROM workspaces w
 			LEFT JOIN devices d ON d.user_id = $2 AND d.client_id = $3
 			WHERE w.id = $1
@@ -359,19 +406,23 @@ func (s *PostgresStore) recordEvent(ctx context.Context, tx pgx.Tx, userID, work
 			INSERT INTO workspace_cursors (workspace_id, current_cursor, updated_at)
 			VALUES ($1, 1, NOW())
 			ON CONFLICT (workspace_id) DO UPDATE
-			SET current_cursor = workspace_cursors.current_cursor + 1,
-			    updated_at = NOW()
+			SET current_cursor = workspace_cursors.current_cursor + 1, updated_at = NOW()
 			RETURNING current_cursor
+		), inserted AS (
+			INSERT INTO sync_events (
+				event_id, organization_id, workspace_id, user_id, device_id,
+				origin_client_id, cursor, event_type, entity_type, entity_id, payload
+			)
+			SELECT $4, mutation_context.organization_id, $1, $2, mutation_context.device_id,
+			       $3, assigned.current_cursor, $5, $6, $7, $8
+			FROM mutation_context, assigned
+			RETURNING cursor, event_id, workspace_id, origin_client_id, event_type,
+			          entity_type, entity_id, payload, created_at, organization_id
 		)
-		INSERT INTO sync_events (
-			event_id, organization_id, workspace_id, user_id, device_id,
-			origin_client_id, cursor, event_type, entity_type, entity_id, payload
-		)
-		SELECT
-			$4, mutation_context.organization_id, $1, $2, mutation_context.device_id,
-			$3, assigned.current_cursor, $5, $6, $7, $8
-		FROM mutation_context, assigned
-		RETURNING cursor, event_id, workspace_id, origin_client_id, event_type, entity_type, entity_id, payload, created_at
+		SELECT i.cursor, i.event_id, i.workspace_id, i.origin_client_id, i.event_type,
+		       i.entity_type, i.entity_id, i.payload, i.created_at,
+		       i.organization_id, mutation_context.workspace_name
+		FROM inserted i, mutation_context;
 	`, workspaceID, userID, originClientID, eventID, eventType, entityType, entityID, rawPayload).Scan(
 		&envelope.Cursor,
 		&envelope.EventID,
@@ -382,48 +433,75 @@ func (s *PostgresStore) recordEvent(ctx context.Context, tx pgx.Tx, userID, work
 		&envelope.EntityID,
 		&envelope.Payload,
 		&createdAt,
+		&organizationID,
+		&workspaceName,
 	)
 	if err != nil {
 		return Envelope{}, fmt.Errorf("insert sync event: %w", err)
 	}
 
 	envelope.CreatedAt = createdAt.UTC().Format(time.RFC3339)
+
+	metadata := make(map[string]any, len(auditMetadata)+2)
+	for k, v := range auditMetadata {
+		metadata[k] = v
+	}
+	metadata["workspaceId"] = workspaceID
+	metadata["workspaceName"] = workspaceName
+
+	if err := s.activity.Record(ctx, tx, organizationID, userID, kind, entityType, entityID, metadata); err != nil {
+		return Envelope{}, fmt.Errorf("record activity event: %w", err)
+	}
+
 	return envelope, nil
 }
 
-func (s *PostgresStore) folderDeletePayload(ctx context.Context, tx pgx.Tx, folderID string) (map[string]any, string, error) {
+// folderDeletePayload runs one SELECT in the caller's transaction immediately
+// before the delete, returning both the sync event payload (unchanged keys —
+// design.md Decision 4, no extension protocol change) and a separate audit
+// projection built from the same row.
+func (s *PostgresStore) folderDeletePayload(ctx context.Context, tx pgx.Tx, folderID string) (map[string]any, map[string]any, string, error) {
 	var workspaceID string
 	var parentID *string
+	var name string
 	err := tx.QueryRow(ctx, `
-		SELECT workspace_id, parent_id
+		SELECT workspace_id, parent_id, name
 		FROM folders
 		WHERE id = $1 AND deleted_at IS NULL
-	`, folderID).Scan(&workspaceID, &parentID)
+	`, folderID).Scan(&workspaceID, &parentID, &name)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, "", bookmarks.ErrNotFound
+			return nil, nil, "", bookmarks.ErrNotFound
 		}
-		return nil, "", fmt.Errorf("load folder delete payload: %w", err)
+		return nil, nil, "", fmt.Errorf("load folder delete payload: %w", err)
 	}
 
-	return map[string]any{"id": folderID, "workspaceId": workspaceID, "parentId": parentID}, workspaceID, nil
+	payload := map[string]any{"id": folderID, "workspaceId": workspaceID, "parentId": parentID}
+	audit := map[string]any{"name": name}
+	return payload, audit, workspaceID, nil
 }
 
-func (s *PostgresStore) bookmarkDeletePayload(ctx context.Context, tx pgx.Tx, bookmarkID string) (map[string]any, string, error) {
-	var workspaceID, folderID string
+// bookmarkDeletePayload runs one SELECT in the caller's transaction
+// immediately before the delete, returning both the sync event payload
+// (unchanged keys — design.md Decision 4, no extension protocol change) and a
+// separate audit projection built from the same row.
+func (s *PostgresStore) bookmarkDeletePayload(ctx context.Context, tx pgx.Tx, bookmarkID string) (map[string]any, map[string]any, string, error) {
+	var workspaceID, folderID, title, url string
 	err := tx.QueryRow(ctx, `
-		SELECT workspace_id, folder_id
+		SELECT workspace_id, folder_id, title, url
 		FROM bookmarks
 		WHERE id = $1 AND deleted_at IS NULL
-	`, bookmarkID).Scan(&workspaceID, &folderID)
+	`, bookmarkID).Scan(&workspaceID, &folderID, &title, &url)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, "", bookmarks.ErrNotFound
+			return nil, nil, "", bookmarks.ErrNotFound
 		}
-		return nil, "", fmt.Errorf("load bookmark delete payload: %w", err)
+		return nil, nil, "", fmt.Errorf("load bookmark delete payload: %w", err)
 	}
 
-	return map[string]any{"id": bookmarkID, "workspaceId": workspaceID, "folderId": folderID}, workspaceID, nil
+	payload := map[string]any{"id": bookmarkID, "workspaceId": workspaceID, "folderId": folderID}
+	audit := map[string]any{"title": title, "url": url}
+	return payload, audit, workspaceID, nil
 }
 
 func ensureEventID(eventID string) (string, error) {

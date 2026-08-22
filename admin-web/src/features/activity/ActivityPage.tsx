@@ -1,7 +1,10 @@
+import { useState } from "react";
 import { useAuth } from "../../app/providers/AuthProvider";
 import { useOrganization } from "../../app/providers/OrganizationProvider";
+import type { ActivityCategory } from "../../lib/api/activity";
 import { DataState } from "../../lib/ui/components/DataState";
 import { Table } from "../../lib/ui/components/Table";
+import { ActivityCategoryToggle } from "./ActivityCategoryToggle";
 import { formatActivityEvent } from "./format";
 import { useOrgActivity } from "./queries";
 
@@ -15,8 +18,9 @@ export function ActivityPage() {
   const { activeOrganization } = useOrganization();
   const token = session?.accessToken;
   const organizationId = activeOrganization?.organizationId;
+  const [category, setCategory] = useState<ActivityCategory>("all");
 
-  const activityQuery = useOrgActivity(organizationId, token);
+  const activityQuery = useOrgActivity(organizationId, token, category);
 
   if (!token || !organizationId) {
     return (
@@ -35,9 +39,12 @@ export function ActivityPage() {
       <header className="ui-section-header">
         <h1 className="ui-page-title">Activity</h1>
         <p className="ui-copy">
-          A record of notable changes across this organization — invitations, access grants, and membership changes.
+          A record of notable changes across this organization — invitations, access grants, membership changes, and
+          bookmark or folder activity.
         </p>
       </header>
+
+      <ActivityCategoryToggle category={category} onChange={setCategory} />
 
       {activityQuery.isPending ? (
         <DataState title="Loading activity" description="Fetching this organization's activity feed from the backend." />
@@ -61,7 +68,7 @@ export function ActivityPage() {
       {!activityQuery.isPending && !activityQuery.isError && events.length === 0 ? (
         <DataState
           title="No activity yet"
-          description="Notable changes to this organization — invitations, access grants, and membership changes — will appear here."
+          description="Notable changes to this organization — invitations, access grants, membership changes, and bookmark or folder activity — will appear here."
         />
       ) : null}
 
