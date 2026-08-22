@@ -59,8 +59,8 @@ func TestReplayEventsAndBookmarkMutationRejectAfterOrganizationSoftDelete(t *tes
 		t.Fatalf("soft delete organization fixture: %v", err)
 	}
 
-	if _, err := store.ReplayEvents(ctx, userID, workspaceID, 0); err != access.ErrForbidden {
-		t.Fatalf("replay events after soft delete err = %v, want %v", err, access.ErrForbidden)
+	if _, err := store.ReplayEvents(ctx, userID, workspaceID, 0); err != workspaces.ErrForbidden {
+		t.Fatalf("replay events after soft delete err = %v, want %v", err, workspaces.ErrForbidden)
 	}
 	if _, err := bookmarkService.CreateBookmark(ctx, userID, workspaceID, bookmarks.CreateBookmarkInput{Title: "Doomed", URL: "https://example.com/doomed"}); err != bookmarks.ErrForbidden {
 		t.Fatalf("create bookmark after soft delete err = %v, want %v", err, bookmarks.ErrForbidden)
