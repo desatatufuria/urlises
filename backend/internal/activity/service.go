@@ -66,6 +66,17 @@ const (
 	KindFolderDeleted   Kind = "folder.deleted"
 )
 
+// Category partitions Kind values into the two audiences the feed serves.
+// Administrative is defined by NEGATION so an unclassified future Kind stays
+// visible in the default admin view instead of disappearing from every view.
+type Category string
+
+const (
+	CategoryAll            Category = "all"
+	CategoryAdministrative Category = "administrative"
+	CategoryBookmarks      Category = "bookmarks"
+)
+
 // minListLimit and maxListLimit are the clamp bounds ListByOrganization
 // applies to its limit parameter. Any limit outside [minListLimit,
 // maxListLimit] — including <= 0 — is clamped into range, never treated as
@@ -150,6 +161,7 @@ func (s *Service) ListByOrganization(
 	organizationID string,
 	cursor string,
 	limit int,
+	category Category,
 ) (events []Event, nextCursor string, err error) {
 	if err := access.RequireOrganizationAdmin(ctx, s.pool, requesterUserID, organizationID); err != nil {
 		return nil, "", err
@@ -180,6 +192,13 @@ func (s *Service) ListByOrganization(
 	if hasCursor {
 		query += ` AND (e.created_at, e.id) < ($2, $3)`
 		args = append(args, cursorCreatedAt, cursorID)
+	}
+	switch category {
+	case CategoryBookmarks:
+		query += " AND (e.kind LIKE 'bookmark.%' OR e.kind LIKE 'folder.%')"
+	case CategoryAdministrative:
+		query += " AND e.kind NOT LIKE 'bookmark.%' AND e.kind NOT LIKE 'folder.%'"
+	default: // CategoryAll — no predicate
 	}
 	query += fmt.Sprintf(" ORDER BY e.created_at DESC, e.id DESC LIMIT $%d", len(args)+1)
 	args = append(args, limit+1)

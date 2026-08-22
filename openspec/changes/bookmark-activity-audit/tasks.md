@@ -109,13 +109,13 @@ Each unit is developed, tested, and merged into the previous unit's branch befor
 
 ## Phase B1: Backend Category Filter
 
-- [ ] B1.1 RED: `backend/internal/activity/service_test.go` — category filter, three states: seed admin-kind and bookmark/folder-kind fixtures; `all` returns every row; `bookmarks` returns only the 6 prefixes; `administrative` returns the exact complement, including an unclassified future kind (Decision 9 negation).
-- [ ] B1.2 RED: same file — filtered pagination: `limit=1` with a category filter; page 2's cursor continues within the same filtered set and never surfaces an excluded row.
-- [ ] B1.3 GREEN: `backend/internal/activity/service.go` — add `Category` type + `CategoryAll`/`CategoryAdministrative`/`CategoryBookmarks` constants.
-- [ ] B1.4 GREEN: `backend/internal/activity/service.go` — `ListByOrganization` gains the `category Category` param; inject the constant `LIKE`/`NOT LIKE` predicate after the optional cursor clause (`LIMIT` numbering unaffected).
-- [ ] B1.5 RED: `backend/internal/activity/handler_test.go` — update `activityRouteStub`'s signature to record the received `Category`; `?category=bookmarks` → `CategoryBookmarks`; absent → `CategoryAll`; `?category=nonsense` → `CategoryAll` and HTTP 200, never 400.
-- [ ] B1.6 RED: same file — `parseCategory` table-driven: `""`, `"all"`, `"administrative"`, `"bookmarks"`, `"BOOKMARKS"`, `"  bookmarks  "`, `"garbage"` (mirrors `parseListLimit`'s forgiving style).
-- [ ] B1.7 GREEN: `backend/internal/activity/handler.go` — `routeService` interface signature gains `category Category`; implement `parseCategory` (case/whitespace-insensitive); wire it into the route handler.
+- [x] B1.1 RED: `backend/internal/activity/service_test.go` — category filter, three states: seed admin-kind and bookmark/folder-kind fixtures; `all` returns every row; `bookmarks` returns only the 6 prefixes; `administrative` returns the exact complement, including an unclassified future kind (Decision 9 negation).
+- [x] B1.2 RED: same file — filtered pagination: `limit=1` with a category filter; page 2's cursor continues within the same filtered set and never surfaces an excluded row.
+- [x] B1.3 GREEN: `backend/internal/activity/service.go` — add `Category` type + `CategoryAll`/`CategoryAdministrative`/`CategoryBookmarks` constants.
+- [x] B1.4 GREEN: `backend/internal/activity/service.go` — `ListByOrganization` gains the `category Category` param; inject the constant `LIKE`/`NOT LIKE` predicate after the optional cursor clause (`LIMIT` numbering unaffected).
+- [x] B1.5 RED: `backend/internal/activity/handler_test.go` — update `activityRouteStub`'s signature to record the received `Category`; `?category=bookmarks` → `CategoryBookmarks`; absent → `CategoryAll`; `?category=nonsense` → `CategoryAll` and HTTP 200, never 400.
+- [x] B1.6 RED: same file — `parseCategory` table-driven: `""`, `"all"`, `"administrative"`, `"bookmarks"`, `"BOOKMARKS"`, `"  bookmarks  "`, `"garbage"` (mirrors `parseListLimit`'s forgiving style).
+- [x] B1.7 GREEN: `backend/internal/activity/handler.go` — `routeService` interface signature gains `category Category`; implement `parseCategory` (case/whitespace-insensitive); wire it into the route handler.
 
 ## Phase B2: Frontend Category Control + CSS Rename
 
