@@ -23,14 +23,26 @@ jobs:
           registry: registry.desatatufuria.com
           username: ${{ secrets.REGISTRY_USERNAME }}
           password: ${{ secrets.REGISTRY_TOKEN }}
+      - name: Compute image tags
+        id: image_tags
+        run: |
+          TAGS="registry.desatatufuria.com/dtf-bookmarks-sync-backend:${{ github.ref_name }}"
+          # A tag with a hyphen after the version (v1.0.0-rc.1, v1.0.0-beta.2)
+          # is a pre-release: it must never become :latest.
+          if [[ "${{ github.ref_name }}" != *-* ]]; then
+            TAGS="${TAGS}"$'\n'"registry.desatatufuria.com/dtf-bookmarks-sync-backend:latest"
+          fi
+          {
+            echo "tags<<EOF"
+            echo "$TAGS"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
       - uses: docker/build-push-action@v6
         with:
           context: .
           file: backend/Dockerfile
           push: true
-          tags: |
-            registry.desatatufuria.com/dtf-bookmarks-sync-backend:${{ github.ref_name }}
-            registry.desatatufuria.com/dtf-bookmarks-sync-backend:latest
+          tags: ${{ steps.image_tags.outputs.tags }}
 
   extension-artifact:
     needs: checks
@@ -92,3 +104,4 @@ jobs:
             dist/extension/*.zip
             dist/admin-web/admin-web-dist.tar.gz
           generate_release_notes: true
+          prerelease: ${{ contains(github.ref_name, '-') }}
