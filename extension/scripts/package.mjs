@@ -258,7 +258,12 @@ function getForbiddenReason(relativePath) {
   if (packageMetadata.has(basename)) return "package metadata";
   if (forbiddenExtensions.some((extension) => basename.endsWith(extension))) return "forbidden source, source-map, or private-key extension";
   if (/(^|[.-])(test|spec)\.[^.]+$/i.test(basename)) return "test file";
-  if (/(^|[-_.])(secret|secrets|credential|credentials|private-key)([-_.]|$)/i.test(basename)) return "potential secret";
+  // "create-secret" is this extension's zero-knowledge secret-sharing
+  // feature name (extension/src/create-secret/), not credential material --
+  // excluded here so the allowlisted create-secret.js/.html don't trip the
+  // heuristic below.
+  const isCreateSecretFile = /^create-secret\.[a-z0-9]+$/.test(basename);
+  if (!isCreateSecretFile && /(^|[-_.])(secret|secrets|credential|credentials|private-key)([-_.]|$)/i.test(basename)) return "potential secret";
   if (basename === "thumbs.db" || basename === "desktop.ini") return "operating-system metadata";
   return null;
 }
