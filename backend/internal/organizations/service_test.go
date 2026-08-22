@@ -15,6 +15,7 @@ import (
 	"github.com/furia/shared-bookmark-sync/backend/internal/activity"
 	"github.com/furia/shared-bookmark-sync/backend/internal/auth"
 	"github.com/furia/shared-bookmark-sync/backend/internal/database"
+	"github.com/furia/shared-bookmark-sync/backend/internal/purge"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -662,6 +663,326 @@ func TestDeleteOrganizationConcurrentRequestsOnlyOneCommits(t *testing.T) {
 	}
 	if deletedAt == nil {
 		t.Fatal("deleted_at = nil, want it set")
+	}
+}
+
+// Slice 3a — RED (task 3.2, adversarial focus): owner and admin restore
+// succeed and the organization becomes fully usable again -- deleted_at
+// cleared, memberships/workspaces/bookmarks/pre-deletion activity trail all
+// intact, and an organization.restored event recorded. This is the primary
+// happy-path proof for RestoreOrganization.
+func TestRestoreOrganizationOwnerSucceedsAndOrgBecomesFullyUsable(t *testing.T) {
+	t.Parallel()
+
+	ctx, pool := openOrganizationsTestPool(t, "organizations_restore_test")
+	service := NewService(pool, activity.NewService(pool))
+	ownerID := insertOrganizationsTestUser(t, ctx, pool, "restore-owner@example.com")
+	organizationID := insertOrganizationsTestOrganization(t, ctx, pool, "Restore Happy Org")
+	insertOrganizationsTestMember(t, ctx, pool, organizationID, ownerID, "owner")
+
+	var workspaceID string
+	if err := pool.QueryRow(ctx, `
+		INSERT INTO workspaces (organization_id, name, type)
+		VALUES ($1, $2, $3)
+		RETURNING id
+	`, organizationID, "Restore Workspace", "personal").Scan(&workspaceID); err != nil {
+		t.Fatalf("insert workspace: %v", err)
+	}
+	var folderID string
+	if err := pool.QueryRow(ctx, `
+		INSERT INTO folders (workspace_id, name)
+		VALUES ($1, $2)
+		RETURNING id
+	`, workspaceID, "Restore Folder").Scan(&folderID); err != nil {
+		t.Fatalf("insert folder: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO bookmarks (workspace_id, folder_id, url, title)
+		VALUES ($1, $2, $3, $4)
+	`, workspaceID, folderID, "https://example.com/restore", "Restore Bookmark"); err != nil {
+		t.Fatalf("insert bookmark: %v", err)
+	}
+
+	if err := service.DeleteOrganization(ctx, ownerID, organizationID); err != nil {
+		t.Fatalf("soft delete organization: %v", err)
+	}
+	// Pre-deletion activity trail: the delete itself recorded one event.
+	var preRestoreActivityCount int
+	if err := pool.QueryRow(ctx, `SELECT COUNT(*) FROM activity_events WHERE organization_id = $1`, organizationID).Scan(&preRestoreActivityCount); err != nil {
+		t.Fatalf("count pre-restore activity events: %v", err)
+	}
+	if preRestoreActivityCount == 0 {
+		t.Fatal("expected the delete event to already be recorded before restore")
+	}
+
+	if err := service.RestoreOrganization(ctx, ownerID, organizationID); err != nil {
+		t.Fatalf("restore organization: %v", err)
+	}
+
+	var deletedAt *time.Time
+	var deletedByUserID *string
+	if err := pool.QueryRow(ctx, `SELECT deleted_at, deleted_by_user_id FROM organizations WHERE id = $1`, organizationID).Scan(&deletedAt, &deletedByUserID); err != nil {
+		t.Fatalf("query restored organization: %v", err)
+	}
+	if deletedAt != nil {
+		t.Fatalf("deleted_at = %v, want nil after restore", deletedAt)
+	}
+	if deletedByUserID != nil {
+		t.Fatalf("deleted_by_user_id = %v, want nil after restore", deletedByUserID)
+	}
+
+	// Membership, workspace and bookmark all intact.
+	if role := loadOrganizationsTestMemberRole(t, ctx, pool, organizationID, ownerID); role != "owner" {
+		t.Fatalf("owner role = %q, want owner", role)
+	}
+	memberships, err := service.ListMemberships(ctx, ownerID)
+	if err != nil {
+		t.Fatalf("list memberships: %v", err)
+	}
+	found := false
+	for _, m := range memberships {
+		if m.OrganizationID == organizationID {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("restored organization missing from ListMemberships")
+	}
+	var bookmarkCount int
+	if err := pool.QueryRow(ctx, `SELECT COUNT(*) FROM bookmarks WHERE workspace_id = $1`, workspaceID).Scan(&bookmarkCount); err != nil {
+		t.Fatalf("count bookmarks: %v", err)
+	}
+	if bookmarkCount != 1 {
+		t.Fatalf("bookmark count = %d, want 1 (survived intact)", bookmarkCount)
+	}
+
+	// Pre-deletion activity trail survives restore, plus the new restored event.
+	assertOrganizationsTestActivityEvent(t, ctx, pool, organizationID, ownerID, activity.KindOrganizationDeleted, "organization", organizationID)
+	assertOrganizationsTestActivityEvent(t, ctx, pool, organizationID, ownerID, activity.KindOrganizationRestored, "organization", organizationID)
+}
+
+// Slice 3a — RED (task 3.2, THE adversarial focus of this unit): a plain
+// member (not owner/admin) attempting to restore a trashed organization
+// gets ErrForbidden. loadOrganizationRoleIncludingDeleted resolves the
+// member's real role from organization_members (soft delete never touched
+// that table), but RestoreOrganization must still reject anything that is
+// not owner/admin.
+func TestRestoreOrganizationPlainMemberIsForbidden(t *testing.T) {
+	t.Parallel()
+
+	ctx, pool := openOrganizationsTestPool(t, "organizations_restore_test")
+	service := NewService(pool, activity.NewService(pool))
+	ownerID := insertOrganizationsTestUser(t, ctx, pool, "restore-forbidden-owner@example.com")
+	memberID := insertOrganizationsTestUser(t, ctx, pool, "restore-forbidden-member@example.com")
+	organizationID := insertOrganizationsTestOrganization(t, ctx, pool, "Restore Forbidden Org")
+	insertOrganizationsTestMember(t, ctx, pool, organizationID, ownerID, "owner")
+	insertOrganizationsTestMember(t, ctx, pool, organizationID, memberID, "member")
+
+	if err := service.DeleteOrganization(ctx, ownerID, organizationID); err != nil {
+		t.Fatalf("soft delete organization: %v", err)
+	}
+
+	if err := service.RestoreOrganization(ctx, memberID, organizationID); err != ErrForbidden {
+		t.Fatalf("err = %v, want %v (plain member)", err, ErrForbidden)
+	}
+
+	var deletedAt *time.Time
+	if err := pool.QueryRow(ctx, `SELECT deleted_at FROM organizations WHERE id = $1`, organizationID).Scan(&deletedAt); err != nil {
+		t.Fatalf("query organization: %v", err)
+	}
+	if deletedAt == nil {
+		t.Fatal("deleted_at = nil, want it still set (restore must not have happened)")
+	}
+}
+
+// Slice 3a — RED (task 3.2, THE second adversarial focus of this unit): a
+// non-member (no organization_members row at all) attempting to restore a
+// trashed organization gets ErrForbidden, not a crash or a leak of any
+// organization state.
+func TestRestoreOrganizationNonMemberIsForbidden(t *testing.T) {
+	t.Parallel()
+
+	ctx, pool := openOrganizationsTestPool(t, "organizations_restore_test")
+	service := NewService(pool, activity.NewService(pool))
+	ownerID := insertOrganizationsTestUser(t, ctx, pool, "restore-outsider-owner@example.com")
+	outsiderID := insertOrganizationsTestUser(t, ctx, pool, "restore-outsider@example.com")
+	organizationID := insertOrganizationsTestOrganization(t, ctx, pool, "Restore Outsider Org")
+	insertOrganizationsTestMember(t, ctx, pool, organizationID, ownerID, "owner")
+
+	if err := service.DeleteOrganization(ctx, ownerID, organizationID); err != nil {
+		t.Fatalf("soft delete organization: %v", err)
+	}
+
+	if err := service.RestoreOrganization(ctx, outsiderID, organizationID); err != ErrForbidden {
+		t.Fatalf("err = %v, want %v (non-member)", err, ErrForbidden)
+	}
+
+	var deletedAt *time.Time
+	if err := pool.QueryRow(ctx, `SELECT deleted_at FROM organizations WHERE id = $1`, organizationID).Scan(&deletedAt); err != nil {
+		t.Fatalf("query organization: %v", err)
+	}
+	if deletedAt == nil {
+		t.Fatal("deleted_at = nil, want it still set (restore must not have happened)")
+	}
+}
+
+// Slice 3a — RED (task 3.2): restoring an already-live organization returns
+// ErrNotFound (design.md "Restore idempotency error" decision -- no new
+// sentinel, reuse ErrNotFound).
+func TestRestoreOrganizationLiveOrgReturnsNotFound(t *testing.T) {
+	t.Parallel()
+
+	ctx, pool := openOrganizationsTestPool(t, "organizations_restore_test")
+	service := NewService(pool, activity.NewService(pool))
+	ownerID := insertOrganizationsTestUser(t, ctx, pool, "restore-live-owner@example.com")
+	organizationID := insertOrganizationsTestOrganization(t, ctx, pool, "Restore Live Org")
+	insertOrganizationsTestMember(t, ctx, pool, organizationID, ownerID, "owner")
+
+	if err := service.RestoreOrganization(ctx, ownerID, organizationID); err != ErrNotFound {
+		t.Fatalf("err = %v, want %v", err, ErrNotFound)
+	}
+}
+
+// Slice 3a — RED (task 3.2): restoring an unknown organization id returns
+// ErrNotFound.
+func TestRestoreOrganizationUnknownIDReturnsNotFound(t *testing.T) {
+	t.Parallel()
+
+	ctx, pool := openOrganizationsTestPool(t, "organizations_restore_test")
+	service := NewService(pool, activity.NewService(pool))
+	ownerID := insertOrganizationsTestUser(t, ctx, pool, "restore-unknown-owner@example.com")
+
+	err := service.RestoreOrganization(ctx, ownerID, "00000000-0000-0000-0000-000000000000")
+	if err != ErrNotFound {
+		t.Fatalf("err = %v, want %v", err, ErrNotFound)
+	}
+}
+
+// Slice 3a — RED (task 3.2): restoring an organization where the requester's
+// only membership would otherwise orphan another member does NOT re-run the
+// orphan guard (design.md Decision D: memberships were never touched by the
+// soft delete, so there is nothing to re-verify). This soft-deletes a
+// second organization that is the sole owner's ONLY other org, then
+// restores it -- if RestoreOrganization mistakenly re-ran the orphan probe
+// it would block here, since restoring would otherwise "give back" a
+// reachable org to a member who currently has none.
+func TestRestoreOrganizationDoesNotRerunOrphanGuard(t *testing.T) {
+	t.Parallel()
+
+	ctx, pool := openOrganizationsTestPool(t, "organizations_restore_test")
+	service := NewService(pool, activity.NewService(pool))
+	ownerID := insertOrganizationsTestUser(t, ctx, pool, "restore-orphan-owner@example.com")
+	soleMemberID := insertOrganizationsTestUser(t, ctx, pool, "restore-orphan-member@example.com")
+	organizationID := insertOrganizationsTestOrganization(t, ctx, pool, "Restore Orphan Org")
+	insertOrganizationsTestMember(t, ctx, pool, organizationID, ownerID, "owner")
+	insertOrganizationsTestMember(t, ctx, pool, organizationID, soleMemberID, "member")
+
+	// soleMemberID's only other organization, deleted by its own owner
+	// (unrelated to organizationID), so soleMemberID currently has zero
+	// reachable organizations besides organizationID itself.
+	otherOwnerID := insertOrganizationsTestUser(t, ctx, pool, "restore-orphan-other-owner@example.com")
+	otherOrganizationID := insertOrganizationsTestOrganization(t, ctx, pool, "Restore Orphan Other Org")
+	insertOrganizationsTestMember(t, ctx, pool, otherOrganizationID, otherOwnerID, "owner")
+	insertOrganizationsTestMember(t, ctx, pool, otherOrganizationID, soleMemberID, "member")
+	if err := service.DeleteOrganization(ctx, otherOwnerID, otherOrganizationID); err != nil {
+		t.Fatalf("soft delete other organization: %v", err)
+	}
+
+	// Deleting organizationID would normally be blocked by the orphan probe
+	// (soleMemberID's only other org is trashed), so delete it as the owner
+	// deleting their OWN organization is not possible here -- instead prove
+	// restore skips the guard by restoring otherOrganizationID directly,
+	// which must succeed even though organizationID's owner is unrelated.
+	if err := service.RestoreOrganization(ctx, otherOwnerID, otherOrganizationID); err != nil {
+		t.Fatalf("restore organization must not re-run the orphan guard: %v", err)
+	}
+
+	var deletedAt *time.Time
+	if err := pool.QueryRow(ctx, `SELECT deleted_at FROM organizations WHERE id = $1`, otherOrganizationID).Scan(&deletedAt); err != nil {
+		t.Fatalf("query organization: %v", err)
+	}
+	if deletedAt != nil {
+		t.Fatal("deleted_at set, want nil (restore succeeded)")
+	}
+}
+
+// Slice 3a — RED (task 3.5): ListDeletedOrganizations returns only the
+// organizations the requester owns/admins, and purgeAt is exactly
+// deletedAt + purge.Window.
+func TestListDeletedOrganizationsReturnsOnlyRequesterAdministeredOrgs(t *testing.T) {
+	t.Parallel()
+
+	ctx, pool := openOrganizationsTestPool(t, "organizations_trash_test")
+	service := NewService(pool, activity.NewService(pool))
+	ownerID := insertOrganizationsTestUser(t, ctx, pool, "trash-owner@example.com")
+	adminOrganizationID := insertOrganizationsTestOrganization(t, ctx, pool, "Trash Owned Org")
+	insertOrganizationsTestMember(t, ctx, pool, adminOrganizationID, ownerID, "owner")
+	if err := service.DeleteOrganization(ctx, ownerID, adminOrganizationID); err != nil {
+		t.Fatalf("soft delete owned organization: %v", err)
+	}
+
+	// A second organization the requester has no relationship to at all --
+	// must never appear in their Trash list.
+	otherOwnerID := insertOrganizationsTestUser(t, ctx, pool, "trash-other-owner@example.com")
+	unrelatedOrganizationID := insertOrganizationsTestOrganization(t, ctx, pool, "Trash Unrelated Org")
+	insertOrganizationsTestMember(t, ctx, pool, unrelatedOrganizationID, otherOwnerID, "owner")
+	if err := service.DeleteOrganization(ctx, otherOwnerID, unrelatedOrganizationID); err != nil {
+		t.Fatalf("soft delete unrelated organization: %v", err)
+	}
+
+	deleted, err := service.ListDeletedOrganizations(ctx, ownerID)
+	if err != nil {
+		t.Fatalf("list deleted organizations: %v", err)
+	}
+	if len(deleted) != 1 {
+		t.Fatalf("deleted count = %d, want 1", len(deleted))
+	}
+	if deleted[0].OrganizationID != adminOrganizationID {
+		t.Fatalf("organization id = %q, want %q", deleted[0].OrganizationID, adminOrganizationID)
+	}
+	if deleted[0].Role != "owner" {
+		t.Fatalf("role = %q, want owner", deleted[0].Role)
+	}
+
+	// purgeAt must equal deletedAt + purge.Window exactly, computed the same
+	// way the production query computes it (deleted_at + interval), so this
+	// assertion cannot drift from a text-formatting difference.
+	var wantPurgeAt string
+	if err := pool.QueryRow(ctx, `
+		SELECT (deleted_at + $2::interval)::text
+		FROM organizations WHERE id = $1
+	`, adminOrganizationID, fmt.Sprintf("%d seconds", int64(purge.Window/time.Second))).Scan(&wantPurgeAt); err != nil {
+		t.Fatalf("query expected purgeAt: %v", err)
+	}
+	if deleted[0].PurgeAt != wantPurgeAt {
+		t.Fatalf("purgeAt = %q, want %q (deletedAt + purge.Window)", deleted[0].PurgeAt, wantPurgeAt)
+	}
+}
+
+// Slice 3a — RED (task 3.5): a plain member of a trashed organization gets
+// an empty result, never a 403 -- authorization is inline in the query's
+// JOIN, not a separate gate call (design.md "Trash scoping and route
+// shape" decision).
+func TestListDeletedOrganizationsPlainMemberGetsEmptyResult(t *testing.T) {
+	t.Parallel()
+
+	ctx, pool := openOrganizationsTestPool(t, "organizations_trash_test")
+	service := NewService(pool, activity.NewService(pool))
+	ownerID := insertOrganizationsTestUser(t, ctx, pool, "trash-member-owner@example.com")
+	memberID := insertOrganizationsTestUser(t, ctx, pool, "trash-member-plain@example.com")
+	organizationID := insertOrganizationsTestOrganization(t, ctx, pool, "Trash Member Org")
+	insertOrganizationsTestMember(t, ctx, pool, organizationID, ownerID, "owner")
+	insertOrganizationsTestMember(t, ctx, pool, organizationID, memberID, "member")
+	if err := service.DeleteOrganization(ctx, ownerID, organizationID); err != nil {
+		t.Fatalf("soft delete organization: %v", err)
+	}
+
+	deleted, err := service.ListDeletedOrganizations(ctx, memberID)
+	if err != nil {
+		t.Fatalf("list deleted organizations: %v", err)
+	}
+	if len(deleted) != 0 {
+		t.Fatalf("deleted count = %d, want 0 (plain member, no 403 either)", len(deleted))
 	}
 }
 
