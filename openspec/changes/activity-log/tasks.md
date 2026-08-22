@@ -89,14 +89,14 @@ Each unit is developed, tested, and merged into `develop` before the next unit's
 
 ## Phase 5: Groups Transaction-Wrap Refactor & Wiring
 
-- [ ] 5.1 RED: `backend/internal/groups/service_test.go` — `Update`/`Delete` still return `ErrNotFound` on no match; `ListMembers` still returns the same ordered set/error behavior (Delete and ListMembers stay behavior-preserving scenario) — assert byte-identical response shape pre/post refactor.
-- [ ] 5.2 GREEN: refactor `Update` to `s.pool.Begin(ctx)`/`defer tx.Rollback(ctx)`/`requireOrganizationAdmin(ctx, tx, ...)`, add `SELECT name ... FOR UPDATE` for `previousName`, replace `s.pool.QueryRow` with `tx.QueryRow`, `tx.Commit(ctx)` at the end.
-- [ ] 5.3 GREEN: refactor `Delete` and `ListMembers` to the same `tx.Begin`/`defer Rollback`/`tx.*`/`tx.Commit` shape (`ListMembers` gets no `Record` call).
-- [ ] 5.4 `backend/internal/groups/service.go` — add `activity *activity.Service` field; `NewService(pool, activityService)` new trailing param.
-- [ ] 5.5 RED: same test file — `Update` commit persists `KindGroupRenamed` with `previousName`/`name` (group rename recorded atomically scenario); `Delete` persists `KindGroupDeleted`; `CreateTx` persists `KindGroupCreated`; `AddMemberTx`/`RemoveMember` persist `KindGroupMemberAdded`/`Removed`.
-- [ ] 5.6 GREEN: insert the five `Record` calls (per design's call-site table) before each function's `tx.Commit()`.
-- [ ] 5.7 RED: `backend/internal/secrethide/service_test.go` (existing file) — creating/burning a secret produces no `activity_events` row referencing it (secret creation produces no activity row scenario) — confirms exclusion by omission.
-- [ ] 5.8 `backend/cmd/api/main.go` — thread `activityService` into `groups.NewService(pool, activityService)`.
+- [x] 5.1 RED: `backend/internal/groups/service_test.go` — `Update`/`Delete` still return `ErrNotFound` on no match; `ListMembers` still returns the same ordered set/error behavior (Delete and ListMembers stay behavior-preserving scenario) — assert byte-identical response shape pre/post refactor.
+- [x] 5.2 GREEN: refactor `Update` to `s.pool.Begin(ctx)`/`defer tx.Rollback(ctx)`/`requireOrganizationAdmin(ctx, tx, ...)`, add `SELECT name ... FOR UPDATE` for `previousName`, replace `s.pool.QueryRow` with `tx.QueryRow`, `tx.Commit(ctx)` at the end.
+- [x] 5.3 GREEN: refactor `Delete` and `ListMembers` to the same `tx.Begin`/`defer Rollback`/`tx.*`/`tx.Commit` shape (`ListMembers` gets no `Record` call).
+- [x] 5.4 `backend/internal/groups/service.go` — add `activity *activity.Service` field; `NewService(pool, activityService)` new trailing param.
+- [x] 5.5 RED: same test file — `Update` commit persists `KindGroupRenamed` with `previousName`/`name` (group rename recorded atomically scenario); `Delete` persists `KindGroupDeleted`; `CreateTx` persists `KindGroupCreated`; `AddMemberTx`/`RemoveMember` persist `KindGroupMemberAdded`/`Removed`.
+- [x] 5.6 GREEN: insert the five `Record` calls (per design's call-site table) before each function's `tx.Commit()`.
+- [x] 5.7 RED→GREEN: `backend/internal/secrethide/service_test.go` — `TestCreateAndBurnRecordNoActivityEvent` creates and burns a secret, then asserts zero rows in `activity_events` — a negative-case regression guard for the "secrets excluded from v1" design decision. Added by the orchestrator directly (test-file-only change, no `secrethide` source touched) after the delegated agent correctly flagged this as a scope conflict with its "do not touch secrethide" instruction rather than guessing.
+- [x] 5.8 `backend/cmd/api/main.go` — thread `activityService` into `groups.NewService(pool, activityService)`.
 
 ## Phase 6: admin-web Activity Page
 

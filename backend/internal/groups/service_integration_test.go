@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/furia/shared-bookmark-sync/backend/internal/activity"
 	"github.com/furia/shared-bookmark-sync/backend/internal/database"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -17,7 +18,7 @@ func TestAddMemberRejectsUserOutsideOrganization(t *testing.T) {
 	t.Parallel()
 
 	ctx, pool := openGroupsTestPool(t)
-	service := NewService(pool)
+	service := NewService(pool, activity.NewService(pool))
 	adminID := insertGroupsTestUser(t, ctx, pool, "admin@example.com")
 	outsiderID := insertGroupsTestUser(t, ctx, pool, "outsider@example.com")
 	organizationID := insertGroupsTestOrganization(t, ctx, pool, "Groups Org")
@@ -46,7 +47,7 @@ func TestListMembersReturnsGroupMembershipForAdminsOnly(t *testing.T) {
 	t.Parallel()
 
 	ctx, pool := openGroupsTestPool(t)
-	service := NewService(pool)
+	service := NewService(pool, activity.NewService(pool))
 	adminID := insertGroupsTestUser(t, ctx, pool, "admin@example.com")
 	firstMemberID := insertGroupsTestUser(t, ctx, pool, "a-member@example.com")
 	secondMemberID := insertGroupsTestUser(t, ctx, pool, "z-member@example.com")
@@ -74,7 +75,7 @@ func TestListMembersRejectsNonAdmins(t *testing.T) {
 	t.Parallel()
 
 	ctx, pool := openGroupsTestPool(t)
-	service := NewService(pool)
+	service := NewService(pool, activity.NewService(pool))
 	adminID := insertGroupsTestUser(t, ctx, pool, "admin@example.com")
 	memberID := insertGroupsTestUser(t, ctx, pool, "member@example.com")
 	organizationID := insertGroupsTestOrganization(t, ctx, pool, "Groups Org")

@@ -162,7 +162,7 @@ func routesMux(userID string, pool *pgxpool.Pool) *http.ServeMux {
 	}
 	executor := httpapi.NewIdempotencyExecutor(pool)
 	organizations.RegisterRoutes(mux, authn, organizations.NewService(pool, activity.NewService(pool)), nil, executor)
-	groups.RegisterRoutes(mux, authn, groups.NewService(pool), executor)
+	groups.RegisterRoutes(mux, authn, groups.NewService(pool, activity.NewService(pool)), executor)
 	workspaces.RegisterRoutes(mux, authn, workspaces.NewService(pool, nil, activity.NewService(pool)), executor)
 	return mux
 }

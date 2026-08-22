@@ -104,7 +104,7 @@ func main() {
 	smtpMailer := mailer.NewSMTP(cfg.Mail)
 	invitationNotifier := organizations.NewMailInvitationNotifier(smtpMailer, cfg.App.PublicBaseURL, os.Stdout)
 	secretLinkMailer := secrethide.NewMailSecretLinkMailer(smtpMailer, cfg.App.PublicBaseURL, os.Stdout)
-	groupsService := groups.NewService(pool)
+	groupsService := groups.NewService(pool, activityService)
 	workspacesService := workspaces.NewService(pool, accessService, activityService)
 	idempotencyExecutor := httpapi.NewIdempotencyExecutor(pool)
 	go func() {
