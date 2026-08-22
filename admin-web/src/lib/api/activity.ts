@@ -8,6 +8,7 @@ export type ActivityKind =
   | "invitation.created"
   | "invitation.resent"
   | "invitation.accepted"
+  | "invitation.cancelled"
   | "organization_member.role_changed"
   | "organization_member.removed"
   | "workspace.created"

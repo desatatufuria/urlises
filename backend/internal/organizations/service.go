@@ -599,6 +599,58 @@ func (s *Service) ResendInvitation(ctx context.Context, requesterUserID, organiz
 	}, nil
 }
 
+// CancelInvitation transitions a pending invitation to cancelled, recording
+// an invitation.cancelled activity row atomically with the status change.
+// Modeled directly on ResendInvitation: admin-gate, lock the invitation row,
+// guard on status, mutate, record, commit.
+func (s *Service) CancelInvitation(ctx context.Context, requesterUserID, organizationID, invitationID string) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin cancel invitation tx: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	if err := requireOrganizationAdmin(ctx, tx, requesterUserID, organizationID); err != nil {
+		return err
+	}
+
+	var status, email string
+	if err := tx.QueryRow(ctx, `
+		SELECT status, email
+		FROM invitations
+		WHERE id = $1 AND organization_id = $2
+		FOR UPDATE
+	`, invitationID, organizationID).Scan(&status, &email); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrNotFound
+		}
+		return fmt.Errorf("load invitation for cancel: %w", err)
+	}
+	if status != "pending" {
+		return ErrInvitationNotPending
+	}
+
+	if _, err := tx.Exec(ctx, `
+		UPDATE invitations
+		SET status = 'cancelled', updated_at = NOW()
+		WHERE id = $1
+	`, invitationID); err != nil {
+		return fmt.Errorf("cancel invitation: %w", err)
+	}
+
+	if err := s.activity.Record(ctx, tx, organizationID, requesterUserID, activity.KindInvitationCancelled, "invitation", invitationID, map[string]any{
+		"email": email,
+	}); err != nil {
+		return fmt.Errorf("record invitation cancelled activity: %w", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit cancel invitation tx: %w", err)
+	}
+
+	return nil
+}
+
 func (s *Service) AuthorizeInvitationTx(ctx context.Context, tx pgx.Tx, requesterUserID, organizationID string) error {
 	return requireOrganizationAdmin(ctx, tx, requesterUserID, organizationID)
 }
@@ -613,8 +665,10 @@ func (s *Service) ListInvitations(ctx context.Context, requesterUserID, organiza
 			expires_at::text, created_at::text, updated_at::text
 		FROM invitations
 		WHERE organization_id = $1
-			AND status = 'pending'
-			AND (expires_at IS NULL OR expires_at > NOW())
+			AND (
+				(status = 'pending' AND (expires_at IS NULL OR expires_at > NOW()))
+				OR status = 'cancelled'
+			)
 		ORDER BY created_at DESC, id DESC
 	`, organizationID)
 	if err != nil {

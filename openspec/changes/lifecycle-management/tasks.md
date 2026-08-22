@@ -66,20 +66,20 @@ Each unit is developed, tested, and merged into the previous unit's branch befor
 
 ## Phase 2: Cancel Pending Invitation (Slice 2)
 
-- [ ] 2.1 RED: `backend/internal/organizations/service_test.go` — `CancelInvitation`: admin gate; `pending`→`cancelled` + activity row committed atomically; already-`cancelled`/`accepted`/`expired` → `ErrInvitationNotPending` with no activity row; unknown ID → `ErrNotFound`.
-- [ ] 2.2 GREEN: `backend/internal/organizations/service.go` — `CancelInvitation(ctx, requesterUserID, organizationID, invitationID) error`.
-- [ ] 2.3 RED: `service_test.go` — `ListInvitations` after cancel includes the row with `status='cancelled'`, still excludes `accepted`/`expired`.
-- [ ] 2.4 GREEN: `service.go` — widen `ListInvitations` query to `WHERE status IN ('pending', 'cancelled')`.
-- [ ] 2.5 RED: `backend/internal/organizations/handler_test.go` — `POST .../invitations/{invitationId}/cancel`: 204 admin; 403 non-admin; 400 `ErrInvitationNotPending`; 404 unknown.
-- [ ] 2.6 GREEN: `backend/internal/organizations/handler.go` — `routeService` +`CancelInvitation`; register the `cancel` route as a sibling of `resend`; reuse the existing 400 case.
-- [ ] 2.7 GREEN: `backend/internal/activity/service.go` — add `KindInvitationCancelled Kind = "invitation.cancelled"`.
-- [ ] 2.8 GREEN: `admin-web/src/lib/api/activity.ts` — add `"invitation.cancelled"` to the `ActivityKind` union.
-- [ ] 2.9 RED: `admin-web/src/features/activity/format.test.ts` — `formatActivityEvent` renders `invitation.cancelled` with representative and missing metadata.
-- [ ] 2.10 GREEN: `admin-web/src/features/activity/format.ts` — add the `"invitation.cancelled"` case branch.
-- [ ] 2.11 GREEN: `admin-web/src/lib/api/organizations.ts` — `cancelOrganizationInvitation(token, organizationId, invitationId)`.
-- [ ] 2.12 RED: `MembersPage.test.tsx` — admin cancels a pending invitation (busy state, list refreshes to `cancelled` status, row stays visible); a failed request surfaces an error without losing the row; "Cancel"/"Resend" render only when `invitation.status === "pending"`.
-- [ ] 2.13 GREEN: `admin-web/src/features/members/mutations.ts` — `useCancelInvitationMutation`.
-- [ ] 2.14 GREEN: `MembersPage.tsx` — "Cancel" button beside "Resend", `cancellingInvitationId` busy state, conditional action rendering on `invitation.status`.
+- [x] 2.1 RED: `backend/internal/organizations/service_test.go` — `CancelInvitation`: admin gate; `pending`→`cancelled` + activity row committed atomically; already-`cancelled`/`accepted`/`expired` → `ErrInvitationNotPending` with no activity row; unknown ID → `ErrNotFound`.
+- [x] 2.2 GREEN: `backend/internal/organizations/service.go` — `CancelInvitation(ctx, requesterUserID, organizationID, invitationID) error`.
+- [x] 2.3 RED: `service_test.go` — `ListInvitations` after cancel includes the row with `status='cancelled'`, still excludes `accepted`/`expired`.
+- [x] 2.4 GREEN: `service.go` — widen `ListInvitations` query to `WHERE status IN ('pending', 'cancelled')`.
+- [x] 2.5 RED: `backend/internal/organizations/handler_test.go` — `POST .../invitations/{invitationId}/cancel`: 204 admin; 403 non-admin; 400 `ErrInvitationNotPending`; 404 unknown.
+- [x] 2.6 GREEN: `backend/internal/organizations/handler.go` — `routeService` +`CancelInvitation`; register the `cancel` route as a sibling of `resend`; reuse the existing 400 case.
+- [x] 2.7 GREEN: `backend/internal/activity/service.go` — add `KindInvitationCancelled Kind = "invitation.cancelled"`.
+- [x] 2.8 GREEN: `admin-web/src/lib/api/activity.ts` — add `"invitation.cancelled"` to the `ActivityKind` union.
+- [x] 2.9 RED: `admin-web/src/features/activity/format.test.ts` — `formatActivityEvent` renders `invitation.cancelled` with representative and missing metadata.
+- [x] 2.10 GREEN: `admin-web/src/features/activity/format.ts` — add the `"invitation.cancelled"` case branch.
+- [x] 2.11 GREEN: `admin-web/src/lib/api/organizations.ts` — `cancelOrganizationInvitation(token, organizationId, invitationId)`.
+- [x] 2.12 RED: `MembersPage.test.tsx` — admin cancels a pending invitation (busy state, list refreshes to `cancelled` status, row stays visible); a failed request surfaces an error without losing the row; "Cancel"/"Resend" render only when `invitation.status === "pending"`.
+- [x] 2.13 GREEN: `admin-web/src/features/members/mutations.ts` — `useCancelInvitationMutation`.
+- [x] 2.14 GREEN: `MembersPage.tsx` — "Cancel" button beside "Resend", `cancellingInvitationId` busy state, conditional action rendering on `invitation.status`.
 
 ## Phase 3: Delete Workspace (Slice 3)
 

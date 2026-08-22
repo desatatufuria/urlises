@@ -69,6 +69,13 @@ export function resendOrganizationInvitation(token: string, organizationId: stri
   }).then(normalizeInvitation);
 }
 
+export function cancelOrganizationInvitation(token: string, organizationId: string, invitationId: string) {
+  return apiRequest<void>(`/organizations/${organizationId}/invitations/${invitationId}/cancel`, {
+    method: "POST",
+    token,
+  });
+}
+
 export function patchOrganizationMember(
   token: string,
   organizationId: string,

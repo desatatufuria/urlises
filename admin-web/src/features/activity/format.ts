@@ -21,6 +21,8 @@ export function formatActivityEvent(event: ActivityEvent): string {
       return `Resent the invitation to ${m.email ?? "someone"}.`;
     case "invitation.accepted":
       return `Accepted the invitation to join as ${m.role ?? "member"}.`;
+    case "invitation.cancelled":
+      return `Cancelled the invitation to ${m.email ?? "someone"}.`;
     case "organization_member.role_changed":
       return `Changed ${m.targetEmail ?? "a member"}'s role from ${m.previousRole ?? "?"} to ${m.role ?? "?"}.`;
     case "organization_member.removed":

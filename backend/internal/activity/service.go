@@ -29,6 +29,7 @@ const (
 	KindInvitationCreated             Kind = "invitation.created"
 	KindInvitationResent              Kind = "invitation.resent"
 	KindInvitationAccepted            Kind = "invitation.accepted"
+	KindInvitationCancelled           Kind = "invitation.cancelled"
 	KindOrganizationMemberRoleChanged Kind = "organization_member.role_changed"
 	KindOrganizationMemberRemoved     Kind = "organization_member.removed"
 	KindWorkspaceCreated              Kind = "workspace.created"
