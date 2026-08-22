@@ -390,6 +390,11 @@ func (s *Service) RevokeUserAccess(ctx context.Context, requesterUserID, workspa
 	return nil
 }
 
+// Delete soft-deletes a workspace (deleted_at/deleted_by_user_id set, row
+// kept — design.md "Migration DDL" / recovery window). Idempotent: a second
+// call on an already-deleted workspace affects zero rows and returns
+// ErrNotFound. The workspace.deleted activity event, recorded inside this
+// same transaction, is unchanged from lifecycle-management's prior work.
 func (s *Service) Delete(ctx context.Context, requesterUserID, workspaceID string) error {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -406,11 +411,12 @@ func (s *Service) Delete(ctx context.Context, requesterUserID, workspaceID strin
 	}
 
 	result, err := tx.Exec(ctx, `
-		DELETE FROM workspaces
-		WHERE id = $1 AND organization_id = $2
-	`, workspaceID, metadata.OrganizationID)
+		UPDATE workspaces
+		SET deleted_at = NOW(), deleted_by_user_id = $3, updated_at = NOW()
+		WHERE id = $1 AND organization_id = $2 AND deleted_at IS NULL
+	`, workspaceID, metadata.OrganizationID, requesterUserID)
 	if err != nil {
-		return fmt.Errorf("delete workspace: %w", err)
+		return fmt.Errorf("soft delete workspace: %w", err)
 	}
 	if result.RowsAffected() == 0 {
 		return ErrNotFound

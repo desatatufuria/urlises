@@ -76,14 +76,14 @@ Each unit is developed, tested, and merged into the previous unit's branch befor
 
 ### 2a — Soft-delete core
 
-- [ ] 2.1 CREATE: `backend/migrations/000014_soft_delete.sql` — nullable `deleted_at`/`deleted_by_user_id` on `organizations` and `workspaces`; trash-side partial indexes `idx_organizations_deleted_at`, `idx_workspaces_deleted_at`; rollback comment per design DDL.
-- [ ] 2.2 RED: `organizations/service_test.go` — `DeleteOrganization`: row survives with `deleted_at`/`deleted_by_user_id` set; every child table (`organization_members`, `workspaces`, `invitations`, `groups`, `activity_events`, `sync_events`) still populated; second call → `ErrNotFound`.
-- [ ] 2.3 GREEN: `organizations/service.go` — `DeleteOrganization` switches to `UPDATE ... SET deleted_at=NOW(), deleted_by_user_id=$2 WHERE id=$1 AND deleted_at IS NULL`; `lockOrganization` gains `AND deleted_at IS NULL` (choke point 4).
-- [ ] 2.4 GREEN: `activity/service.go` — add `KindOrganizationDeleted Kind = "organization.deleted"`; `organizations/service.go` records it inside `DeleteOrganization`'s transaction.
-- [ ] 2.5 RED: `organizations/service_test.go` — orphan probe: a member whose only other organization is soft-deleted is treated as orphaned, blocks with `ErrWouldOrphanMember`, `deleted_at` untouched (Deviation 5).
-- [ ] 2.6 GREEN: `organizations/service.go` — orphan probe's inner `NOT EXISTS` gains `AND EXISTS (SELECT 1 FROM organizations o2 WHERE o2.id = other.organization_id AND o2.deleted_at IS NULL)` (choke point 9).
-- [ ] 2.7 RED: `workspaces/service_test.go` — `Delete`: row survives with `deleted_at`/`deleted_by_user_id` set; children (`folders`, `bookmarks`, `workspace_user_access`, `workspace_group_access`, `workspace_cursors`, `sync_events`) still populated; second call → `ErrNotFound`.
-- [ ] 2.8 GREEN: `workspaces/service.go` — `Delete` switches to `UPDATE ... SET deleted_at=NOW(), deleted_by_user_id=$3 WHERE id=$1 AND organization_id=$2 AND deleted_at IS NULL`.
+- [x] 2.1 CREATE: `backend/migrations/000014_soft_delete.sql` — nullable `deleted_at`/`deleted_by_user_id` on `organizations` and `workspaces`; trash-side partial indexes `idx_organizations_deleted_at`, `idx_workspaces_deleted_at`; rollback comment per design DDL.
+- [x] 2.2 RED: `organizations/service_test.go` — `DeleteOrganization`: row survives with `deleted_at`/`deleted_by_user_id` set; every child table (`organization_members`, `workspaces`, `invitations`, `groups`, `activity_events`, `sync_events`) still populated; second call → `ErrNotFound`.
+- [x] 2.3 GREEN: `organizations/service.go` — `DeleteOrganization` switches to `UPDATE ... SET deleted_at=NOW(), deleted_by_user_id=$2 WHERE id=$1 AND deleted_at IS NULL`; `lockOrganization` gains `AND deleted_at IS NULL` (choke point 4).
+- [x] 2.4 GREEN: `activity/service.go` — add `KindOrganizationDeleted Kind = "organization.deleted"`; `organizations/service.go` records it inside `DeleteOrganization`'s transaction.
+- [x] 2.5 RED: `organizations/service_test.go` — orphan probe: a member whose only other organization is soft-deleted is treated as orphaned, blocks with `ErrWouldOrphanMember`, `deleted_at` untouched (Deviation 5).
+- [x] 2.6 GREEN: `organizations/service.go` — orphan probe's inner `NOT EXISTS` gains `AND EXISTS (SELECT 1 FROM organizations o2 WHERE o2.id = other.organization_id AND o2.deleted_at IS NULL)` (choke point 9).
+- [x] 2.7 RED: `workspaces/service_test.go` — `Delete`: row survives with `deleted_at`/`deleted_by_user_id` set; children (`folders`, `bookmarks`, `workspace_user_access`, `workspace_group_access`, `workspace_cursors`, `sync_events`) still populated; second call → `ErrNotFound`. (Implemented in `workspaces/service_integration_test.go`, the actual file holding these DB-backed fixtures — `service_test.go` in this package holds only pure-logic tests.)
+- [x] 2.8 GREEN: `workspaces/service.go` — `Delete` switches to `UPDATE ... SET deleted_at=NOW(), deleted_by_user_id=$3 WHERE id=$1 AND organization_id=$2 AND deleted_at IS NULL`.
 
 ### 2b — Inaccessibility sweep (16 choke points, one named test per row)
 
