@@ -80,12 +80,12 @@ Each unit is developed, tested, and merged into `develop` before the next unit's
 
 ## Phase 4: Workspaces Wiring
 
-- [ ] 4.1 `backend/internal/workspaces/service.go` — add `activity *activity.Service` field; `NewService(pool, accessService, activityService)` new trailing param.
-- [ ] 4.2 RED: `backend/internal/workspaces/service_test.go` — `CreateTx` commit persists `KindWorkspaceCreated`.
-- [ ] 4.3 GREEN: insert `Record` call in `CreateTx` before `tx.Commit()`.
-- [ ] 4.4 RED: same file — `GrantUserAccess`/`RevokeUserAccess`/`GrantGroupAccess`/`RevokeGroupAccess` commits each persist their `Kind*` row (user-access grant scenario and the group-access/revoke equivalents).
-- [ ] 4.5 GREEN: insert the four `Record` calls before their respective `tx.Commit()` calls.
-- [ ] 4.6 `backend/cmd/api/main.go` — thread `activityService` into `workspaces.NewService(pool, accessService, activityService)`.
+- [x] 4.1 `backend/internal/workspaces/service.go` — add `activity *activity.Service` field; `NewService(pool, accessService, activityService)` new trailing param.
+- [x] 4.2 RED: `backend/internal/workspaces/service_test.go` — `CreateTx` commit persists `KindWorkspaceCreated`.
+- [x] 4.3 GREEN: insert `Record` call in `CreateTx` before `tx.Commit()`.
+- [x] 4.4 RED: same file — `GrantUserAccess`/`RevokeUserAccess`/`GrantGroupAccess`/`RevokeGroupAccess` commits each persist their `Kind*` row (user-access grant scenario and the group-access/revoke equivalents).
+- [x] 4.5 GREEN: insert the four `Record` calls before their respective `tx.Commit()` calls.
+- [x] 4.6 `backend/cmd/api/main.go` — thread `activityService` into `workspaces.NewService(pool, accessService, activityService)`.
 
 ## Phase 5: Groups Transaction-Wrap Refactor & Wiring
 

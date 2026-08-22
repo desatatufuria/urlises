@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/furia/shared-bookmark-sync/backend/internal/access"
+	"github.com/furia/shared-bookmark-sync/backend/internal/activity"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -25,8 +26,9 @@ type dbQuerier interface {
 }
 
 type Service struct {
-	pool   *pgxpool.Pool
-	access *access.Service
+	pool     *pgxpool.Pool
+	access   *access.Service
+	activity *activity.Service
 }
 
 type WorkspaceAccess struct {
@@ -150,12 +152,12 @@ type workspaceAccessContribution struct {
 	Source string
 }
 
-func NewService(pool *pgxpool.Pool, accessService *access.Service) *Service {
+func NewService(pool *pgxpool.Pool, accessService *access.Service, activityService *activity.Service) *Service {
 	if accessService == nil {
 		accessService = access.NewService(pool)
 	}
 
-	return &Service{pool: pool, access: accessService}
+	return &Service{pool: pool, access: accessService, activity: activityService}
 }
 
 func (s *Service) ListByOrganization(ctx context.Context, userID, organizationID string) ([]WorkspaceAccess, error) {
@@ -289,6 +291,13 @@ func (s *Service) CreateTx(ctx context.Context, tx pgx.Tx, requesterUserID, orga
 		return WorkspaceAccess{}, err
 	}
 
+	if err := s.activity.Record(ctx, tx, organizationID, requesterUserID, activity.KindWorkspaceCreated, "workspace", workspaceID, map[string]any{
+		"workspaceName": name,
+		"workspaceType": workspaceType,
+	}); err != nil {
+		return WorkspaceAccess{}, fmt.Errorf("record workspace created activity: %w", err)
+	}
+
 	return workspace, nil
 }
 
@@ -328,6 +337,13 @@ func (s *Service) GrantUserAccess(ctx context.Context, requesterUserID, workspac
 		return UserAccessGrant{}, fmt.Errorf("upsert user workspace access: %w", err)
 	}
 
+	if err := s.activity.Record(ctx, tx, organizationID, requesterUserID, activity.KindWorkspaceAccessUserGranted, "workspace_user_access", userID, map[string]any{
+		"workspaceId": workspaceID,
+		"role":        string(role),
+	}); err != nil {
+		return UserAccessGrant{}, fmt.Errorf("record workspace user access granted activity: %w", err)
+	}
+
 	if err := tx.Commit(ctx); err != nil {
 		return UserAccessGrant{}, fmt.Errorf("commit grant user access tx: %w", err)
 	}
@@ -359,6 +375,12 @@ func (s *Service) RevokeUserAccess(ctx context.Context, requesterUserID, workspa
 	}
 	if result.RowsAffected() == 0 {
 		return ErrNotFound
+	}
+
+	if err := s.activity.Record(ctx, tx, organizationID, requesterUserID, activity.KindWorkspaceAccessUserRevoked, "workspace_user_access", userID, map[string]any{
+		"workspaceId": workspaceID,
+	}); err != nil {
+		return fmt.Errorf("record workspace user access revoked activity: %w", err)
 	}
 
 	if err := tx.Commit(ctx); err != nil {
@@ -404,6 +426,13 @@ func (s *Service) GrantGroupAccess(ctx context.Context, requesterUserID, workspa
 		return GroupAccessGrant{}, fmt.Errorf("upsert group workspace access: %w", err)
 	}
 
+	if err := s.activity.Record(ctx, tx, organizationID, requesterUserID, activity.KindWorkspaceAccessGroupGranted, "workspace_group_access", groupID, map[string]any{
+		"workspaceId": workspaceID,
+		"role":        string(role),
+	}); err != nil {
+		return GroupAccessGrant{}, fmt.Errorf("record workspace group access granted activity: %w", err)
+	}
+
 	if err := tx.Commit(ctx); err != nil {
 		return GroupAccessGrant{}, fmt.Errorf("commit grant group access tx: %w", err)
 	}
@@ -435,6 +464,12 @@ func (s *Service) RevokeGroupAccess(ctx context.Context, requesterUserID, worksp
 	}
 	if result.RowsAffected() == 0 {
 		return ErrNotFound
+	}
+
+	if err := s.activity.Record(ctx, tx, organizationID, requesterUserID, activity.KindWorkspaceAccessGroupRevoked, "workspace_group_access", groupID, map[string]any{
+		"workspaceId": workspaceID,
+	}); err != nil {
+		return fmt.Errorf("record workspace group access revoked activity: %w", err)
 	}
 
 	if err := tx.Commit(ctx); err != nil {

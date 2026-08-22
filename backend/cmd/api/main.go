@@ -105,7 +105,7 @@ func main() {
 	invitationNotifier := organizations.NewMailInvitationNotifier(smtpMailer, cfg.App.PublicBaseURL, os.Stdout)
 	secretLinkMailer := secrethide.NewMailSecretLinkMailer(smtpMailer, cfg.App.PublicBaseURL, os.Stdout)
 	groupsService := groups.NewService(pool)
-	workspacesService := workspaces.NewService(pool, accessService)
+	workspacesService := workspaces.NewService(pool, accessService, activityService)
 	idempotencyExecutor := httpapi.NewIdempotencyExecutor(pool)
 	go func() {
 		ticker := time.NewTicker(time.Hour)

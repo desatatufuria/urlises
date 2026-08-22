@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/furia/shared-bookmark-sync/backend/internal/activity"
 	"github.com/furia/shared-bookmark-sync/backend/internal/database"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -17,7 +18,7 @@ func TestCreateWorkspaceGrantsOnlyCreatorAdmin(t *testing.T) {
 	t.Parallel()
 
 	ctx, pool := openWorkspacesTestPool(t)
-	service := NewService(pool, nil)
+	service := NewService(pool, nil, activity.NewService(pool))
 	creatorID := insertWorkspacesTestUser(t, ctx, pool, "creator@example.com")
 	otherUserID := insertWorkspacesTestUser(t, ctx, pool, "other@example.com")
 	organizationID := insertWorkspacesTestOrganization(t, ctx, pool, "OdA")
@@ -63,7 +64,7 @@ func TestWorkspaceAccessResolvesHighestRoleAndRecalculatesAfterRevokes(t *testin
 	t.Parallel()
 
 	ctx, pool := openWorkspacesTestPool(t)
-	service := NewService(pool, nil)
+	service := NewService(pool, nil, activity.NewService(pool))
 	adminID := insertWorkspacesTestUser(t, ctx, pool, "admin@example.com")
 	memberID := insertWorkspacesTestUser(t, ctx, pool, "member@example.com")
 	organizationID := insertWorkspacesTestOrganization(t, ctx, pool, "OdA")
@@ -130,7 +131,7 @@ func TestGetAccessSnapshotReturnsRawAndEffectiveWorkspaceAccess(t *testing.T) {
 	t.Parallel()
 
 	ctx, pool := openWorkspacesTestPool(t)
-	service := NewService(pool, nil)
+	service := NewService(pool, nil, activity.NewService(pool))
 	adminID := insertWorkspacesTestUser(t, ctx, pool, "admin@example.com")
 	viewerID := insertWorkspacesTestUser(t, ctx, pool, "viewer@example.com")
 	editorID := insertWorkspacesTestUser(t, ctx, pool, "editor@example.com")
@@ -195,7 +196,7 @@ func TestGetAccessSnapshotRejectsNonAdmins(t *testing.T) {
 	t.Parallel()
 
 	ctx, pool := openWorkspacesTestPool(t)
-	service := NewService(pool, nil)
+	service := NewService(pool, nil, activity.NewService(pool))
 	adminID := insertWorkspacesTestUser(t, ctx, pool, "admin@example.com")
 	memberID := insertWorkspacesTestUser(t, ctx, pool, "member@example.com")
 	organizationID := insertWorkspacesTestOrganization(t, ctx, pool, "OdA")
@@ -217,6 +218,133 @@ func TestGetAccessSnapshotRejectsNonAdmins(t *testing.T) {
 	if err != ErrForbidden {
 		t.Fatalf("err = %v, want %v", err, ErrForbidden)
 	}
+}
+
+// Phase 4: Workspaces Wiring — RED: CreateTx (invoked via Create's
+// begin/commit wrapper) records a KindWorkspaceCreated event scoped to the
+// newly created workspace's organization.
+func TestCreateWorkspaceRecordsActivityEvent(t *testing.T) {
+	t.Parallel()
+
+	ctx, pool := openWorkspacesTestPool(t)
+	service := NewService(pool, nil, activity.NewService(pool))
+	creatorID := insertWorkspacesTestUser(t, ctx, pool, "create-activity-creator@example.com")
+	organizationID := insertWorkspacesTestOrganization(t, ctx, pool, "Activity Create Org")
+	insertWorkspacesTestMember(t, ctx, pool, organizationID, creatorID, "owner")
+
+	workspace, err := service.Create(ctx, creatorID, organizationID, CreateWorkspaceInput{
+		Name: "Activity Workspace",
+		Type: "operational",
+	})
+	if err != nil {
+		t.Fatalf("create workspace: %v", err)
+	}
+
+	assertWorkspacesTestActivityEvent(t, ctx, pool, organizationID, creatorID, activity.KindWorkspaceCreated, "workspace", workspace.WorkspaceID)
+}
+
+// Phase 4: Workspaces Wiring — RED: GrantUserAccess records a
+// KindWorkspaceAccessUserGranted event.
+func TestGrantUserAccessRecordsActivityEvent(t *testing.T) {
+	t.Parallel()
+
+	ctx, pool := openWorkspacesTestPool(t)
+	service := NewService(pool, nil, activity.NewService(pool))
+	adminID := insertWorkspacesTestUser(t, ctx, pool, "grant-user-activity-admin@example.com")
+	memberID := insertWorkspacesTestUser(t, ctx, pool, "grant-user-activity-member@example.com")
+	organizationID := insertWorkspacesTestOrganization(t, ctx, pool, "Activity Grant User Org")
+	insertWorkspacesTestMember(t, ctx, pool, organizationID, adminID, "owner")
+	insertWorkspacesTestMember(t, ctx, pool, organizationID, memberID, "member")
+
+	workspace, err := service.Create(ctx, adminID, organizationID, CreateWorkspaceInput{Name: "Ops", Type: "shared"})
+	if err != nil {
+		t.Fatalf("create workspace: %v", err)
+	}
+
+	if _, err := service.GrantUserAccess(ctx, adminID, workspace.WorkspaceID, memberID, UpdateUserAccessInput{Role: "viewer"}); err != nil {
+		t.Fatalf("grant user access: %v", err)
+	}
+
+	assertWorkspacesTestActivityEvent(t, ctx, pool, organizationID, adminID, activity.KindWorkspaceAccessUserGranted, "workspace_user_access", memberID)
+}
+
+// Phase 4: Workspaces Wiring — RED: RevokeUserAccess records a
+// KindWorkspaceAccessUserRevoked event.
+func TestRevokeUserAccessRecordsActivityEvent(t *testing.T) {
+	t.Parallel()
+
+	ctx, pool := openWorkspacesTestPool(t)
+	service := NewService(pool, nil, activity.NewService(pool))
+	adminID := insertWorkspacesTestUser(t, ctx, pool, "revoke-user-activity-admin@example.com")
+	memberID := insertWorkspacesTestUser(t, ctx, pool, "revoke-user-activity-member@example.com")
+	organizationID := insertWorkspacesTestOrganization(t, ctx, pool, "Activity Revoke User Org")
+	insertWorkspacesTestMember(t, ctx, pool, organizationID, adminID, "owner")
+	insertWorkspacesTestMember(t, ctx, pool, organizationID, memberID, "member")
+
+	workspace, err := service.Create(ctx, adminID, organizationID, CreateWorkspaceInput{Name: "Ops", Type: "shared"})
+	if err != nil {
+		t.Fatalf("create workspace: %v", err)
+	}
+	if _, err := service.GrantUserAccess(ctx, adminID, workspace.WorkspaceID, memberID, UpdateUserAccessInput{Role: "viewer"}); err != nil {
+		t.Fatalf("grant user access: %v", err)
+	}
+
+	if err := service.RevokeUserAccess(ctx, adminID, workspace.WorkspaceID, memberID); err != nil {
+		t.Fatalf("revoke user access: %v", err)
+	}
+
+	assertWorkspacesTestActivityEvent(t, ctx, pool, organizationID, adminID, activity.KindWorkspaceAccessUserRevoked, "workspace_user_access", memberID)
+}
+
+// Phase 4: Workspaces Wiring — RED: GrantGroupAccess records a
+// KindWorkspaceAccessGroupGranted event.
+func TestGrantGroupAccessRecordsActivityEvent(t *testing.T) {
+	t.Parallel()
+
+	ctx, pool := openWorkspacesTestPool(t)
+	service := NewService(pool, nil, activity.NewService(pool))
+	adminID := insertWorkspacesTestUser(t, ctx, pool, "grant-group-activity-admin@example.com")
+	organizationID := insertWorkspacesTestOrganization(t, ctx, pool, "Activity Grant Group Org")
+	insertWorkspacesTestMember(t, ctx, pool, organizationID, adminID, "owner")
+	groupID := insertWorkspacesTestGroup(t, ctx, pool, organizationID, "grant-group-activity")
+
+	workspace, err := service.Create(ctx, adminID, organizationID, CreateWorkspaceInput{Name: "Ops", Type: "shared"})
+	if err != nil {
+		t.Fatalf("create workspace: %v", err)
+	}
+
+	if _, err := service.GrantGroupAccess(ctx, adminID, workspace.WorkspaceID, groupID, UpdateGroupAccessInput{Role: "editor"}); err != nil {
+		t.Fatalf("grant group access: %v", err)
+	}
+
+	assertWorkspacesTestActivityEvent(t, ctx, pool, organizationID, adminID, activity.KindWorkspaceAccessGroupGranted, "workspace_group_access", groupID)
+}
+
+// Phase 4: Workspaces Wiring — RED: RevokeGroupAccess records a
+// KindWorkspaceAccessGroupRevoked event.
+func TestRevokeGroupAccessRecordsActivityEvent(t *testing.T) {
+	t.Parallel()
+
+	ctx, pool := openWorkspacesTestPool(t)
+	service := NewService(pool, nil, activity.NewService(pool))
+	adminID := insertWorkspacesTestUser(t, ctx, pool, "revoke-group-activity-admin@example.com")
+	organizationID := insertWorkspacesTestOrganization(t, ctx, pool, "Activity Revoke Group Org")
+	insertWorkspacesTestMember(t, ctx, pool, organizationID, adminID, "owner")
+	groupID := insertWorkspacesTestGroup(t, ctx, pool, organizationID, "revoke-group-activity")
+
+	workspace, err := service.Create(ctx, adminID, organizationID, CreateWorkspaceInput{Name: "Ops", Type: "shared"})
+	if err != nil {
+		t.Fatalf("create workspace: %v", err)
+	}
+	if _, err := service.GrantGroupAccess(ctx, adminID, workspace.WorkspaceID, groupID, UpdateGroupAccessInput{Role: "editor"}); err != nil {
+		t.Fatalf("grant group access: %v", err)
+	}
+
+	if err := service.RevokeGroupAccess(ctx, adminID, workspace.WorkspaceID, groupID); err != nil {
+		t.Fatalf("revoke group access: %v", err)
+	}
+
+	assertWorkspacesTestActivityEvent(t, ctx, pool, organizationID, adminID, activity.KindWorkspaceAccessGroupRevoked, "workspace_group_access", groupID)
 }
 
 func openWorkspacesTestPool(t *testing.T) (context.Context, *pgxpool.Pool) {
@@ -341,5 +469,26 @@ func insertWorkspacesTestGroupMember(t *testing.T, ctx context.Context, pool *pg
 		VALUES ($1, $2)
 	`, groupID, userID); err != nil {
 		t.Fatalf("insert group member: %v", err)
+	}
+}
+
+// assertWorkspacesTestActivityEvent asserts exactly one activity_events row
+// exists matching the given organization/actor/kind/target, per the design's
+// Call-Site Wiring table for workspaces/service.go.
+func assertWorkspacesTestActivityEvent(t *testing.T, ctx context.Context, pool *pgxpool.Pool, organizationID, actorUserID string, kind activity.Kind, targetType, targetID string) {
+	t.Helper()
+
+	var count int
+	err := pool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM activity_events
+		WHERE organization_id = $1 AND actor_user_id = $2 AND kind = $3 AND target_type = $4 AND target_id = $5
+	`, organizationID, actorUserID, string(kind), targetType, targetID).Scan(&count)
+	if err != nil {
+		t.Fatalf("count activity events: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("activity event count = %d, want 1 (organizationId=%s actorUserId=%s kind=%s targetType=%s targetId=%s)",
+			count, organizationID, actorUserID, kind, targetType, targetID)
 	}
 }
