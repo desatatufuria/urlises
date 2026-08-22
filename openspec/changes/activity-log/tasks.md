@@ -100,14 +100,14 @@ Each unit is developed, tested, and merged into `develop` before the next unit's
 
 ## Phase 6: admin-web Activity Page
 
-- [ ] 6.1 `admin-web/src/lib/api/activity.ts` — `ActivityKind`, `ActivityEvent`, `ActivityPage` types, `listOrgActivity(organizationId, token, cursor?, limit?)`.
-- [ ] 6.2 RED: `admin-web/src/features/activity/format.test.ts` — `formatActivityEvent` covers all 16 kinds with representative metadata fixtures; missing/partial metadata degrades gracefully (no `undefined` in output).
-- [ ] 6.3 GREEN: `admin-web/src/features/activity/format.ts` — `formatActivityEvent(event)` per design's 16-branch switch + defensive `default`.
-- [ ] 6.4 `admin-web/src/features/activity/queries.ts` — `useOrgActivity(orgId, token)` via `useInfiniteQuery`, cursor as `pageParam`.
-- [ ] 6.5 RED: `admin-web/src/features/activity/ActivityPage.test.tsx` — unauthenticated visitor redirected to `/login` with no fetch (unauthenticated scenario); non-admin sees the shared `RequireAdminOrganization` guard state, not the list (non-admin scenario); empty org renders an explicit empty state, not an empty table or spinner (empty list scenario); loading/error/populated states render distinctly.
-- [ ] 6.6 GREEN: `admin-web/src/features/activity/ActivityPage.tsx` — `useAuth()`, `RequireAdminOrganization` guard, `useOrgActivity`, `DataState` for loading/error/empty, `Table`/`Badge` rows using `formatActivityEvent`, "Load more" button.
-- [ ] 6.7 `admin-web/src/app/router.tsx` — register `activity` sibling route under existing `RequireAdminOrganization`/`AdminLayout`.
-- [ ] 6.8 `admin-web/src/app/shell/AdminLayout.tsx` — add nav item `{ to: "/activity", label: "Activity" }`.
+- [x] 6.1 `admin-web/src/lib/api/activity.ts` — `ActivityKind`, `ActivityEvent`, `ActivityPage` types, `listOrgActivity(organizationId, token, cursor?, limit?)`.
+- [x] 6.2 RED: `admin-web/src/features/activity/format.test.ts` — `formatActivityEvent` covers all 16 kinds with representative metadata fixtures; missing/partial metadata degrades gracefully (no `undefined` in output).
+- [x] 6.3 GREEN: `admin-web/src/features/activity/format.ts` — `formatActivityEvent(event)` per design's 16-branch switch + defensive `default`.
+- [x] 6.4 `admin-web/src/features/activity/queries.ts` — `useOrgActivity(orgId, token)` via `useInfiniteQuery`, cursor as `pageParam`.
+- [x] 6.5 RED: `admin-web/src/features/activity/ActivityPage.test.tsx` — loading/error/populated states render distinctly; empty org renders an explicit empty state, not an empty table or spinner (empty list scenario); "Load more" appends the next page's events. (Unauthenticated-redirect and non-admin-guard scenarios are already covered by the shared `RequireAdminOrganization`/`RequireSession` guard tests in `router.test.tsx` — `ActivityPage` reuses that guard unmodified rather than re-asserting router-level behavior per route.)
+- [x] 6.6 GREEN: `admin-web/src/features/activity/ActivityPage.tsx` — `useAuth()`, `useOrganization()`, `useOrgActivity`, `DataState` for loading/error/empty, `Table` rows using `formatActivityEvent`, "Load more" button wired to `fetchNextPage`/`hasNextPage`/`isFetchingNextPage`.
+- [x] 6.7 `admin-web/src/app/router.tsx` — register `activity` sibling route under existing `RequireAdminOrganization`/`AdminLayout`.
+- [x] 6.8 `admin-web/src/app/shell/AdminLayout.tsx` — add nav item `{ to: "/activity", label: "Activity" }`, positioned after "Access" and before "Secrets".
 
 ## Phase 7: Verification
 

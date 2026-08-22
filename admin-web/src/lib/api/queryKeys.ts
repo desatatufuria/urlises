@@ -8,6 +8,7 @@ export const queryKeys = {
     invitations: ["organizations", organizationId, "invitations"] as const,
     groups: ["organizations", organizationId, "groups"] as const,
     workspaces: ["organizations", organizationId, "workspaces"] as const,
+    activity: ["organizations", organizationId, "activity"] as const,
   }),
   group: (groupId: string) => ({
     members: ["groups", groupId, "members"] as const,
