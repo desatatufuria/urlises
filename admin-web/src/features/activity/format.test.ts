@@ -199,6 +199,108 @@ describe("formatActivityEvent", () => {
     expect(message).not.toContain("undefined");
   });
 
+  it("bookmark.created", () => {
+    expect(
+      formatActivityEvent(
+        event({
+          kind: "bookmark.created",
+          metadata: { title: "Design Doc", url: "https://example.com/doc", workspaceId: "workspace-1", workspaceName: "Launch Room" },
+        }),
+      ),
+    ).toBe('Added the bookmark "Design Doc" to workspace "Launch Room".');
+  });
+
+  it("bookmark.created with missing metadata degrades to a placeholder", () => {
+    expect(formatActivityEvent(event({ kind: "bookmark.created", metadata: {} }))).toBe(
+      'Added the bookmark "" to workspace "?".',
+    );
+  });
+
+  it("bookmark.updated", () => {
+    expect(
+      formatActivityEvent(
+        event({
+          kind: "bookmark.updated",
+          metadata: { title: "Design Doc", url: "https://example.com/doc", workspaceId: "workspace-1", workspaceName: "Launch Room" },
+        }),
+      ),
+    ).toBe('Updated the bookmark "Design Doc" in workspace "Launch Room".');
+  });
+
+  it("bookmark.updated with missing metadata degrades to a placeholder", () => {
+    expect(formatActivityEvent(event({ kind: "bookmark.updated", metadata: {} }))).toBe(
+      'Updated the bookmark "" in workspace "?".',
+    );
+  });
+
+  it("bookmark.deleted", () => {
+    expect(
+      formatActivityEvent(
+        event({
+          kind: "bookmark.deleted",
+          metadata: { title: "Design Doc", url: "https://example.com/doc", workspaceId: "workspace-1", workspaceName: "Launch Room" },
+        }),
+      ),
+    ).toBe('Deleted the bookmark "Design Doc" from workspace "Launch Room".');
+  });
+
+  it("bookmark.deleted with missing metadata degrades to a placeholder", () => {
+    expect(formatActivityEvent(event({ kind: "bookmark.deleted", metadata: {} }))).toBe(
+      'Deleted the bookmark "" from workspace "?".',
+    );
+  });
+
+  it("folder.created", () => {
+    expect(
+      formatActivityEvent(
+        event({
+          kind: "folder.created",
+          metadata: { name: "Reading List", workspaceId: "workspace-1", workspaceName: "Launch Room" },
+        }),
+      ),
+    ).toBe('Created the folder "Reading List" in workspace "Launch Room".');
+  });
+
+  it("folder.created with missing metadata degrades to a placeholder", () => {
+    expect(formatActivityEvent(event({ kind: "folder.created", metadata: {} }))).toBe(
+      'Created the folder "" in workspace "?".',
+    );
+  });
+
+  it("folder.updated", () => {
+    expect(
+      formatActivityEvent(
+        event({
+          kind: "folder.updated",
+          metadata: { name: "Reading List", workspaceId: "workspace-1", workspaceName: "Launch Room" },
+        }),
+      ),
+    ).toBe('Updated the folder "Reading List" in workspace "Launch Room".');
+  });
+
+  it("folder.updated with missing metadata degrades to a placeholder", () => {
+    expect(formatActivityEvent(event({ kind: "folder.updated", metadata: {} }))).toBe(
+      'Updated the folder "" in workspace "?".',
+    );
+  });
+
+  it("folder.deleted", () => {
+    expect(
+      formatActivityEvent(
+        event({
+          kind: "folder.deleted",
+          metadata: { name: "Reading List", workspaceId: "workspace-1", workspaceName: "Launch Room" },
+        }),
+      ),
+    ).toBe('Deleted the folder "Reading List" from workspace "Launch Room".');
+  });
+
+  it("folder.deleted with missing metadata degrades to a placeholder", () => {
+    expect(formatActivityEvent(event({ kind: "folder.deleted", metadata: {} }))).toBe(
+      'Deleted the folder "" from workspace "?".',
+    );
+  });
+
   it("renders a readable default sentence for an unrecognized future kind", () => {
     const message = formatActivityEvent(
       event({
