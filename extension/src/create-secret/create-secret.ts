@@ -12,8 +12,9 @@
 import { DEFAULT_PUBLIC_BASE_URL } from "../shared/runtime.js";
 import { deriveWrappingKey, encrypt, exportContentKey, generateContentKey, wrapKey } from "../shared/crypto.js";
 import { sendMessage } from "../shared/messaging.js";
-import type { UiState } from "../shared/types.js";
+import type { SecretRecipient, UiState } from "../shared/types.js";
 import { estimateContentLimitStatus } from "./content-limit.js";
+import { filterRecipients } from "./recipient-filter.js";
 
 const signedOutNotice = document.querySelector<HTMLElement>("#signed-out-notice")!;
 const createFormSection = document.querySelector<HTMLElement>("#create-form-section")!;
@@ -35,9 +36,25 @@ const recipientEmailInput = document.querySelector<HTMLInputElement>("#recipient
 const sendEmailFeedback = document.querySelector<HTMLElement>("#send-email-feedback")!;
 const sendEmailError = document.querySelector<HTMLElement>("#send-email-error")!;
 
+const recipientPicker = document.querySelector<HTMLElement>("#recipient-picker")!;
+const recipientFilterInput = document.querySelector<HTMLInputElement>("#recipient-filter")!;
+const recipientOptionsList = document.querySelector<HTMLUListElement>("#recipient-options")!;
+const recipientPickerHint = document.querySelector<HTMLElement>("#recipient-picker-hint")!;
+
 let publicBaseUrl = DEFAULT_PUBLIC_BASE_URL;
 let createdToken: string | undefined;
 let createdFragmentKey: string | undefined;
+
+// RecipientDirectoryState mirrors design.md's state machine exactly: the
+// picker is a progressive-enhancement layer over the free-text
+// #recipient-email input, never a gate on it (see the degradation table in
+// renderRecipientPicker below).
+type RecipientDirectoryState =
+  | { status: "loading" }
+  | { status: "ready"; candidates: SecretRecipient[] }
+  | { status: "error" };
+
+let recipientDirectoryState: RecipientDirectoryState = { status: "loading" };
 
 secretContentInput.addEventListener("input", renderContentLimitHint);
 
@@ -59,6 +76,26 @@ createAnotherSecretButton.addEventListener("click", () => {
   resetToCreateForm();
 });
 
+recipientFilterInput.addEventListener("input", renderRecipientPicker);
+
+// One delegated listener on the list itself, not per-item: the list is
+// rebuilt on every keystroke (renderRecipientPicker), so per-item listeners
+// would leak. See design.md's "Selection wiring" section.
+recipientOptionsList.addEventListener("click", (event) => {
+  const target = event.target;
+  if (!(target instanceof HTMLElement)) {
+    return;
+  }
+  const option = target.closest<HTMLElement>("[data-email]");
+  if (!option?.dataset.email) {
+    return;
+  }
+  recipientEmailInput.value = option.dataset.email;
+  recipientFilterInput.value = "";
+  renderRecipientPicker();
+  recipientEmailInput.focus();
+});
+
 renderContentLimitHint();
 void bootstrap().catch(showSecretCreateError);
 
@@ -70,6 +107,84 @@ async function bootstrap(): Promise<void> {
   const signedIn = Boolean(ui.state.session);
   signedOutNotice.classList.toggle("hidden", signedIn);
   createFormSection.classList.toggle("hidden", !signedIn);
+
+  // Fire-and-forget: awaiting this would delay the signed-in/signed-out
+  // gate render above on every open (design.md Decision 13). The picker
+  // renders in its own "loading" state until this resolves.
+  void loadRecipients();
+}
+
+// loadRecipients fetches the directory once per window open via the
+// background message bus (never shared/api.ts directly — see design.md's
+// architecture note: api.ts signs requests with the background's in-memory
+// runtime token, which is never populated in this window).
+async function loadRecipients(): Promise<void> {
+  try {
+    const candidates = await sendMessage<SecretRecipient[]>({ type: "secrets/recipients" });
+    recipientDirectoryState = { status: "ready", candidates };
+  } catch {
+    recipientDirectoryState = { status: "error" };
+  }
+  renderRecipientPicker();
+}
+
+// renderRecipientPicker implements design.md's six-row degradation table.
+// #recipient-email is never disabled in any state -- the picker is a
+// progressive enhancement over free-text entry, never a gate on it.
+function renderRecipientPicker(): void {
+  if (recipientDirectoryState.status === "loading") {
+    recipientPicker.classList.add("hidden");
+    recipientPickerHint.textContent = "";
+    return;
+  }
+
+  if (recipientDirectoryState.status === "error") {
+    recipientPicker.classList.add("hidden");
+    recipientPickerHint.textContent = "Colleague search is unavailable — type the address.";
+    return;
+  }
+
+  const candidates = recipientDirectoryState.candidates;
+  if (candidates.length === 0) {
+    // A solo user (zero orgs) sees no broken widget at all.
+    recipientPicker.classList.add("hidden");
+    recipientPickerHint.textContent = "";
+    return;
+  }
+
+  const query = recipientFilterInput.value;
+  const matches = filterRecipients(candidates, query);
+
+  recipientPicker.classList.remove("hidden");
+  recipientOptionsList.replaceChildren(
+    ...matches.map((candidate) => {
+      const item = document.createElement("li");
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "ui-button-ghost";
+      button.dataset.email = candidate.email;
+      button.textContent = candidate.name ? `${candidate.name} — ${candidate.email}` : candidate.email;
+      item.appendChild(button);
+      return item;
+    }),
+  );
+
+  if (!query.trim()) {
+    recipientPickerHint.textContent = `Type to search ${candidates.length} colleagues.`;
+  } else if (matches.length === 0) {
+    recipientPickerHint.textContent = "No colleague matches — type the full address.";
+  } else {
+    recipientPickerHint.textContent = "";
+  }
+}
+
+// clearRecipientPicker resets the filter input and collapses the option
+// list. sendEmailForm.reset() cannot reach #recipient-filter because the
+// picker lives outside the form (Decision 12), so this is called explicitly
+// from resetToCreateForm() and after a successful send.
+function clearRecipientPicker(): void {
+  recipientFilterInput.value = "";
+  renderRecipientPicker();
 }
 
 function renderContentLimitHint(): void {
@@ -143,6 +258,7 @@ function resetToCreateForm(): void {
   secretLinkResult.classList.add("hidden");
   clearSendEmailFeedback();
   clearSecretCreateError();
+  clearRecipientPicker();
   createFormSection.classList.remove("hidden");
   secretContentInput.focus();
 }
@@ -196,6 +312,7 @@ async function runSendSecretEmail(): Promise<void> {
 
   sendEmailFeedback.textContent = `Sent to ${recipientEmail}.`;
   sendEmailForm.reset();
+  clearRecipientPicker();
 }
 
 function showSecretCreateError(error: unknown): void {

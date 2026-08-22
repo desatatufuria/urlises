@@ -7,6 +7,7 @@ import {
   getOrganizations,
   getPreferences as apiGetPreferences,
   getPublicConfig as apiGetPublicConfig,
+  getSecretRecipients as apiGetSecretRecipients,
   getWorkspaceTree,
   getWorkspaces,
   listSecrets as apiListSecrets,
@@ -46,6 +47,7 @@ import type {
   LoginRequest,
   ProjectionActivityDetail,
   ProjectionState,
+  SecretRecipient,
   SecretRecord,
   SessionData,
   StatusOverview,
@@ -295,6 +297,17 @@ export async function listSecrets(): Promise<SecretHistoryEntry[]> {
   }
 
   return apiListSecrets(state.settings.backendUrl, state.session);
+}
+
+// listSecretRecipients follows listSecrets' shape (require a session, call
+// the API, return the raw entries) -- the directory is not persisted state.
+export async function listSecretRecipients(): Promise<SecretRecipient[]> {
+  const state = await getState();
+  if (!state.session) {
+    throw new Error("sign in required to list recipients");
+  }
+
+  return apiGetSecretRecipients(state.settings.backendUrl, state.session);
 }
 
 export interface SendSecretEmailRequest {

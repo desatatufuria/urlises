@@ -16,6 +16,7 @@ import type {
   OrganizationMembership,
   Preferences,
   ReplayResult,
+  SecretRecipient,
   SessionData,
   RenewableSession,
   TreeResponse,
@@ -60,6 +61,15 @@ export async function getOrganizations(backendUrl: string, session: SessionData)
     headers: authHeaders(session),
   });
   return response.organizations;
+}
+
+// getSecretRecipients follows getOrganizations' shape exactly: authenticated
+// GET, envelope unwrapped at the boundary, no mutation headers.
+export async function getSecretRecipients(backendUrl: string, session: SessionData): Promise<SecretRecipient[]> {
+  const response = await requestJSON<{ recipients: SecretRecipient[] }>(backendUrl, "/me/secret-recipients", {
+    headers: authHeaders(session),
+  });
+  return response.recipients;
 }
 
 export async function getWorkspaces(

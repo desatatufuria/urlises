@@ -30,6 +30,15 @@ export interface WorkspaceAccess {
   role: string;
 }
 
+// SecretRecipient mirrors organizations.MemberName exactly. name is optional
+// because the backend tags it omitempty. There is deliberately no role and
+// no organization attribution (Decision F) -- do not add either.
+export interface SecretRecipient {
+  userId: string;
+  email: string;
+  name?: string;
+}
+
 export interface FolderNode {
   id: string;
   parentId?: string;
