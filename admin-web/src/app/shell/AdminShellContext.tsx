@@ -8,10 +8,17 @@ import { useOrganization } from "../providers/OrganizationProvider";
 
 export const navItems = [
   { to: "/", label: "Overview", end: true },
-  { to: "/members", label: "People" },
-  { to: "/groups", label: "Groups" },
   { to: "/workspaces", label: "Workspaces" },
   { to: "/access", label: "Access" },
+] as const;
+
+// Collapsed into the "Directory" nav submenu instead of sitting flat in
+// navItems -- People and Groups are both "who's in this org and how
+// they're organized", the same admin-console concept Google Workspace/
+// Azure AD/Okta call a directory.
+const directoryItems = [
+  { to: "/members", label: "People" },
+  { to: "/groups", label: "Groups" },
 ] as const;
 
 // Collapsed into the "History" nav submenu instead of sitting flat in
@@ -38,6 +45,7 @@ export function AdminShellContext() {
   const { preference, setPreference } = useColorScheme();
   const { pathname } = useLocation();
 
+  const directoryActive = pathname.startsWith("/members") || pathname.startsWith("/groups");
   const historyActive = pathname.startsWith("/activity") || pathname.startsWith("/trash") || pathname.startsWith("/secrets");
   const accountLabel = principal?.name ?? principal?.email ?? "Account";
 
@@ -55,6 +63,20 @@ export function AdminShellContext() {
             {item.label}
           </NavLink>
         ))}
+        <DropdownMenu
+          label="Directory"
+          triggerClassName={`ui-nav__link ui-dropdown__nav-trigger${directoryActive ? " ui-nav__link--active" : ""}`}
+        >
+          {(close) => (
+            <>
+              {directoryItems.map((item) => (
+                <NavLink key={item.to} className="ui-dropdown__item" to={item.to} onClick={close}>
+                  {item.label}
+                </NavLink>
+              ))}
+            </>
+          )}
+        </DropdownMenu>
         <DropdownMenu
           label="History"
           triggerClassName={`ui-nav__link ui-dropdown__nav-trigger${historyActive ? " ui-nav__link--active" : ""}`}

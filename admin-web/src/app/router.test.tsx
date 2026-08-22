@@ -202,6 +202,7 @@ describe("admin router", () => {
     });
     const { router } = renderAppRoute("/", defaultAdminSnapshot);
     expect(await screen.findByText(/1 pending invitation/i)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Directory" }));
     expect(screen.getByRole("link", { name: "People" })).toBeInTheDocument();
     await userEvent.click(screen.getByRole("link", { name: /review people/i }));
     expect(router.state.location.pathname).toBe("/members");

@@ -282,6 +282,6 @@ describe("TrashPage", () => {
     renderTrashPage();
 
     expect(await screen.findByRole("link", { name: "Overview" })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "People" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Workspaces" })).toBeInTheDocument();
   });
 });
