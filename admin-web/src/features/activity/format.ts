@@ -21,12 +21,16 @@ export function formatActivityEvent(event: ActivityEvent): string {
       return `Resent the invitation to ${m.email ?? "someone"}.`;
     case "invitation.accepted":
       return `Accepted the invitation to join as ${m.role ?? "member"}.`;
+    case "invitation.cancelled":
+      return `Cancelled the invitation to ${m.email ?? "someone"}.`;
     case "organization_member.role_changed":
       return `Changed ${m.targetEmail ?? "a member"}'s role from ${m.previousRole ?? "?"} to ${m.role ?? "?"}.`;
     case "organization_member.removed":
       return `Removed ${m.targetEmail ?? "a member"} (was ${m.previousRole ?? "?"}) from the organization.`;
     case "workspace.created":
       return `Created the workspace "${m.workspaceName ?? ""}" (${m.workspaceType ?? "unknown type"}).`;
+    case "workspace.deleted":
+      return `Deleted the workspace "${m.workspaceName ?? ""}".`;
     case "workspace_access.user_granted":
       return `Granted ${m.role ?? "?"} access to a user on workspace ${m.workspaceId ?? "?"}.`;
     case "workspace_access.user_revoked":

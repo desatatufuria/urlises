@@ -1,5 +1,5 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { createOrganizationInvitation, patchOrganizationMember, resendOrganizationInvitation } from "../../lib/api/organizations";
+import { cancelOrganizationInvitation, createOrganizationInvitation, patchOrganizationMember, resendOrganizationInvitation } from "../../lib/api/organizations";
 import { queryKeys } from "../../lib/api/queryKeys";
 import type { OrganizationRole } from "../../lib/api/types";
 import { useAuth } from "../../app/providers/AuthProvider";
@@ -38,6 +38,21 @@ export function useResendInvitationMutation(token?: string, organizationId?: str
   });
 }
 
+export function useCancelInvitationMutation(token?: string, organizationId?: string) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (input: { invitationId: string }) => cancelOrganizationInvitation(token!, organizationId!, input.invitationId),
+    onSuccess: async () => {
+      if (!organizationId) {
+        return;
+      }
+
+      await queryClient.invalidateQueries({ queryKey: queryKeys.organization(organizationId).invitations });
+    },
+  });
+}
+
 export function useUpdateMemberRoleMutation(token?: string, organizationId?: string) {
 	const queryClient = useQueryClient();
 	const { session, refreshOrganizations, signOut } = useAuth();
@@ -51,10 +66,29 @@ export function useUpdateMemberRoleMutation(token?: string, organizationId?: str
 
 		await queryClient.invalidateQueries({ queryKey: queryKeys.organization(organizationId).members });
 		if (input.userId === session?.user.id) {
-			await refreshOrganizations();
-			const remaining = queryClient.getQueryData<{ role: string }[]>(queryKeys.auth.organizations) ?? [];
+			const remaining = await refreshOrganizations();
 			if (remaining.length === 0) await signOut();
 		}
     },
   });
+}
+
+export function useRemoveMemberMutation(token?: string, organizationId?: string) {
+	const queryClient = useQueryClient();
+	const { session, refreshOrganizations, signOut } = useAuth();
+
+	return useMutation({
+		mutationFn: (input: { userId: string }) => patchOrganizationMember(token!, organizationId!, { userId: input.userId, remove: true }),
+		onSuccess: async (_member, input) => {
+			if (!organizationId) {
+				return;
+			}
+
+			await queryClient.invalidateQueries({ queryKey: queryKeys.organization(organizationId).members });
+			if (input.userId === session?.user.id) {
+				const remaining = await refreshOrganizations();
+				if (remaining.length === 0) await signOut();
+			}
+		},
+	});
 }

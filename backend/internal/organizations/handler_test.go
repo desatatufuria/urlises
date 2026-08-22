@@ -24,6 +24,8 @@ type organizationsRouteStub struct {
 	requester   string
 	invitations []PendingInvitation
 	err         error
+	cancelErr   error
+	deleteErr   error
 }
 
 func TestCreationRoutesRequireIdempotencyKey(t *testing.T) {
@@ -69,6 +71,13 @@ func (s *organizationsRouteStub) ListInvitations(_ context.Context, requester, _
 func (s *organizationsRouteStub) ResendInvitation(context.Context, string, string, string) (InvitationCreation, error) {
 	return InvitationCreation{}, nil
 }
+func (s *organizationsRouteStub) CancelInvitation(context.Context, string, string, string) error {
+	return s.cancelErr
+}
+func (s *organizationsRouteStub) DeleteOrganization(_ context.Context, requester, _ string) error {
+	s.requester = requester
+	return s.deleteErr
+}
 
 func organizationPrincipal(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -100,6 +109,91 @@ func TestInvitationReadRouteEnvelopeAuthAndErrors(t *testing.T) {
 	mux.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/organizations/org-1/invitations", nil))
 	if recorder.Code != http.StatusUnauthorized {
 		t.Fatalf("unauthorized status=%d", recorder.Code)
+	}
+}
+
+// Phase 2 (Slice 2) — RED: the cancel route returns 204 on success, 400 on
+// ErrInvitationNotPending, and 401 when unauthenticated -- mirrors
+// TestInvitationReadRouteEnvelopeAuthAndErrors's stub-driven style so this
+// runs without a database.
+func TestCancelInvitationRouteEnvelopeAuthAndErrors(t *testing.T) {
+	stub := &organizationsRouteStub{}
+	mux := http.NewServeMux()
+	RegisterRoutes(mux, organizationPrincipal, stub, nil)
+
+	recorder := httptest.NewRecorder()
+	mux.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/organizations/org-1/invitations/invite-1/cancel", nil))
+	if recorder.Code != http.StatusNoContent {
+		t.Fatalf("status=%d, want 204", recorder.Code)
+	}
+	if recorder.Body.Len() != 0 {
+		t.Fatalf("body=%q, want empty", recorder.Body.String())
+	}
+
+	stub.cancelErr = ErrInvitationNotPending
+	recorder = httptest.NewRecorder()
+	mux.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/organizations/org-1/invitations/invite-1/cancel", nil))
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("not-pending status=%d, want 400", recorder.Code)
+	}
+
+	mux = http.NewServeMux()
+	RegisterRoutes(mux, func(next http.Handler) http.Handler { return next }, stub, nil)
+	recorder = httptest.NewRecorder()
+	mux.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/organizations/org-1/invitations/invite-1/cancel", nil))
+	if recorder.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthorized status=%d, want 401", recorder.Code)
+	}
+}
+
+// Phase 4 (Slice 4) — RED: the delete-organization route returns 204 on
+// success, 403 on ErrForbidden, 409 on ErrWouldOrphanMember, 404 on
+// ErrNotFound, and 401 when unauthenticated -- stub-driven so this runs
+// without a database, mirroring TestCancelInvitationRouteEnvelopeAuthAndErrors.
+func TestDeleteOrganizationRouteEnvelopeAuthAndErrors(t *testing.T) {
+	stub := &organizationsRouteStub{}
+	mux := http.NewServeMux()
+	RegisterRoutes(mux, organizationPrincipal, stub, nil)
+
+	recorder := httptest.NewRecorder()
+	mux.ServeHTTP(recorder, httptest.NewRequest(http.MethodDelete, "/organizations/org-1", nil))
+	if recorder.Code != http.StatusNoContent {
+		t.Fatalf("status=%d, want 204", recorder.Code)
+	}
+	if recorder.Body.Len() != 0 {
+		t.Fatalf("body=%q, want empty", recorder.Body.String())
+	}
+	if stub.requester != "admin-1" {
+		t.Fatalf("requester=%q, want admin-1", stub.requester)
+	}
+
+	stub.deleteErr = ErrForbidden
+	recorder = httptest.NewRecorder()
+	mux.ServeHTTP(recorder, httptest.NewRequest(http.MethodDelete, "/organizations/org-1", nil))
+	if recorder.Code != http.StatusForbidden {
+		t.Fatalf("forbidden status=%d, want 403", recorder.Code)
+	}
+
+	stub.deleteErr = ErrWouldOrphanMember
+	recorder = httptest.NewRecorder()
+	mux.ServeHTTP(recorder, httptest.NewRequest(http.MethodDelete, "/organizations/org-1", nil))
+	if recorder.Code != http.StatusConflict {
+		t.Fatalf("orphan status=%d, want 409", recorder.Code)
+	}
+
+	stub.deleteErr = ErrNotFound
+	recorder = httptest.NewRecorder()
+	mux.ServeHTTP(recorder, httptest.NewRequest(http.MethodDelete, "/organizations/org-1", nil))
+	if recorder.Code != http.StatusNotFound {
+		t.Fatalf("not found status=%d, want 404", recorder.Code)
+	}
+
+	mux = http.NewServeMux()
+	RegisterRoutes(mux, func(next http.Handler) http.Handler { return next }, stub, nil)
+	recorder = httptest.NewRecorder()
+	mux.ServeHTTP(recorder, httptest.NewRequest(http.MethodDelete, "/organizations/org-1", nil))
+	if recorder.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthorized status=%d, want 401", recorder.Code)
 	}
 }
 
@@ -419,6 +513,124 @@ func TestResendInvitationRouteRequiresAdmin(t *testing.T) {
 	}
 	if notifier.count() != 0 {
 		t.Fatalf("notifier calls = %d, want 0", notifier.count())
+	}
+}
+
+// Phase 2 (Slice 2): Cancel Pending Invitation — RED: cancelling a pending
+// invitation succeeds with 204 and no body, mirroring the removal
+// convention (PATCH .../members {remove:true} -> 204).
+func TestCancelInvitationRouteSucceedsWithNoContent(t *testing.T) {
+	ctx, pool := openOrganizationsTestPool(t, "organizations_handler_cancel_test")
+	adminID := insertOrganizationsTestUser(t, ctx, pool, "cancel-route-admin@example.com")
+	organizationID := insertOrganizationsTestOrganization(t, ctx, pool, "Cancel Route Org")
+	insertOrganizationsTestMember(t, ctx, pool, organizationID, adminID, "admin")
+
+	notifier := &countingInvitationNotifier{}
+	mux := invitationHandlerTestMux(adminID, pool, notifier)
+
+	createReq := httptest.NewRequest(http.MethodPost, "/organizations/"+organizationID+"/invitations", strings.NewReader(`{"email":"cancel-target@example.com","role":"member"}`))
+	createReq.Header.Set("Idempotency-Key", "cancel-create-key")
+	createW := httptest.NewRecorder()
+	mux.ServeHTTP(createW, createReq)
+	if createW.Code != http.StatusCreated {
+		t.Fatalf("create status=%d body=%s", createW.Code, createW.Body.String())
+	}
+
+	var created struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(createW.Body.Bytes(), &created); err != nil {
+		t.Fatalf("decode created invitation: %v", err)
+	}
+
+	cancelReq := httptest.NewRequest(http.MethodPost, "/organizations/"+organizationID+"/invitations/"+created.ID+"/cancel", nil)
+	cancelW := httptest.NewRecorder()
+	mux.ServeHTTP(cancelW, cancelReq)
+	if cancelW.Code != http.StatusNoContent {
+		t.Fatalf("cancel status=%d body=%s, want 204", cancelW.Code, cancelW.Body.String())
+	}
+	if cancelW.Body.Len() != 0 {
+		t.Fatalf("cancel body=%q, want empty", cancelW.Body.String())
+	}
+
+	var status string
+	if err := pool.QueryRow(ctx, `SELECT status FROM invitations WHERE id = $1`, created.ID).Scan(&status); err != nil {
+		t.Fatalf("query invitation status: %v", err)
+	}
+	if status != "cancelled" {
+		t.Fatalf("invitation status = %q, want cancelled", status)
+	}
+}
+
+// Phase 2 (Slice 2) — RED: a non-admin member is forbidden.
+func TestCancelInvitationRouteRequiresAdmin(t *testing.T) {
+	ctx, pool := openOrganizationsTestPool(t, "organizations_handler_cancel_test")
+	adminID := insertOrganizationsTestUser(t, ctx, pool, "cancel-route-admin2@example.com")
+	memberID := insertOrganizationsTestUser(t, ctx, pool, "cancel-route-member2@example.com")
+	organizationID := insertOrganizationsTestOrganization(t, ctx, pool, "Cancel Route Org 2")
+	insertOrganizationsTestMember(t, ctx, pool, organizationID, adminID, "admin")
+	insertOrganizationsTestMember(t, ctx, pool, organizationID, memberID, "member")
+
+	service := NewService(pool, activity.NewService(pool))
+	created, err := service.CreateInvitation(ctx, adminID, organizationID, CreateInvitationInput{Email: "cancel-target2@example.com", Role: "member"})
+	if err != nil {
+		t.Fatalf("create invitation: %v", err)
+	}
+
+	notifier := &countingInvitationNotifier{}
+	mux := invitationHandlerTestMux(memberID, pool, notifier)
+
+	cancelReq := httptest.NewRequest(http.MethodPost, "/organizations/"+organizationID+"/invitations/"+created.Invitation.ID+"/cancel", nil)
+	cancelW := httptest.NewRecorder()
+	mux.ServeHTTP(cancelW, cancelReq)
+	if cancelW.Code != http.StatusForbidden {
+		t.Fatalf("cancel status=%d body=%s, want 403", cancelW.Code, cancelW.Body.String())
+	}
+}
+
+// Phase 2 (Slice 2) — RED: a non-pending invitation returns 400.
+func TestCancelInvitationRouteRejectsNonPending(t *testing.T) {
+	ctx, pool := openOrganizationsTestPool(t, "organizations_handler_cancel_test")
+	adminID := insertOrganizationsTestUser(t, ctx, pool, "cancel-route-admin3@example.com")
+	inviteeID := insertOrganizationsTestUser(t, ctx, pool, "cancel-route-invitee3@example.com")
+	organizationID := insertOrganizationsTestOrganization(t, ctx, pool, "Cancel Route Org 3")
+	insertOrganizationsTestMember(t, ctx, pool, organizationID, adminID, "admin")
+
+	service := NewService(pool, activity.NewService(pool))
+	created, err := service.CreateInvitation(ctx, adminID, organizationID, CreateInvitationInput{Email: "cancel-target3@example.com", Role: "member"})
+	if err != nil {
+		t.Fatalf("create invitation: %v", err)
+	}
+	if _, err := service.AcceptInvitation(ctx, inviteeID, created.Invitation.Token); err != nil {
+		t.Fatalf("accept invitation: %v", err)
+	}
+
+	notifier := &countingInvitationNotifier{}
+	mux := invitationHandlerTestMux(adminID, pool, notifier)
+
+	cancelReq := httptest.NewRequest(http.MethodPost, "/organizations/"+organizationID+"/invitations/"+created.Invitation.ID+"/cancel", nil)
+	cancelW := httptest.NewRecorder()
+	mux.ServeHTTP(cancelW, cancelReq)
+	if cancelW.Code != http.StatusBadRequest {
+		t.Fatalf("cancel status=%d body=%s, want 400", cancelW.Code, cancelW.Body.String())
+	}
+}
+
+// Phase 2 (Slice 2) — RED: an unknown invitation ID returns 404.
+func TestCancelInvitationRouteUnknownInvitationReturnsNotFound(t *testing.T) {
+	ctx, pool := openOrganizationsTestPool(t, "organizations_handler_cancel_test")
+	adminID := insertOrganizationsTestUser(t, ctx, pool, "cancel-route-admin4@example.com")
+	organizationID := insertOrganizationsTestOrganization(t, ctx, pool, "Cancel Route Org 4")
+	insertOrganizationsTestMember(t, ctx, pool, organizationID, adminID, "admin")
+
+	notifier := &countingInvitationNotifier{}
+	mux := invitationHandlerTestMux(adminID, pool, notifier)
+
+	cancelReq := httptest.NewRequest(http.MethodPost, "/organizations/"+organizationID+"/invitations/00000000-0000-0000-0000-000000000000/cancel", nil)
+	cancelW := httptest.NewRecorder()
+	mux.ServeHTTP(cancelW, cancelReq)
+	if cancelW.Code != http.StatusNotFound {
+		t.Fatalf("cancel status=%d body=%s, want 404", cancelW.Code, cancelW.Body.String())
 	}
 }
 

@@ -48,3 +48,10 @@ export function revokeGroupWorkspaceAccess(token: string, workspaceId: string, g
     token,
   });
 }
+
+export function deleteWorkspace(token: string, workspaceId: string) {
+  return apiRequest(`/workspaces/${workspaceId}`, {
+    method: "DELETE",
+    token,
+  });
+}

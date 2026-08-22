@@ -8,7 +8,7 @@ import { Table } from "../../lib/ui/components/Table";
 import type { OrganizationRole } from "../../lib/api/types";
 import { InviteMemberForm } from "./InviteMemberForm";
 import { ContextPanel } from "../../lib/ui/components/ContextPanel";
-import { useInviteMemberMutation, useResendInvitationMutation, useUpdateMemberRoleMutation } from "./mutations";
+import { useCancelInvitationMutation, useInviteMemberMutation, useRemoveMemberMutation, useResendInvitationMutation, useUpdateMemberRoleMutation } from "./mutations";
 import { useOrganizationInvitations, useOrganizationMembers } from "./queries";
 
 const roleOptions: OrganizationRole[] = ["owner", "admin", "member"];
@@ -27,7 +27,9 @@ export function MembersPage() {
   const { activeOrganization } = useOrganization();
   const [notice, setNotice] = useState<{ tone: "neutral" | "danger"; title: string; description: string } | null>(null);
   const [updatingUserId, setUpdatingUserId] = useState<string | null>(null);
+  const [removingUserId, setRemovingUserId] = useState<string | null>(null);
   const [resendingInvitationId, setResendingInvitationId] = useState<string | null>(null);
+  const [cancellingInvitationId, setCancellingInvitationId] = useState<string | null>(null);
 
   const organizationId = activeOrganization?.organizationId;
   const token = session?.accessToken;
@@ -35,7 +37,9 @@ export function MembersPage() {
   const invitationsQuery = useOrganizationInvitations(token, organizationId);
   const inviteMutation = useInviteMemberMutation(token, organizationId);
   const updateRoleMutation = useUpdateMemberRoleMutation(token, organizationId);
+  const removeMemberMutation = useRemoveMemberMutation(token, organizationId);
   const resendInvitationMutation = useResendInvitationMutation(token, organizationId);
+  const cancelInvitationMutation = useCancelInvitationMutation(token, organizationId);
 
   const [searchParams, setSearchParams] = useSearchParams();
   const inviteOpen = searchParams.get("panel") === "invite";
@@ -122,7 +126,41 @@ export function MembersPage() {
               </select>
             </td>
             <td>
-              <Badge tone={member.role === "owner" ? "accent" : "neutral"}>{updatingUserId === member.userId ? "Saving…" : "Synced"}</Badge>
+              <div className="ui-actions-row">
+                <Badge tone={member.role === "owner" ? "accent" : "neutral"}>{updatingUserId === member.userId ? "Saving…" : "Synced"}</Badge>
+                <button
+                  className="ui-button ui-button-secondary"
+                  type="button"
+                  disabled={removingUserId === member.userId}
+                  aria-label={`Remove ${member.email}`}
+                  onClick={() => {
+                    if (!window.confirm(`Remove ${member.email} from this organization?`)) {
+                      return;
+                    }
+                    setNotice(null);
+                    setRemovingUserId(member.userId);
+                    void removeMemberMutation
+                      .mutateAsync({ userId: member.userId })
+                      .then(() => {
+                        setNotice({
+                          tone: "neutral",
+                          title: "Member removed",
+                          description: `${member.email} no longer has access to this organization.`,
+                        });
+                      })
+                      .catch((error) => {
+                        setNotice({
+                          tone: "danger",
+                          title: "Member removal rejected",
+                          description: error instanceof Error ? error.message : "The backend rejected the removal request.",
+                        });
+                      })
+                      .finally(() => setRemovingUserId(null));
+                  }}
+                >
+                  {removingUserId === member.userId ? "Removing…" : "Remove"}
+                </button>
+              </div>
             </td>
           </tr>
         ))}
@@ -174,35 +212,71 @@ export function MembersPage() {
                 </td>
                 <td>{formatTimestamp(invitation.expiresAt)}</td>
                 <td>
-                  <button
-                    className="ui-button ui-button-secondary"
-                    type="button"
-                    disabled={resendingInvitationId === invitation.invitationId}
-                    aria-label={`Resend invitation to ${invitation.email}`}
-                    onClick={() => {
-                      setNotice(null);
-                      setResendingInvitationId(invitation.invitationId);
-                      void resendInvitationMutation
-                        .mutateAsync({ invitationId: invitation.invitationId })
-                        .then(() => {
-                          setNotice({
-                            tone: "neutral",
-                            title: "Invitation resent",
-                            description: `${invitation.email} was sent a fresh invitation link.`,
-                          });
-                        })
-                        .catch((error) => {
-                          setNotice({
-                            tone: "danger",
-                            title: "Resend failed",
-                            description: error instanceof Error ? error.message : "The invitation could not be resent.",
-                          });
-                        })
-                        .finally(() => setResendingInvitationId(null));
-                    }}
-                  >
-                    {resendingInvitationId === invitation.invitationId ? "Resending…" : "Resend"}
-                  </button>
+                  {invitation.status === "pending" ? (
+                    <div className="ui-actions-row">
+                      <button
+                        className="ui-button ui-button-secondary"
+                        type="button"
+                        disabled={resendingInvitationId === invitation.invitationId}
+                        aria-label={`Resend invitation to ${invitation.email}`}
+                        onClick={() => {
+                          setNotice(null);
+                          setResendingInvitationId(invitation.invitationId);
+                          void resendInvitationMutation
+                            .mutateAsync({ invitationId: invitation.invitationId })
+                            .then(() => {
+                              setNotice({
+                                tone: "neutral",
+                                title: "Invitation resent",
+                                description: `${invitation.email} was sent a fresh invitation link.`,
+                              });
+                            })
+                            .catch((error) => {
+                              setNotice({
+                                tone: "danger",
+                                title: "Resend failed",
+                                description: error instanceof Error ? error.message : "The invitation could not be resent.",
+                              });
+                            })
+                            .finally(() => setResendingInvitationId(null));
+                        }}
+                      >
+                        {resendingInvitationId === invitation.invitationId ? "Resending…" : "Resend"}
+                      </button>
+                      <button
+                        className="ui-button ui-button-secondary"
+                        type="button"
+                        disabled={cancellingInvitationId === invitation.invitationId}
+                        aria-label={`Cancel invitation to ${invitation.email}`}
+                        onClick={() => {
+                          if (!window.confirm(`Cancel the invitation to ${invitation.email}?`)) {
+                            return;
+                          }
+                          setNotice(null);
+                          setCancellingInvitationId(invitation.invitationId);
+                          void cancelInvitationMutation
+                            .mutateAsync({ invitationId: invitation.invitationId })
+                            .then(() => {
+                              setNotice({
+                                tone: "neutral",
+                                title: "Invitation cancelled",
+                                description: `The invitation to ${invitation.email} was cancelled.`,
+                              });
+                            })
+                            .catch((error) => {
+                              setNotice({
+                                tone: "danger",
+                                title: "Cancel failed",
+                                description: error instanceof Error ? error.message : "The invitation could not be cancelled.",
+                              });
+                            })
+                            .finally(() => setCancellingInvitationId(null));
+                        }}
+                      >
+                        {cancellingInvitationId === invitation.invitationId ? "Cancelling…" : "Cancel"}
+                      </button>
+                    </div>
+                  ) : null}
                 </td>
               </tr>
             ))}

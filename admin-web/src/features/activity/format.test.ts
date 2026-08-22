@@ -42,6 +42,18 @@ describe("formatActivityEvent", () => {
     ).toBe("Accepted the invitation to join as member.");
   });
 
+  it("invitation.cancelled", () => {
+    expect(
+      formatActivityEvent(event({ kind: "invitation.cancelled", metadata: { email: "new@example.com" } })),
+    ).toBe("Cancelled the invitation to new@example.com.");
+  });
+
+  it("invitation.cancelled with missing metadata degrades to a placeholder", () => {
+    expect(formatActivityEvent(event({ kind: "invitation.cancelled", metadata: {} }))).toBe(
+      "Cancelled the invitation to someone.",
+    );
+  });
+
   it("organization_member.role_changed", () => {
     expect(
       formatActivityEvent(
@@ -70,6 +82,20 @@ describe("formatActivityEvent", () => {
         event({ kind: "workspace.created", metadata: { workspaceName: "Launch Room", workspaceType: "shared" } }),
       ),
     ).toBe('Created the workspace "Launch Room" (shared).');
+  });
+
+  it("workspace.deleted", () => {
+    expect(
+      formatActivityEvent(
+        event({ kind: "workspace.deleted", metadata: { workspaceName: "Launch Room", workspaceType: "shared" } }),
+      ),
+    ).toBe('Deleted the workspace "Launch Room".');
+  });
+
+  it("workspace.deleted with missing metadata degrades to a placeholder", () => {
+    expect(formatActivityEvent(event({ kind: "workspace.deleted", metadata: {} }))).toBe(
+      'Deleted the workspace "".',
+    );
   });
 
   it("workspace_access.user_granted", () => {

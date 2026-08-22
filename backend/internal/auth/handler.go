@@ -159,6 +159,20 @@ func RegisterRoutes(mux *http.ServeMux, service *Service, invitations invitation
 		httpapi.WriteJSON(w, http.StatusOK, prefs)
 	})))
 
+	mux.Handle("POST /me/deactivate", service.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		principal, ok := PrincipalFromContext(r.Context())
+		if !ok {
+			httpapi.WriteError(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+
+		if err := service.DeactivateSelf(r.Context(), principal.UserID); err != nil {
+			writeAuthError(w, err)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})))
+
 	mux.Handle("POST /auth/ws-ticket", service.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		principal, ok := PrincipalFromContext(r.Context())
 		if !ok {
@@ -206,9 +220,9 @@ func writeAuthError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, ErrInvalidCredentials), errors.Is(err, ErrUnauthorized):
 		httpapi.WriteError(w, http.StatusUnauthorized, err.Error())
-	case errors.Is(err, ErrRegistrationLocked):
+	case errors.Is(err, ErrRegistrationLocked), errors.Is(err, ErrAccountDisabled):
 		httpapi.WriteError(w, http.StatusForbidden, err.Error())
-	case errors.Is(err, ErrClientBinding):
+	case errors.Is(err, ErrClientBinding), errors.Is(err, ErrSoleOwner):
 		httpapi.WriteError(w, http.StatusConflict, err.Error())
 	case errors.Is(err, ErrRefreshUnavailable):
 		httpapi.WriteError(w, http.StatusServiceUnavailable, "unavailable")

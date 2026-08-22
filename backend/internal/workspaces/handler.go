@@ -20,6 +20,7 @@ type routeService interface {
 	RevokeUserAccess(context.Context, string, string, string) error
 	GrantGroupAccess(context.Context, string, string, string, UpdateGroupAccessInput) (GroupAccessGrant, error)
 	RevokeGroupAccess(context.Context, string, string, string) error
+	Delete(context.Context, string, string) error
 }
 
 type creationTxService interface {
@@ -142,6 +143,21 @@ func RegisterRoutes(mux *http.ServeMux, authMiddleware func(http.Handler) http.H
 		}
 
 		httpapi.WriteJSON(w, http.StatusOK, accessSnapshot)
+	})))
+
+	mux.Handle("DELETE /workspaces/{workspaceId}", authMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		principal, ok := auth.PrincipalFromContext(r.Context())
+		if !ok {
+			httpapi.WriteError(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+
+		if err := service.Delete(r.Context(), principal.UserID, r.PathValue("workspaceId")); err != nil {
+			writeWorkspaceError(w, err)
+			return
+		}
+
+		w.WriteHeader(http.StatusNoContent)
 	})))
 
 	mux.Handle("PUT /workspaces/{workspaceId}/users/{userId}/access", authMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

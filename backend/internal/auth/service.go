@@ -20,6 +20,8 @@ var (
 	ErrClientBinding      = errors.New("client ID is already bound to another user")
 	ErrRefreshUnavailable = errors.New("refresh operation unavailable")
 	ErrRegistrationLocked = errors.New("registration is locked; a valid invitation is required")
+	ErrAccountDisabled    = errors.New("account is deactivated")
+	ErrSoleOwner          = errors.New("transfer ownership or leave the organization before deactivating")
 )
 
 // InvitationValidator is the narrow, read-only contract auth depends on to
@@ -148,6 +150,97 @@ func (s *Service) RevokeAllRefreshFamilies(ctx context.Context, userID string) e
 
 func (s *Service) RevokeAllRefreshFamiliesTx(ctx context.Context, tx pgx.Tx, userID string) error {
 	return s.refresh.revokeAllTx(ctx, tx, userID)
+}
+
+// DeactivateSelf permanently deactivates the caller's own account
+// (userID == principal.UserID only — no org-admin-triggered path exists).
+// Sequence: lock the requester's own organization_members rows to stabilize
+// the sole-owner probe, run the probe (ErrSoleOwner blocks and rolls back),
+// set disabled_at (guarded by "AND disabled_at IS NULL" so a repeat call is
+// a no-op), then revoke every refresh family in the same commit so a token
+// minted before deactivation cannot be used to mint a new session via
+// Refresh. No activity.Record: activity_events.organization_id is NOT NULL
+// and self-deactivation has no single-organization scope.
+func (s *Service) DeactivateSelf(ctx context.Context, userID string) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin deactivate self tx: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	if err := lockOwnOrganizationMemberships(ctx, tx, userID); err != nil {
+		return err
+	}
+
+	soleOwner, err := isSoleOwnerOfAnyOrganization(ctx, tx, userID)
+	if err != nil {
+		return err
+	}
+	if soleOwner {
+		return ErrSoleOwner
+	}
+
+	if _, err := tx.Exec(ctx, `
+		UPDATE users
+		SET disabled_at = NOW(), updated_at = NOW()
+		WHERE id = $1 AND disabled_at IS NULL
+	`, userID); err != nil {
+		return fmt.Errorf("disable user: %w", err)
+	}
+
+	if err := s.RevokeAllRefreshFamiliesTx(ctx, tx, userID); err != nil {
+		return err
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit deactivate self tx: %w", err)
+	}
+
+	return nil
+}
+
+// lockOwnOrganizationMemberships stabilizes the requester's own membership
+// rows (FOR UPDATE) before the sole-owner probe runs, mirroring
+// organizations.lockOrganizationMemberships' locking discipline.
+func lockOwnOrganizationMemberships(ctx context.Context, tx pgx.Tx, userID string) error {
+	rows, err := tx.Query(ctx, `SELECT organization_id FROM organization_members WHERE user_id = $1 FOR UPDATE`, userID)
+	if err != nil {
+		return fmt.Errorf("lock own organization memberships: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var organizationID string
+		if err := rows.Scan(&organizationID); err != nil {
+			return fmt.Errorf("scan locked own organization membership: %w", err)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterate locked own organization memberships: %w", err)
+	}
+	return nil
+}
+
+// isSoleOwnerOfAnyOrganization runs after lockOwnOrganizationMemberships. It
+// returns true if userID is the sole 'owner' of at least one organization it
+// owns (no other owner peer in that same organization).
+func isSoleOwnerOfAnyOrganization(ctx context.Context, tx pgx.Tx, userID string) (bool, error) {
+	var soleOwner bool
+	if err := tx.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM organization_members mine
+			WHERE mine.user_id = $1
+			  AND mine.role = 'owner'
+			  AND NOT EXISTS (
+				SELECT 1 FROM organization_members peers
+				WHERE peers.organization_id = mine.organization_id
+				  AND peers.user_id <> $1
+				  AND peers.role = 'owner'
+			  )
+		)
+	`, userID).Scan(&soleOwner); err != nil {
+		return false, fmt.Errorf("sole owner probe: %w", err)
+	}
+	return soleOwner, nil
 }
 
 func (s *Service) ClientIDHeader() string {
@@ -279,14 +372,15 @@ func (s *Service) login(ctx context.Context, input LoginInput, clientID string, 
 	}
 
 	var (
-		user User
-		hash string
+		user       User
+		hash       string
+		disabledAt *time.Time
 	)
 	err := s.pool.QueryRow(ctx, `
-		SELECT id, email, COALESCE(name, ''), password_hash
+		SELECT id, email, COALESCE(name, ''), password_hash, disabled_at
 		FROM users
 		WHERE email = $1
-	`, input.Email).Scan(&user.ID, &user.Email, &user.Name, &hash)
+	`, input.Email).Scan(&user.ID, &user.Email, &user.Name, &hash, &disabledAt)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return Session{}, RefreshToken{}, ErrInvalidCredentials
@@ -296,6 +390,13 @@ func (s *Service) login(ctx context.Context, input LoginInput, clientID string, 
 
 	if err := bcrypt.CompareHashAndPassword([]byte(hash), []byte(input.Password)); err != nil {
 		return Session{}, RefreshToken{}, ErrInvalidCredentials
+	}
+
+	// The disabled check runs ONLY after the password verifies: a wrong
+	// password on a disabled account must still return ErrInvalidCredentials,
+	// never leaking account-disabled state to a caller without the password.
+	if disabledAt != nil {
+		return Session{}, RefreshToken{}, ErrAccountDisabled
 	}
 
 	tx, err := s.pool.Begin(ctx)
@@ -374,7 +475,7 @@ func (s *Service) AuthenticateToken(ctx context.Context, rawToken, clientID stri
 		SELECT u.id, u.email, COALESCE(u.name, ''), d.client_id
 		FROM users u
 		JOIN devices d ON d.user_id = u.id
-		WHERE u.id = $1 AND d.client_id = $2
+		WHERE u.id = $1 AND d.client_id = $2 AND u.disabled_at IS NULL
 	`, claims.Subject, clientID).Scan(&principal.UserID, &principal.Email, &principal.Name, &principal.ClientID)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {

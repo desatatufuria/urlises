@@ -1,4 +1,4 @@
-import { screen } from "@testing-library/react";
+import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderAppRoute } from "../../test/renderRoute";
@@ -107,5 +107,131 @@ describe("workspaces page", () => {
 
     expect(screen.getByText("direct")).toBeInTheDocument();
     expect(screen.getByText("group:Operators")).toBeInTheDocument();
+  });
+
+  it("deletes a workspace and refreshes the list without it", async () => {
+    vi.stubGlobal("confirm", vi.fn(() => true));
+    let workspacesFetched = 0;
+    let deleteCalls = 0;
+
+    fetchMock.mockImplementation((input, init) => {
+      const url = String(input);
+      const method = init?.method ?? "GET";
+
+      if (url.endsWith("/organizations/org-1/workspaces") && method === "GET") {
+        workspacesFetched += 1;
+        const workspaces =
+          workspacesFetched === 1
+            ? [
+                {
+                  workspaceId: "workspace-1",
+                  workspaceName: "Launch Room",
+                  workspaceType: "shared",
+                  organizationId: "org-1",
+                  organizationName: "Acme",
+                  role: "admin",
+                  sources: ["direct"],
+                },
+              ]
+            : [];
+        return jsonResponse({ workspaces });
+      }
+
+      if (url.endsWith("/workspaces/workspace-1") && method === "DELETE") {
+        deleteCalls += 1;
+        return jsonResponse(undefined, 204);
+      }
+
+      return jsonResponse({ error: "not found" }, 404);
+    });
+
+    renderAppRoute("/workspaces");
+
+    const deleteButton = await screen.findByRole("button", { name: /delete launch room/i });
+    await userEvent.click(deleteButton);
+
+    await waitFor(() => expect(screen.queryByText("Launch Room")).not.toBeInTheDocument());
+    expect(deleteCalls).toBe(1);
+  });
+
+  it("sends no delete request when the deletion confirmation is dismissed", async () => {
+    vi.stubGlobal("confirm", vi.fn(() => false));
+    let deleteCalls = 0;
+
+    fetchMock.mockImplementation((input, init) => {
+      const url = String(input);
+      const method = init?.method ?? "GET";
+
+      if (url.endsWith("/organizations/org-1/workspaces") && method === "GET") {
+        return jsonResponse({
+          workspaces: [
+            {
+              workspaceId: "workspace-1",
+              workspaceName: "Launch Room",
+              workspaceType: "shared",
+              organizationId: "org-1",
+              organizationName: "Acme",
+              role: "admin",
+              sources: ["direct"],
+            },
+          ],
+        });
+      }
+
+      if (url.endsWith("/workspaces/workspace-1") && method === "DELETE") {
+        deleteCalls += 1;
+        return jsonResponse(undefined, 204);
+      }
+
+      return jsonResponse({ error: "not found" }, 404);
+    });
+
+    renderAppRoute("/workspaces");
+
+    const deleteButton = await screen.findByRole("button", { name: /delete launch room/i });
+    await userEvent.click(deleteButton);
+
+    expect(deleteCalls).toBe(0);
+    expect(screen.getByText("Launch Room")).toBeInTheDocument();
+  });
+
+  it("surfaces an error and clears busy state when workspace deletion is rejected", async () => {
+    vi.stubGlobal("confirm", vi.fn(() => true));
+
+    fetchMock.mockImplementation((input, init) => {
+      const url = String(input);
+      const method = init?.method ?? "GET";
+
+      if (url.endsWith("/organizations/org-1/workspaces") && method === "GET") {
+        return jsonResponse({
+          workspaces: [
+            {
+              workspaceId: "workspace-1",
+              workspaceName: "Launch Room",
+              workspaceType: "shared",
+              organizationId: "org-1",
+              organizationName: "Acme",
+              role: "admin",
+              sources: ["direct"],
+            },
+          ],
+        });
+      }
+
+      if (url.endsWith("/workspaces/workspace-1") && method === "DELETE") {
+        return jsonResponse({ error: "forbidden" }, 403);
+      }
+
+      return jsonResponse({ error: "not found" }, 404);
+    });
+
+    renderAppRoute("/workspaces");
+
+    const deleteButton = await screen.findByRole("button", { name: /delete launch room/i });
+    await userEvent.click(deleteButton);
+
+    expect(await screen.findByText(/workspace deletion (rejected|failed)/i)).toBeInTheDocument();
+    expect(screen.getByText("Launch Room")).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole("button", { name: /delete launch room/i })).not.toBeDisabled());
   });
 });

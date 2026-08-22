@@ -19,6 +19,8 @@ type routeService interface {
 	CreateInvitation(context.Context, string, string, CreateInvitationInput) (InvitationCreation, error)
 	ListInvitations(context.Context, string, string) ([]PendingInvitation, error)
 	ResendInvitation(ctx context.Context, requesterUserID, organizationID, invitationID string) (InvitationCreation, error)
+	CancelInvitation(ctx context.Context, requesterUserID, organizationID, invitationID string) error
+	DeleteOrganization(ctx context.Context, requesterUserID, organizationID string) error
 }
 
 type creationTxService interface {
@@ -238,6 +240,36 @@ func RegisterRoutes(mux *http.ServeMux, authMiddleware func(http.Handler) http.H
 			_ = notifier.NotifyInvitation(context.WithoutCancel(r.Context()), invitationNotification(resent))
 		}
 	})))
+
+	mux.Handle("POST /organizations/{organizationId}/invitations/{invitationId}/cancel", authMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		principal, ok := auth.PrincipalFromContext(r.Context())
+		if !ok {
+			httpapi.WriteError(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+
+		if err := service.CancelInvitation(r.Context(), principal.UserID, r.PathValue("organizationId"), r.PathValue("invitationId")); err != nil {
+			writeOrganizationError(w, err)
+			return
+		}
+
+		w.WriteHeader(http.StatusNoContent)
+	})))
+
+	mux.Handle("DELETE /organizations/{organizationId}", authMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		principal, ok := auth.PrincipalFromContext(r.Context())
+		if !ok {
+			httpapi.WriteError(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+
+		if err := service.DeleteOrganization(r.Context(), principal.UserID, r.PathValue("organizationId")); err != nil {
+			writeOrganizationError(w, err)
+			return
+		}
+
+		w.WriteHeader(http.StatusNoContent)
+	})))
 }
 
 func idempotencyIdentity(r *http.Request, principal, route string, targets []string, input any) httpapi.IdempotencyIdentity {
@@ -302,6 +334,8 @@ func writeOrganizationError(w http.ResponseWriter, err error) {
 	case errors.Is(err, ErrNotFound):
 		httpapi.WriteError(w, http.StatusNotFound, err.Error())
 	case errors.Is(err, ErrLastOwner):
+		httpapi.WriteError(w, http.StatusConflict, err.Error())
+	case errors.Is(err, ErrWouldOrphanMember):
 		httpapi.WriteError(w, http.StatusConflict, err.Error())
 	case errors.Is(err, ErrInvalidInvitationEmail), err.Error() == ErrInvalidInvitationEmail.Error():
 		httpapi.WriteError(w, http.StatusBadRequest, ErrInvalidInvitationEmail.Error())

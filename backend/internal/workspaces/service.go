@@ -390,6 +390,46 @@ func (s *Service) RevokeUserAccess(ctx context.Context, requesterUserID, workspa
 	return nil
 }
 
+func (s *Service) Delete(ctx context.Context, requesterUserID, workspaceID string) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin delete workspace tx: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	metadata, err := loadWorkspaceMetadataRecord(ctx, tx, workspaceID)
+	if err != nil {
+		return err
+	}
+	if err := access.RequireOrganizationAdmin(ctx, tx, requesterUserID, metadata.OrganizationID); err != nil {
+		return mapAccessError(err)
+	}
+
+	result, err := tx.Exec(ctx, `
+		DELETE FROM workspaces
+		WHERE id = $1 AND organization_id = $2
+	`, workspaceID, metadata.OrganizationID)
+	if err != nil {
+		return fmt.Errorf("delete workspace: %w", err)
+	}
+	if result.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+
+	if err := s.activity.Record(ctx, tx, metadata.OrganizationID, requesterUserID, activity.KindWorkspaceDeleted, "workspace", workspaceID, map[string]any{
+		"workspaceName": metadata.WorkspaceName,
+		"workspaceType": metadata.WorkspaceType,
+	}); err != nil {
+		return fmt.Errorf("record workspace deleted activity: %w", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit delete workspace tx: %w", err)
+	}
+
+	return nil
+}
+
 func (s *Service) GrantGroupAccess(ctx context.Context, requesterUserID, workspaceID, groupID string, input UpdateGroupAccessInput) (GroupAccessGrant, error) {
 	role, err := normalizeWorkspaceRole(input.Role)
 	if err != nil {

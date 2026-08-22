@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -194,6 +195,79 @@ func TestRenewableAuthHandlerPostgres(t *testing.T) {
 		}
 		if w = request("/auth/refresh", `{"refreshToken":"`+prior+`","attemptId":"after-failed-login"}`, "atomic-login-client", ""); w.Code != http.StatusOK {
 			t.Fatalf("prior session after failed login = %d %s", w.Code, w.Body.String())
+		}
+	})
+}
+
+// Phase 5 (Slice 5) — RED: POST /me/deactivate is self-only (no body, no
+// path/user identifier). 204 on success; the account is then rejected at a
+// subsequent login() with 403 ErrAccountDisabled; a sole organization owner
+// gets 409 ErrSoleOwner instead; an unauthenticated caller gets 401.
+func TestDeactivateSelfHandlerPostgres(t *testing.T) {
+	ctx, pool := authTestPool(t, "auth_deactivate_handler_test")
+	service := newAuthTestService(pool)
+	mux := http.NewServeMux()
+	RegisterRoutes(mux, service, nil)
+
+	bearerRequest := func(method, path, token, clientID string) *httptest.ResponseRecorder {
+		r := httptest.NewRequest(method, path, nil)
+		if token != "" {
+			r.Header.Set("Authorization", "Bearer "+token)
+		}
+		r.Header.Set("X-Client-Id", clientID)
+		w := httptest.NewRecorder()
+		mux.ServeHTTP(w, r)
+		return w
+	}
+
+	t.Run("unauthenticated caller is rejected with 401", func(t *testing.T) {
+		w := bearerRequest(http.MethodPost, "/me/deactivate", "", "no-client")
+		if w.Code != http.StatusUnauthorized {
+			t.Fatalf("status = %d, want 401", w.Code)
+		}
+	})
+
+	t.Run("sole owner is rejected with 409 and stays active", func(t *testing.T) {
+		session, err := service.RegisterRenewable(ctx, RegisterInput{
+			Email:    "deactivate-handler-sole-owner@example.test",
+			Password: "password",
+		}, "sole-owner-client")
+		if err != nil {
+			t.Fatalf("register: %v", err)
+		}
+		organizationID := insertAuthTestOrganization(t, ctx, pool, "Handler Sole Owner Org")
+		insertAuthTestMember(t, ctx, pool, organizationID, session.User.ID, "owner")
+
+		w := bearerRequest(http.MethodPost, "/me/deactivate", session.AccessToken, "sole-owner-client")
+		if w.Code != http.StatusConflict {
+			t.Fatalf("status = %d, want 409, body = %s", w.Code, w.Body.String())
+		}
+
+		if _, err := service.Login(ctx, LoginInput{Email: "deactivate-handler-sole-owner@example.test", Password: "password"}, "sole-owner-client"); err != nil {
+			t.Fatalf("login after blocked deactivation err = %v, want nil (account still active)", err)
+		}
+	})
+
+	t.Run("self-only success then a subsequent login is 403 ErrAccountDisabled", func(t *testing.T) {
+		session, err := service.RegisterRenewable(ctx, RegisterInput{
+			Email:    "deactivate-handler-self@example.test",
+			Password: "password",
+		}, "self-client")
+		if err != nil {
+			t.Fatalf("register: %v", err)
+		}
+
+		w := bearerRequest(http.MethodPost, "/me/deactivate", session.AccessToken, "self-client")
+		if w.Code != http.StatusNoContent {
+			t.Fatalf("status = %d, want 204, body = %s", w.Code, w.Body.String())
+		}
+		if w.Body.Len() != 0 {
+			t.Fatalf("body = %q, want empty", w.Body.String())
+		}
+
+		_, loginErr := service.Login(ctx, LoginInput{Email: "deactivate-handler-self@example.test", Password: "password"}, "self-client")
+		if !errors.Is(loginErr, ErrAccountDisabled) {
+			t.Fatalf("login after deactivation err = %v, want %v", loginErr, ErrAccountDisabled)
 		}
 	})
 }
