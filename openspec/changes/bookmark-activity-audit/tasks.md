@@ -94,12 +94,12 @@ Each unit is developed, tested, and merged into the previous unit's branch befor
 
 ## Phase A2b: Retry/Dedup + Audit-Failure Regression Tests
 
-- [ ] A2b.1 RED: `backend/internal/sync/activity_audit_integration_test.go` — replay the same `metadata.EventID` through `runMutation`; assert `sync_events` count == 1 and `activity_events` count == 1 (the `loadDuplicateMutation*` early-return path).
-- [ ] A2b.2 RED: same file — replay through `runDeleteMutation`; same 1/1 assertion (`loadDuplicateDelete*` early-return path).
-- [ ] A2b.3 RED: same file — replay through `IdempotencyExecutor.ExecutePrepared`; same 1/1 assertion (`claimReceipt` replay path, `Command` never runs).
-- [ ] A2b.4 RED: same file — inject a stub `activityRecorder` returning an error; assert the folder/bookmark row, the `sync_events` row, and the cursor bump are all absent after rollback (only possible via Decision 5's narrow interface).
-- [ ] A2b.5 GREEN: confirm A2b.1–A2b.4 pass with no production code changes beyond A2a (dedup/rollback plumbing already exists; these tests lock in the guarantee).
-- [ ] A2b.6 Regression: run existing `backend/internal/sync/replay_test.go` + `postgres_integration_test.go` unchanged; confirm cursor/replay/idempotency responses and the restructured `Envelope` fields are byte-identical (Success Criterion 5).
+- [x] A2b.1 RED: `backend/internal/sync/activity_audit_integration_test.go` — replay the same `metadata.EventID` through `runMutation`; assert `sync_events` count == 1 and `activity_events` count == 1 (the `loadDuplicateMutation*` early-return path).
+- [x] A2b.2 RED: same file — replay through `runDeleteMutation`; same 1/1 assertion (`loadDuplicateDelete*` early-return path).
+- [x] A2b.3 RED: same file — replay through `IdempotencyExecutor.ExecutePrepared`; same 1/1 assertion (`claimReceipt` replay path, `Command` never runs).
+- [x] A2b.4 RED: same file — inject a stub `activityRecorder` returning an error; assert the folder/bookmark row, the `sync_events` row, and the cursor bump are all absent after rollback (only possible via Decision 5's narrow interface).
+- [x] A2b.5 GREEN: confirm A2b.1–A2b.4 pass with no production code changes beyond A2a (dedup/rollback plumbing already exists; these tests lock in the guarantee).
+- [x] A2b.6 Regression: run existing `backend/internal/sync/replay_test.go` + `postgres_integration_test.go` unchanged; confirm cursor/replay/idempotency responses and the restructured `Envelope` fields are byte-identical (Success Criterion 5).
 
 ## Phase A3: Frontend Rendering of New Kinds
 
