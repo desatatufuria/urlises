@@ -8,7 +8,7 @@ import { Table } from "../../lib/ui/components/Table";
 import type { OrganizationRole } from "../../lib/api/types";
 import { InviteMemberForm } from "./InviteMemberForm";
 import { ContextPanel } from "../../lib/ui/components/ContextPanel";
-import { useInviteMemberMutation, useResendInvitationMutation, useUpdateMemberRoleMutation } from "./mutations";
+import { useInviteMemberMutation, useRemoveMemberMutation, useResendInvitationMutation, useUpdateMemberRoleMutation } from "./mutations";
 import { useOrganizationInvitations, useOrganizationMembers } from "./queries";
 
 const roleOptions: OrganizationRole[] = ["owner", "admin", "member"];
@@ -27,6 +27,7 @@ export function MembersPage() {
   const { activeOrganization } = useOrganization();
   const [notice, setNotice] = useState<{ tone: "neutral" | "danger"; title: string; description: string } | null>(null);
   const [updatingUserId, setUpdatingUserId] = useState<string | null>(null);
+  const [removingUserId, setRemovingUserId] = useState<string | null>(null);
   const [resendingInvitationId, setResendingInvitationId] = useState<string | null>(null);
 
   const organizationId = activeOrganization?.organizationId;
@@ -35,6 +36,7 @@ export function MembersPage() {
   const invitationsQuery = useOrganizationInvitations(token, organizationId);
   const inviteMutation = useInviteMemberMutation(token, organizationId);
   const updateRoleMutation = useUpdateMemberRoleMutation(token, organizationId);
+  const removeMemberMutation = useRemoveMemberMutation(token, organizationId);
   const resendInvitationMutation = useResendInvitationMutation(token, organizationId);
 
   const [searchParams, setSearchParams] = useSearchParams();
@@ -122,7 +124,41 @@ export function MembersPage() {
               </select>
             </td>
             <td>
-              <Badge tone={member.role === "owner" ? "accent" : "neutral"}>{updatingUserId === member.userId ? "Saving…" : "Synced"}</Badge>
+              <div className="ui-actions-row">
+                <Badge tone={member.role === "owner" ? "accent" : "neutral"}>{updatingUserId === member.userId ? "Saving…" : "Synced"}</Badge>
+                <button
+                  className="ui-button ui-button-secondary"
+                  type="button"
+                  disabled={removingUserId === member.userId}
+                  aria-label={`Remove ${member.email}`}
+                  onClick={() => {
+                    if (!window.confirm(`Remove ${member.email} from this organization?`)) {
+                      return;
+                    }
+                    setNotice(null);
+                    setRemovingUserId(member.userId);
+                    void removeMemberMutation
+                      .mutateAsync({ userId: member.userId })
+                      .then(() => {
+                        setNotice({
+                          tone: "neutral",
+                          title: "Member removed",
+                          description: `${member.email} no longer has access to this organization.`,
+                        });
+                      })
+                      .catch((error) => {
+                        setNotice({
+                          tone: "danger",
+                          title: "Member removal rejected",
+                          description: error instanceof Error ? error.message : "The backend rejected the removal request.",
+                        });
+                      })
+                      .finally(() => setRemovingUserId(null));
+                  }}
+                >
+                  {removingUserId === member.userId ? "Removing…" : "Remove"}
+                </button>
+              </div>
             </td>
           </tr>
         ))}

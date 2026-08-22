@@ -55,14 +55,14 @@ Each unit is developed, tested, and merged into the previous unit's branch befor
 
 ## Phase 1: Remove Member From Organization (Slice 1 — admin-web only)
 
-- [ ] 1.1 RED: `admin-web/src/app/providers/AuthProvider.test.tsx` — `refreshOrganizations()` resolves to the fetched `OrganizationMembership[]` (not `void`), asserting a caller can branch on the list in the same tick.
-- [ ] 1.2 GREEN: `admin-web/src/app/providers/AuthProvider.tsx` — `refreshOrganizations` returns `Promise<OrganizationMembership[]>`.
-- [ ] 1.3 RED: `admin-web/src/features/members/MembersPage.test.tsx` — regression test: self *role change* (owner→admin) no longer unconditionally signs out (Deviation #3).
-- [ ] 1.4 GREEN: `admin-web/src/features/members/mutations.ts` — fix `useUpdateMemberRoleMutation`'s self branch to check the list returned by `refreshOrganizations()` instead of the always-`undefined` `queryClient.getQueryData` read.
-- [ ] 1.5 RED: `MembersPage.test.tsx` — admin removes another member (busy state, list invalidated without them); confirm-dismissal sends no request; backend `ErrForbidden`/`ErrNotFound` surfaces a `DataState` error and clears busy state.
-- [ ] 1.6 RED: `MembersPage.test.tsx` — self-removal from the acting user's last organization signs out; self-removal with other organizations remaining does not sign out.
-- [ ] 1.7 GREEN: `admin-web/src/features/members/mutations.ts` — `useRemoveMemberMutation` calling `PATCH .../members {userId, remove:true}`, branching on `refreshOrganizations()`'s returned list.
-- [ ] 1.8 GREEN: `admin-web/src/features/members/MembersPage.tsx` — "Remove" action in the members Actions cell, `window.confirm()` guard, `removingUserId` busy state.
+- [x] 1.1 RED: `admin-web/src/app/providers/AuthProvider.test.tsx` — `refreshOrganizations()` resolves to the fetched `OrganizationMembership[]` (not `void`), asserting a caller can branch on the list in the same tick.
+- [x] 1.2 GREEN: `admin-web/src/app/providers/AuthProvider.tsx` — `refreshOrganizations` returns `Promise<OrganizationMembership[]>`.
+- [x] 1.3 RED: `admin-web/src/features/members/MembersPage.test.tsx` — regression test: self *role change* (owner→admin) no longer unconditionally signs out (Deviation #3).
+- [x] 1.4 GREEN: `admin-web/src/features/members/mutations.ts` — fix `useUpdateMemberRoleMutation`'s self branch to check the list returned by `refreshOrganizations()` instead of the always-`undefined` `queryClient.getQueryData` read.
+- [x] 1.5 RED: `MembersPage.test.tsx` — admin removes another member (busy state, list invalidated without them); confirm-dismissal sends no request; backend `ErrForbidden`/`ErrNotFound` surfaces a `DataState` error and clears busy state.
+- [x] 1.6 RED: `MembersPage.test.tsx` — self-removal from the acting user's last organization signs out; self-removal with other organizations remaining does not sign out.
+- [x] 1.7 GREEN: `admin-web/src/features/members/mutations.ts` — `useRemoveMemberMutation` calling `PATCH .../members {userId, remove:true}`, branching on `refreshOrganizations()`'s returned list.
+- [x] 1.8 GREEN: `admin-web/src/features/members/MembersPage.tsx` — "Remove" action in the members Actions cell, `window.confirm()` guard, `removingUserId` busy state.
 
 ## Phase 2: Cancel Pending Invitation (Slice 2)
 
