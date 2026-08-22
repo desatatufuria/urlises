@@ -155,13 +155,13 @@ Each unit is developed, tested, and merged into the previous unit's branch befor
 
 ## Phase 4: Scheduled Purge (Slice 4)
 
-- [ ] 4.1 RED: `backend/internal/purge/purge_test.go` — `Sweep`: rows older than `Window` hard-deleted with FK children; rows inside the window survive; a soft-deleted org's workspaces cascade-destroyed even with their own `deleted_at IS NULL`; empty sweep → `(0,0)`, nil error; a cancelled `ctx` aborts without partial commit.
-- [ ] 4.2 GREEN: `backend/internal/purge/purge.go` — `Result{Organizations, Workspaces int64}`; `NewSweeper(pool, output io.Writer) *Sweeper`; `Sweep(ctx)` running both `DELETE`s (organizations first) in one transaction, `$1=Window`.
-- [ ] 4.3 RED: `purge_test.go` — every `Sweep` call logs `event=purge_sweep_completed organizations=%d workspaces=%d duration_ms=%d`, including zero-count sweeps; failures log `event=purge_sweep_failed` with no error detail.
-- [ ] 4.4 GREEN: `purge.go` — structured log lines per `Sweep` call, following `LogIdempotencyCleanupFailure`'s no-detail-on-failure policy.
-- [ ] 4.5 RED: `purge_test.go` — `Run(ctx, interval)`: fires `Sweep` on each tick, returns promptly on `ctx` cancellation (mirrors `idempotencyExecutor.Cleanup`'s ticker shape).
-- [ ] 4.6 GREEN: `purge.go` — `Run(ctx, interval time.Duration)` ticker loop, `select` on `ctx.Done()`/`ticker.C`.
-- [ ] 4.7 GREEN: `backend/cmd/api/main.go` — `purgeSweeper := purge.NewSweeper(pool, os.Stdout)`; `go purgeSweeper.Run(ctx, time.Hour)`, alongside the existing `idempotencyExecutor` ticker block (`main.go:110-123`).
+- [x] 4.1 RED: `backend/internal/purge/purge_test.go` — `Sweep`: rows older than `Window` hard-deleted with FK children; rows inside the window survive; a soft-deleted org's workspaces cascade-destroyed even with their own `deleted_at IS NULL`; empty sweep → `(0,0)`, nil error; a cancelled `ctx` aborts without partial commit.
+- [x] 4.2 GREEN: `backend/internal/purge/purge.go` — `Result{Organizations, Workspaces int64}`; `NewSweeper(pool, output io.Writer) *Sweeper`; `Sweep(ctx)` running both `DELETE`s (organizations first) in one transaction, `$1=Window`.
+- [x] 4.3 RED: `purge_test.go` — every `Sweep` call logs `event=purge_sweep_completed organizations=%d workspaces=%d duration_ms=%d`, including zero-count sweeps; failures log `event=purge_sweep_failed` with no error detail.
+- [x] 4.4 GREEN: `purge.go` — structured log lines per `Sweep` call, following `LogIdempotencyCleanupFailure`'s no-detail-on-failure policy.
+- [x] 4.5 RED: `purge_test.go` — `Run(ctx, interval)`: fires `Sweep` on each tick, returns promptly on `ctx` cancellation (mirrors `idempotencyExecutor.Cleanup`'s ticker shape).
+- [x] 4.6 GREEN: `purge.go` — `Run(ctx, interval time.Duration)` ticker loop, `select` on `ctx.Done()`/`ticker.C`.
+- [x] 4.7 GREEN: `backend/cmd/api/main.go` — `purgeSweeper := purge.NewSweeper(pool, os.Stdout)`; `go purgeSweeper.Run(ctx, time.Hour)`, alongside the existing `idempotencyExecutor` ticker block (`main.go:110-123`).
 
 ## Phase 5: Verification
 
