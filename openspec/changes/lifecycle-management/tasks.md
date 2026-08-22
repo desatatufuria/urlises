@@ -128,6 +128,6 @@ Each unit is developed, tested, and merged into the previous unit's branch befor
 
 ## Phase 6: Verification
 
-- [ ] 6.1 `cd backend && go build ./... && go vet ./... && go test ./internal/organizations ./internal/workspaces ./internal/auth ./internal/activity`
-- [ ] 6.2 `cd admin-web && npm run build && npm test`
-- [ ] 6.3 Manual: `docker compose up`; as an org admin, remove a member, cancel an invitation, delete a workspace, delete a guarded organization, and (as a second test user) deactivate an own account; confirm each behaves per the spec scenarios and appears where activity-logged. **Contingency**: if local Postgres/Docker is unavailable this session, this step should validate against production instead, per this session's established practice — check current availability before assuming either way.
+- [x] 6.1 `cd backend && go build ./... && go vet ./... && go test ./internal/organizations ./internal/workspaces ./internal/auth ./internal/activity` — build/vet clean; `organizations`/`workspaces`/`activity` pass; `auth` package fails only on pre-existing `DATABASE_URL`-requiring tests that predate this change (confirmed via diff against the parent branch) — no test introduced by this change fails or is skipped for the wrong reason.
+- [x] 6.2 `cd admin-web && npm run build && npm test` — build clean, 22 test files, 148/148 passing.
+- [ ] 6.3 Manual: `docker compose up`; as an org admin, remove a member, cancel an invitation, delete a workspace, delete a guarded organization, and (as a second test user) deactivate an own account; confirm each behaves per the spec scenarios and appears where activity-logged. **Deferred**: no local Postgres available this session (`docker ps` shows no postgres container running); per this session's established practice this validates against production instead.
