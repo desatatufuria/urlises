@@ -89,7 +89,7 @@ Slice 1 is independently mergeable if the user wants to phase delivery.
 | Risk | Likelihood | Mitigation |
 |------|------------|------------|
 | A missed `deleted_at IS NULL` predicate leaves a deleted entity reachable | High | Enumerate every call site in design; both `requireOrganizationAdmin` copies are named explicitly; spec scenario per choke point |
-| Purge ticker runs concurrently in a multi-instance deployment | Med | Idempotent sweep; design must choose advisory lock or single-instance assumption |
+| Purge ticker runs concurrently in a multi-instance deployment | ~~Med~~ Resolved | User confirmed production runs a single backend instance — no advisory lock needed for v1. Design should still guard the sweep with a plain transaction (`UPDATE ... WHERE deleted_at < NOW() - INTERVAL '30 days' RETURNING id`) so a future move to multiple instances fails safe rather than double-purging silently. |
 | Purge is irreversible by design | Med (by design) | 30-day window; Trash shows days remaining; purge is the only destructive path left |
 | Reverting the soft-delete code resurrects soft-deleted entities as live | Med | Stated in Rollback Plan; revert requires an explicit decision on pending rows |
 | Restoring an organization whose members changed meanwhile | Low | Restore does not re-run orphan/sole-owner guards (Decision D); memberships were never deleted |
@@ -124,7 +124,7 @@ Per slice, on `feat/soft-delete-recovery` (branched off the still-unmerged `feat
 Automatic execution mode — resolved with recommendations instead of blocking. Confirm or correct before spec:
 
 1. **Decision A**: is 30 days right for both, or should workspaces get a shorter window (or organizations a longer one for compliance)?
-2. **Decision B**: is an in-process ticker acceptable as new backend architecture, and how many backend instances run in production (this determines whether the sweep needs an advisory lock)?
+2. ~~**Decision B**: is an in-process ticker acceptable as new backend architecture, and how many backend instances run in production?~~ **RESOLVED**: user confirmed a single backend instance in production — the ticker ships without an advisory lock.
 3. **Decision C**: confirm that users of a soft-deleted org/workspace should lose access immediately rather than during a wind-down.
 4. **Decision F**: is one Trash view for both entity types the right shape, or should restore live next to each entity's list?
 5. **Sequencing**: ship all four slices as a chain, or land slice 1 (UX parity) on its own first?
