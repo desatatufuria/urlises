@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/furia/shared-bookmark-sync/backend/internal/activity"
 	"github.com/furia/shared-bookmark-sync/backend/internal/auth"
 	"github.com/furia/shared-bookmark-sync/backend/internal/config"
 	"github.com/furia/shared-bookmark-sync/backend/internal/database"
@@ -45,12 +46,12 @@ func TestTicketWebSocketUpgradePostgres(t *testing.T) {
 	if _, err := pool.Exec(ctx, `INSERT INTO organization_members(organization_id,user_id,role) VALUES($1,$2,'owner')`, organizationID, principal.UserID); err != nil {
 		t.Fatal(err)
 	}
-	workspace, err := workspaces.NewService(pool, nil).Create(ctx, principal.UserID, organizationID, workspaces.CreateWorkspaceInput{Name: "Sockets", Type: "shared"})
+	workspace, err := workspaces.NewService(pool, nil, activity.NewService(pool)).Create(ctx, principal.UserID, organizationID, workspaces.CreateWorkspaceInput{Name: "Sockets", Type: "shared"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	mux := http.NewServeMux()
-	RegisterRoutes(mux, authService, workspaces.NewService(pool, nil), testCursors{}, NewHub())
+	RegisterRoutes(mux, authService, workspaces.NewService(pool, nil, activity.NewService(pool)), testCursors{}, NewHub())
 	server := httptest.NewServer(mux)
 	t.Cleanup(server.Close)
 	dial := func(endpoint, protocol string, legacy bool) (*websocket.Conn, *http.Response, error) {
