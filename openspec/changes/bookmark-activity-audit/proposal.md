@@ -144,7 +144,7 @@ a separate change once a retention *policy* is agreed with the client, and monit
 | Risk | Likelihood | Mitigation |
 |---|---|---|
 | Bulk-import bursts flood the feed | High | Category filter (Decision C); growth monitored, retention as flagged follow-up |
-| Bookmark `url` in an org-admin-visible audit metadata field | Medium | Same org-scoped data admins already reach via the workspace; no new exposure class — but **confirm with product** whether `url` should be recorded for `personal`-type workspaces |
+| Bookmark `url` in an org-admin-visible audit metadata field | Low | ~~Confirm with product whether `url` should be recorded for `personal`-type workspaces~~ **RESOLVED**: verified against current code — `admin-web/src/features/workspaces/WorkspaceForm.tsx` hardcodes `type: "shared"` for every workspace created through the product (the free-text type field was removed earlier this session as unused noise, once "shared" was confirmed the only value ever created). There is no practical "personal, admin-invisible" workspace in this product today — recording `url` is the same org-scoped data admins already reach via the workspace, not a new exposure class. Record it. |
 | `activity.Record` failure aborts a user's bookmark sync mutation | Medium | Intended: audit is transactional, not best-effort — consistent with existing callers. Covered by integration tests |
 | `sync` → `activity` package dependency | Low | Narrow handler-local interface, matching `workspaceAccessChecker` |
 | Filter cursor semantics (category switch mid-pagination) | Low | Category is part of the TanStack query key → fresh pagination per category |
