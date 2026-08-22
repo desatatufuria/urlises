@@ -12,6 +12,7 @@ import (
 
 	"github.com/furia/shared-bookmark-sync/backend/internal/access"
 	"github.com/furia/shared-bookmark-sync/backend/internal/activity"
+	"github.com/furia/shared-bookmark-sync/backend/internal/purge"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -137,7 +138,7 @@ func (s *Service) ListMemberships(ctx context.Context, userID string) ([]Members
 	rows, err := s.pool.Query(ctx, `
 		SELECT o.id, o.name, om.role
 		FROM organization_members om
-		JOIN organizations o ON o.id = om.organization_id
+		JOIN organizations o ON o.id = om.organization_id AND o.deleted_at IS NULL
 		WHERE om.user_id = $1
 		ORDER BY o.name, o.id
 	`, userID)
@@ -477,12 +478,14 @@ func (s *Service) CreateInvitationTx(ctx context.Context, tx pgx.Tx, requesterUs
 		return InvitationCreation{}, fmt.Errorf("create invitation: %w", err)
 	}
 
+	// Choke point 5: defense in depth behind choke point 2
+	// (requireOrganizationAdmin already gated this call above).
 	var organizationName, inviterEmail, inviterName string
 	err = tx.QueryRow(ctx, `
 		SELECT o.name, u.email, COALESCE(NULLIF(TRIM(u.name), ''), '')
 		FROM organizations o
 		JOIN users u ON u.id = $2
-		WHERE o.id = $1
+		WHERE o.id = $1 AND o.deleted_at IS NULL
 	`, organizationID, requesterUserID).Scan(&organizationName, &inviterEmail, &inviterName)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -567,12 +570,14 @@ func (s *Service) ResendInvitation(ctx context.Context, requesterUserID, organiz
 		return InvitationCreation{}, fmt.Errorf("resend invitation: %w", err)
 	}
 
+	// Choke point 6: defense in depth behind choke point 2
+	// (requireOrganizationAdmin already gated this call above).
 	var organizationName, inviterEmail, inviterName string
 	err = tx.QueryRow(ctx, `
 		SELECT o.name, u.email, COALESCE(NULLIF(TRIM(u.name), ''), '')
 		FROM organizations o
 		JOIN users u ON u.id = $2
-		WHERE o.id = $1
+		WHERE o.id = $1 AND o.deleted_at IS NULL
 	`, organizationID, requesterUserID).Scan(&organizationName, &inviterEmail, &inviterName)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -652,20 +657,22 @@ func (s *Service) CancelInvitation(ctx context.Context, requesterUserID, organiz
 	return nil
 }
 
-// DeleteOrganization permanently removes an organization after an admin gate
-// and an orphan-member guard. Modeled on PatchMember's locking sequence:
+// DeleteOrganization soft-deletes an organization after an admin gate and an
+// orphan-member guard. Modeled on PatchMember's locking sequence:
 // lockOrganization (FOR UPDATE on the org row) -> requireOrganizationAdmin ->
 // lockOrganizationMemberships (FOR UPDATE on every membership row) -> the
-// orphan probe -> DELETE. lockOrganization's FOR UPDATE also serializes
-// concurrent DeleteOrganization calls against the same org: the losing
-// transaction blocks until the winner commits, then finds zero rows and
-// returns ErrNotFound (see TestDeleteOrganizationConcurrentRequestsOnlyOneCommits).
+// orphan probe -> soft-delete UPDATE. lockOrganization's FOR UPDATE also
+// serializes concurrent DeleteOrganization calls against the same org: the
+// losing transaction blocks until the winner commits, then lockOrganization's
+// own `deleted_at IS NULL` predicate finds zero rows and returns ErrNotFound
+// (see TestDeleteOrganizationConcurrentRequestsOnlyOneCommits).
 //
-// No activity.Record: activity_events.organization_id is NOT NULL REFERENCES
-// organizations(id) ON DELETE CASCADE, so a row recorded before the DELETE
-// would be cascaded away by this same transaction, and a row recorded after
-// the DELETE would violate the FK. There is no ordering in which the event
-// survives -- see design.md's "Slice 4 activity event" decision.
+// Soft delete (design.md "Migration DDL" / recovery window): the row is kept
+// with deleted_at/deleted_by_user_id set, not removed. Nothing cascades, so
+// an organization.deleted activity event is recorded inside this same
+// transaction, before commit (design.md Deviation 3, reversing
+// lifecycle-management's "record nothing" decision, which was correct only
+// for the previous hard DELETE).
 func (s *Service) DeleteOrganization(ctx context.Context, requesterUserID, organizationID string) error {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -691,8 +698,27 @@ func (s *Service) DeleteOrganization(ctx context.Context, requesterUserID, organ
 		return ErrWouldOrphanMember
 	}
 
-	if _, err := tx.Exec(ctx, `DELETE FROM organizations WHERE id = $1`, organizationID); err != nil {
-		return fmt.Errorf("delete organization: %w", err)
+	var organizationName string
+	if err := tx.QueryRow(ctx, `SELECT name FROM organizations WHERE id = $1`, organizationID).Scan(&organizationName); err != nil {
+		return fmt.Errorf("load organization name for delete: %w", err)
+	}
+
+	result, err := tx.Exec(ctx, `
+		UPDATE organizations
+		SET deleted_at = NOW(), deleted_by_user_id = $2, updated_at = NOW()
+		WHERE id = $1 AND deleted_at IS NULL
+	`, organizationID, requesterUserID)
+	if err != nil {
+		return fmt.Errorf("soft delete organization: %w", err)
+	}
+	if result.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+
+	if err := s.activity.Record(ctx, tx, organizationID, requesterUserID, activity.KindOrganizationDeleted, "organization", organizationID, map[string]any{
+		"organizationName": organizationName,
+	}); err != nil {
+		return fmt.Errorf("record organization deleted activity: %w", err)
 	}
 
 	if err := tx.Commit(ctx); err != nil {
@@ -706,7 +732,11 @@ func (s *Service) DeleteOrganization(ctx context.Context, requesterUserID, organ
 // lockOrganizationMemberships. It excludes the requester (om.user_id <> $2)
 // per design.md's "Slice 4 requester exclusion" decision: a sole member
 // deleting their own last organization is a deliberate self-service act, not
-// an accidental orphan.
+// an accidental orphan. The inner EXISTS against organizations (choke point
+// 9 / design.md Deviation 5) excludes a member's other organization from
+// counting as a fallback when that other organization is itself in the
+// trash: a soft-deleted organization is not reachable, so it must not save a
+// member from being orphaned.
 func organizationDeleteWouldOrphanMember(ctx context.Context, tx pgx.Tx, organizationID, requesterUserID string) (bool, error) {
 	var wouldOrphan bool
 	if err := tx.QueryRow(ctx, `
@@ -718,6 +748,11 @@ func organizationDeleteWouldOrphanMember(ctx context.Context, tx pgx.Tx, organiz
 					SELECT 1 FROM organization_members other
 					WHERE other.user_id = om.user_id
 						AND other.organization_id <> $1
+						AND EXISTS (
+							SELECT 1 FROM organizations o2
+							WHERE o2.id = other.organization_id
+								AND o2.deleted_at IS NULL
+						)
 				)
 		)
 	`, organizationID, requesterUserID).Scan(&wouldOrphan); err != nil {
@@ -861,12 +896,15 @@ func (s *Service) ValidatePendingInvitation(ctx context.Context, token, email st
 	}
 	normalizedEmail := strings.TrimSpace(strings.ToLower(email))
 
+	// Choke point 7: REQUIRED — this is a token-based route with no upstream
+	// admin gate. Without AND o.deleted_at IS NULL, a still-valid invitation
+	// token could be used to self-register into a soft-deleted organization.
 	var record invitationRecord
 	err := s.pool.QueryRow(ctx, `
 		SELECT i.id, i.organization_id, o.name, i.email, i.role, i.status,
 			i.expires_at, i.accepted_by_user_id, i.accepted_at::text, i.created_at::text, i.updated_at::text
 		FROM invitations i
-		JOIN organizations o ON o.id = i.organization_id
+		JOIN organizations o ON o.id = i.organization_id AND o.deleted_at IS NULL
 		WHERE i.token = $1
 	`, token).Scan(
 		&record.ID,
@@ -901,6 +939,110 @@ func (s *Service) ValidatePendingInvitation(ctx context.Context, token, email st
 	return nil
 }
 
+// DeletedOrganization is one row of ListDeletedOrganizations, the Trash list
+// for organizations. PurgeAt is computed server-side (deleted_at +
+// purge.Window) so the 30-day window lives in exactly one place (design.md
+// "Home of the window constant").
+type DeletedOrganization struct {
+	OrganizationID   string  `json:"organizationId"`
+	OrganizationName string  `json:"organizationName"`
+	Role             string  `json:"role"`
+	DeletedAt        string  `json:"deletedAt"`
+	DeletedByEmail   *string `json:"deletedByEmail,omitempty"`
+	PurgeAt          string  `json:"purgeAt"`
+}
+
+// RestoreOrganization reverses a soft delete. Modeled on DeleteOrganization's
+// locking sequence but using the deleted-side counterparts:
+// lockDeletedOrganization (FOR UPDATE, only matches a currently-trashed row)
+// -> loadOrganizationRoleIncludingDeleted (THE deliberate exception -- see
+// its own doc comment) -> reject anything other than owner/admin -> UPDATE
+// clearing deleted_at/deleted_by_user_id -> activity.Record(KindOrganizationRestored)
+// -> commit. No orphan/sole-owner guard re-runs here: design.md Decision D
+// notes memberships were never touched by the soft delete, so there is
+// nothing to re-verify.
+func (s *Service) RestoreOrganization(ctx context.Context, requesterUserID, organizationID string) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin restore organization tx: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	if err := lockDeletedOrganization(ctx, tx, organizationID); err != nil {
+		return err
+	}
+
+	role, err := loadOrganizationRoleIncludingDeleted(ctx, tx, organizationID, requesterUserID)
+	if err != nil {
+		return err
+	}
+	if role != access.OrganizationRoleOwner && role != access.OrganizationRoleAdmin {
+		return ErrForbidden
+	}
+
+	result, err := tx.Exec(ctx, `
+		UPDATE organizations
+		SET deleted_at = NULL, deleted_by_user_id = NULL, updated_at = NOW()
+		WHERE id = $1 AND deleted_at IS NOT NULL
+	`, organizationID)
+	if err != nil {
+		return fmt.Errorf("restore organization: %w", err)
+	}
+	if result.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+
+	if err := s.activity.Record(ctx, tx, organizationID, requesterUserID, activity.KindOrganizationRestored, "organization", organizationID, map[string]any{}); err != nil {
+		return fmt.Errorf("record organization restored activity: %w", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit restore organization tx: %w", err)
+	}
+
+	return nil
+}
+
+// ListDeletedOrganizations is requester-scoped, not org-scoped: there is no
+// live org to scope Trash to for a deleted organization. Authorization is
+// inline in the query -- JOIN organization_members om ON ... AND
+// om.role IN ('owner', 'admin') -- never a separate gate call, so a
+// non-admin requester (including a plain member of a trashed org) simply
+// gets an empty result set, never a 403 (design.md "Trash scoping and route
+// shape" decision -- intentional, not a bug).
+func (s *Service) ListDeletedOrganizations(ctx context.Context, requesterUserID string) ([]DeletedOrganization, error) {
+	windowInterval := purgeWindowIntervalLiteral()
+
+	rows, err := s.pool.Query(ctx, `
+		SELECT o.id, o.name, om.role, o.deleted_at::text, u.email, (o.deleted_at + $2::interval)::text
+		FROM organizations o
+		JOIN organization_members om ON om.organization_id = o.id
+									AND om.user_id = $1
+									AND om.role IN ('owner', 'admin')
+		LEFT JOIN users u ON u.id = o.deleted_by_user_id
+		WHERE o.deleted_at IS NOT NULL
+		ORDER BY o.deleted_at DESC, o.id
+	`, requesterUserID, windowInterval)
+	if err != nil {
+		return nil, fmt.Errorf("query deleted organizations: %w", err)
+	}
+	defer rows.Close()
+
+	deleted := make([]DeletedOrganization, 0)
+	for rows.Next() {
+		var d DeletedOrganization
+		if err := rows.Scan(&d.OrganizationID, &d.OrganizationName, &d.Role, &d.DeletedAt, &d.DeletedByEmail, &d.PurgeAt); err != nil {
+			return nil, fmt.Errorf("scan deleted organization: %w", err)
+		}
+		deleted = append(deleted, d)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate deleted organizations: %w", err)
+	}
+
+	return deleted, nil
+}
+
 func requireOrganizationAdmin(ctx context.Context, querier dbQuerier, userID, organizationID string) error {
 	role, err := loadOrganizationRole(ctx, querier, organizationID, userID)
 	if err != nil {
@@ -913,12 +1055,17 @@ func requireOrganizationAdmin(ctx context.Context, querier dbQuerier, userID, or
 	return nil
 }
 
+// loadOrganizationRole is choke point 2: the JOIN's AND o.deleted_at IS NULL
+// closes requireOrganizationAdmin (and therefore ListMembers, PatchMember,
+// AuthorizeInvitationTx, ListInvitations, CancelInvitation, ResendInvitation,
+// DeleteOrganization) against a soft-deleted organization.
 func loadOrganizationRole(ctx context.Context, querier dbQuerier, organizationID, userID string) (access.OrganizationRole, error) {
 	var role string
 	err := querier.QueryRow(ctx, `
-		SELECT role
-		FROM organization_members
-		WHERE organization_id = $1 AND user_id = $2
+		SELECT om.role
+		FROM organization_members om
+		JOIN organizations o ON o.id = om.organization_id AND o.deleted_at IS NULL
+		WHERE om.organization_id = $1 AND om.user_id = $2
 	`, organizationID, userID).Scan(&role)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -935,6 +1082,69 @@ func loadOrganizationRole(ctx context.Context, querier dbQuerier, organizationID
 	return normalizedRole, nil
 }
 
+// loadOrganizationRoleIncludingDeleted is THE single deliberate exception in
+// this codebase: it resolves an organization role with NO soft-delete
+// predicate at all. It exists only because RestoreOrganization must
+// authorize against an organization that is, by definition, currently
+// soft-deleted -- loadOrganizationRole (choke point 2, JOIN ... AND
+// o.deleted_at IS NULL) would return ErrForbidden for every single restore
+// attempt, making restore unreachable. Soft delete never touches
+// organization_members, so this reads exactly the role the requester held
+// at deletion time. Byte-identical to loadOrganizationRole's SQL from
+// before choke point 2 was added: organization_members only, no
+// organizations JOIN at all. Reachable ONLY from RestoreOrganization. The
+// caller MUST reject any role other than owner/admin -- including the
+// pgx.ErrNoRows case (a non-member), which this function reports as
+// ErrForbidden, matching loadOrganizationRole's own no-rows mapping.
+func loadOrganizationRoleIncludingDeleted(ctx context.Context, querier dbQuerier, organizationID, userID string) (access.OrganizationRole, error) {
+	var role string
+	err := querier.QueryRow(ctx, `
+		SELECT role FROM organization_members WHERE organization_id = $1 AND user_id = $2
+	`, organizationID, userID).Scan(&role)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return "", ErrForbidden
+		}
+		return "", fmt.Errorf("query organization role including deleted: %w", err)
+	}
+
+	normalizedRole, err := normalizeOrganizationRole(role)
+	if err != nil {
+		return "", err
+	}
+
+	return normalizedRole, nil
+}
+
+// lockDeletedOrganization is RestoreOrganization's counterpart to
+// lockOrganization: it locks the row FOR UPDATE but requires deleted_at IS
+// NOT NULL, so it matches only a currently-trashed organization. A live
+// organization and an unknown id both resolve to ErrNotFound here --
+// restoring something that is not in the trash is not a distinct error
+// case (design.md "Restore idempotency error" decision).
+func lockDeletedOrganization(ctx context.Context, querier dbQuerier, organizationID string) error {
+	var id string
+	err := querier.QueryRow(ctx, `SELECT id FROM organizations WHERE id = $1 AND deleted_at IS NOT NULL FOR UPDATE`, organizationID).Scan(&id)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrNotFound
+		}
+		return fmt.Errorf("lock deleted organization: %w", err)
+	}
+	return nil
+}
+
+// purgeWindowIntervalLiteral formats purge.Window as a Postgres interval
+// literal ("N seconds"), the unambiguous format for a Go time.Duration
+// passed as a query parameter and cast with ::interval in SQL.
+func purgeWindowIntervalLiteral() string {
+	return fmt.Sprintf("%d seconds", int64(purge.Window/time.Second))
+}
+
+// loadOrganizationMember is choke point 3: defense in depth behind choke
+// point 2 (loadOrganizationRole/requireOrganizationAdmin already gate every
+// caller), returning ErrNotFound if it is ever reached directly for a
+// soft-deleted organization.
 func loadOrganizationMember(ctx context.Context, querier dbQuerier, organizationID, userID string) (OrganizationMember, access.OrganizationRole, error) {
 	var member OrganizationMember
 	var role string
@@ -942,6 +1152,7 @@ func loadOrganizationMember(ctx context.Context, querier dbQuerier, organization
 		SELECT u.id, u.email, COALESCE(u.name, ''), om.role
 		FROM organization_members om
 		JOIN users u ON u.id = om.user_id
+		JOIN organizations o ON o.id = om.organization_id AND o.deleted_at IS NULL
 		WHERE om.organization_id = $1 AND om.user_id = $2
 	`, organizationID, userID).Scan(&member.UserID, &member.Email, &member.Name, &role)
 	if err != nil {
@@ -976,7 +1187,7 @@ func countOwners(ctx context.Context, querier dbQuerier, organizationID string) 
 
 func lockOrganization(ctx context.Context, querier dbQuerier, organizationID string) error {
 	var id string
-	err := querier.QueryRow(ctx, `SELECT id FROM organizations WHERE id = $1 FOR UPDATE`, organizationID).Scan(&id)
+	err := querier.QueryRow(ctx, `SELECT id FROM organizations WHERE id = $1 AND deleted_at IS NULL FOR UPDATE`, organizationID).Scan(&id)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return ErrNotFound
@@ -1040,13 +1251,16 @@ func loadUserEmail(ctx context.Context, querier dbQuerier, userID string) (strin
 	return strings.TrimSpace(strings.ToLower(email)), nil
 }
 
+// loadInvitationForUpdate is choke point 8: REQUIRED — AcceptInvitation is
+// token-based and ungated, so AND o.deleted_at IS NULL is the only guard
+// blocking acceptance into a soft-deleted organization.
 func loadInvitationForUpdate(ctx context.Context, querier dbQuerier, token string) (invitationRecord, error) {
 	var record invitationRecord
 	err := querier.QueryRow(ctx, `
 		SELECT i.id, i.organization_id, o.name, i.email, i.role, i.status,
 			i.expires_at, i.accepted_by_user_id, i.accepted_at::text, i.created_at::text, i.updated_at::text
 		FROM invitations i
-		JOIN organizations o ON o.id = i.organization_id
+		JOIN organizations o ON o.id = i.organization_id AND o.deleted_at IS NULL
 		WHERE i.token = $1
 		FOR UPDATE
 	`, token).Scan(

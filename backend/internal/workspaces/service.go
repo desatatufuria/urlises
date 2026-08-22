@@ -6,9 +6,11 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/furia/shared-bookmark-sync/backend/internal/access"
 	"github.com/furia/shared-bookmark-sync/backend/internal/activity"
+	"github.com/furia/shared-bookmark-sync/backend/internal/purge"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -160,6 +162,11 @@ func NewService(pool *pgxpool.Pool, accessService *access.Service, activityServi
 	return &Service{pool: pool, access: accessService, activity: activityService}
 }
 
+// ListByOrganization is choke point 14: AND o.deleted_at IS NULL on the JOIN
+// excludes a soft-deleted organization's workspaces, and AND w.deleted_at IS
+// NULL on the outer WHERE excludes an individually soft-deleted workspace
+// inside a live organization. The inner grants UNION branch needs nothing
+// extra — it is inner-joined on w.id and the outer WHERE already filters it.
 func (s *Service) ListByOrganization(ctx context.Context, userID, organizationID string) ([]WorkspaceAccess, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT w.id, w.name, w.type, o.id, o.name,
@@ -170,7 +177,7 @@ func (s *Service) ListByOrganization(ctx context.Context, userID, organizationID
 			END AS role,
 			ARRAY_AGG(DISTINCT grants.source ORDER BY grants.source) AS sources
 		FROM workspaces w
-		JOIN organizations o ON o.id = w.organization_id
+		JOIN organizations o ON o.id = w.organization_id AND o.deleted_at IS NULL
 		JOIN (
 			SELECT wua.workspace_id,
 				CASE wua.role
@@ -206,7 +213,7 @@ func (s *Service) ListByOrganization(ctx context.Context, userID, organizationID
 			JOIN organization_members om ON om.organization_id = w.organization_id
 			WHERE om.user_id = $1 AND om.role IN ('owner', 'admin')
 		) grants ON grants.workspace_id = w.id
-		WHERE w.organization_id = $2
+		WHERE w.organization_id = $2 AND w.deleted_at IS NULL
 		GROUP BY w.id, w.name, w.type, o.id, o.name
 		ORDER BY w.name, w.id
 	`, userID, organizationID)
@@ -390,6 +397,11 @@ func (s *Service) RevokeUserAccess(ctx context.Context, requesterUserID, workspa
 	return nil
 }
 
+// Delete soft-deletes a workspace (deleted_at/deleted_by_user_id set, row
+// kept — design.md "Migration DDL" / recovery window). Idempotent: a second
+// call on an already-deleted workspace affects zero rows and returns
+// ErrNotFound. The workspace.deleted activity event, recorded inside this
+// same transaction, is unchanged from lifecycle-management's prior work.
 func (s *Service) Delete(ctx context.Context, requesterUserID, workspaceID string) error {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -406,11 +418,12 @@ func (s *Service) Delete(ctx context.Context, requesterUserID, workspaceID strin
 	}
 
 	result, err := tx.Exec(ctx, `
-		DELETE FROM workspaces
-		WHERE id = $1 AND organization_id = $2
-	`, workspaceID, metadata.OrganizationID)
+		UPDATE workspaces
+		SET deleted_at = NOW(), deleted_by_user_id = $3, updated_at = NOW()
+		WHERE id = $1 AND organization_id = $2 AND deleted_at IS NULL
+	`, workspaceID, metadata.OrganizationID, requesterUserID)
 	if err != nil {
-		return fmt.Errorf("delete workspace: %w", err)
+		return fmt.Errorf("soft delete workspace: %w", err)
 	}
 	if result.RowsAffected() == 0 {
 		return ErrNotFound
@@ -645,12 +658,149 @@ func (s *Service) GetTree(ctx context.Context, userID, workspaceID string) (Tree
 	return TreeResponse{Workspace: workspace, Folders: buildFolderTree(folders, bookmarks)}, nil
 }
 
+// DeletedWorkspace is one row of ListDeleted, the Trash list for
+// workspaces. PurgeAt is computed server-side, mirroring
+// organizations.DeletedOrganization.
+type DeletedWorkspace struct {
+	WorkspaceID      string  `json:"workspaceId"`
+	WorkspaceName    string  `json:"workspaceName"`
+	WorkspaceType    string  `json:"workspaceType"`
+	OrganizationID   string  `json:"organizationId"`
+	OrganizationName string  `json:"organizationName"`
+	DeletedAt        string  `json:"deletedAt"`
+	DeletedByEmail   *string `json:"deletedByEmail,omitempty"`
+	PurgeAt          string  `json:"purgeAt"`
+}
+
+// Restore reverses a soft delete. Unlike organizations.RestoreOrganization,
+// no admin-gate exception is needed here: loadDeletedWorkspaceMetadataRecord
+// already requires the organization to be live, so
+// access.RequireOrganizationAdmin -- the same org-liveness-filtered gate
+// every other workspace mutation uses -- is correct as-is on this path
+// (design.md "Restore admin gate for a workspace" decision).
+func (s *Service) Restore(ctx context.Context, requesterUserID, workspaceID string) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin restore workspace tx: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	metadata, err := loadDeletedWorkspaceMetadataRecord(ctx, tx, workspaceID)
+	if err != nil {
+		return err
+	}
+	if err := access.RequireOrganizationAdmin(ctx, tx, requesterUserID, metadata.OrganizationID); err != nil {
+		return mapAccessError(err)
+	}
+
+	result, err := tx.Exec(ctx, `
+		UPDATE workspaces
+		SET deleted_at = NULL, deleted_by_user_id = NULL, updated_at = NOW()
+		WHERE id = $1 AND organization_id = $2 AND deleted_at IS NOT NULL
+	`, workspaceID, metadata.OrganizationID)
+	if err != nil {
+		return fmt.Errorf("restore workspace: %w", err)
+	}
+	if result.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+
+	if err := s.activity.Record(ctx, tx, metadata.OrganizationID, requesterUserID, activity.KindWorkspaceRestored, "workspace", workspaceID, map[string]any{
+		"workspaceName": metadata.WorkspaceName,
+		"workspaceType": metadata.WorkspaceType,
+	}); err != nil {
+		return fmt.Errorf("record workspace restored activity: %w", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit restore workspace tx: %w", err)
+	}
+
+	return nil
+}
+
+// ListDeleted is requester-scoped, mirroring
+// organizations.ListDeletedOrganizations: authorization is inline in the
+// query (JOIN organization_members ... role IN ('owner', 'admin')), never a
+// separate gate call. o.deleted_at IS NULL on the organizations JOIN is
+// deliberate: a workspace inside a trashed organization is not individually
+// restorable, so it must not be individually listed either (design.md
+// "Trash: workspaces" query comment).
+func (s *Service) ListDeleted(ctx context.Context, requesterUserID string) ([]DeletedWorkspace, error) {
+	windowInterval := fmt.Sprintf("%d seconds", int64(purge.Window/time.Second))
+
+	rows, err := s.pool.Query(ctx, `
+		SELECT w.id, w.name, w.type, o.id, o.name, w.deleted_at::text, u.email,
+			   (w.deleted_at + $2::interval)::text
+		FROM workspaces w
+		JOIN organizations o ON o.id = w.organization_id AND o.deleted_at IS NULL
+		JOIN organization_members om ON om.organization_id = w.organization_id
+									AND om.user_id = $1
+									AND om.role IN ('owner', 'admin')
+		LEFT JOIN users u ON u.id = w.deleted_by_user_id
+		WHERE w.deleted_at IS NOT NULL
+		ORDER BY w.deleted_at DESC, w.id
+	`, requesterUserID, windowInterval)
+	if err != nil {
+		return nil, fmt.Errorf("query deleted workspaces: %w", err)
+	}
+	defer rows.Close()
+
+	deleted := make([]DeletedWorkspace, 0)
+	for rows.Next() {
+		var d DeletedWorkspace
+		if err := rows.Scan(&d.WorkspaceID, &d.WorkspaceName, &d.WorkspaceType, &d.OrganizationID, &d.OrganizationName, &d.DeletedAt, &d.DeletedByEmail, &d.PurgeAt); err != nil {
+			return nil, fmt.Errorf("scan deleted workspace: %w", err)
+		}
+		deleted = append(deleted, d)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate deleted workspaces: %w", err)
+	}
+
+	return deleted, nil
+}
+
+// loadDeletedWorkspaceMetadataRecord is Restore's counterpart to
+// loadWorkspaceMetadataRecord (choke point 15): it requires the workspace to
+// be soft-deleted AND its organization to be live. No admin-gate exception
+// is needed here (unlike organizations.RestoreOrganization) -- a workspace
+// inside a soft-deleted organization is simply not individually restorable;
+// the organization must be restored first (design.md "Restore admin gate
+// for a workspace" decision).
+func loadDeletedWorkspaceMetadataRecord(ctx context.Context, querier dbQuerier, workspaceID string) (workspaceMetadataRecord, error) {
+	var metadata workspaceMetadataRecord
+	err := querier.QueryRow(ctx, `
+		SELECT w.id, w.name, w.type, o.id, o.name
+		FROM workspaces w
+		JOIN organizations o ON o.id = w.organization_id
+		WHERE w.id = $1 AND w.deleted_at IS NOT NULL AND o.deleted_at IS NULL
+	`, workspaceID).Scan(
+		&metadata.WorkspaceID,
+		&metadata.WorkspaceName,
+		&metadata.WorkspaceType,
+		&metadata.OrganizationID,
+		&metadata.OrganizationName,
+	)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return workspaceMetadataRecord{}, ErrNotFound
+		}
+		return workspaceMetadataRecord{}, fmt.Errorf("query deleted workspace metadata: %w", err)
+	}
+
+	return metadata, nil
+}
+
+// loadWorkspaceOrganizationID is choke point 16: AND deleted_at IS NULL
+// closes GrantUserAccess, RevokeUserAccess, GrantGroupAccess, and
+// RevokeGroupAccess against a soft-deleted workspace.
 func loadWorkspaceOrganizationID(ctx context.Context, querier dbQuerier, workspaceID string) (string, error) {
 	var organizationID string
 	err := querier.QueryRow(ctx, `
 		SELECT organization_id
 		FROM workspaces
-		WHERE id = $1
+		WHERE id = $1 AND deleted_at IS NULL
 	`, workspaceID).Scan(&organizationID)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -662,13 +812,17 @@ func loadWorkspaceOrganizationID(ctx context.Context, querier dbQuerier, workspa
 	return organizationID, nil
 }
 
+// loadWorkspaceMetadataRecord is choke point 15: AND w.deleted_at IS NULL AND
+// o.deleted_at IS NULL makes Delete's own double-delete check and
+// GetAccessSnapshot return ErrNotFound for a soft-deleted workspace or a
+// workspace inside a soft-deleted organization.
 func loadWorkspaceMetadataRecord(ctx context.Context, querier dbQuerier, workspaceID string) (workspaceMetadataRecord, error) {
 	var metadata workspaceMetadataRecord
 	err := querier.QueryRow(ctx, `
 		SELECT w.id, w.name, w.type, o.id, o.name
 		FROM workspaces w
 		JOIN organizations o ON o.id = w.organization_id
-		WHERE w.id = $1
+		WHERE w.id = $1 AND w.deleted_at IS NULL AND o.deleted_at IS NULL
 	`, workspaceID).Scan(
 		&metadata.WorkspaceID,
 		&metadata.WorkspaceName,

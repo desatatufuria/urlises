@@ -15,6 +15,10 @@ export function formatActivityEvent(event: ActivityEvent): string {
   switch (event.kind) {
     case "organization.created":
       return `Created the organization "${m.organizationName ?? ""}".`;
+    case "organization.deleted":
+      return `Deleted the organization "${m.organizationName ?? ""}".`;
+    case "organization.restored":
+      return `Restored the organization "${m.organizationName ?? ""}".`;
     case "invitation.created":
       return `Invited ${m.email ?? "someone"} as ${m.role ?? "member"}.`;
     case "invitation.resent":
@@ -31,6 +35,8 @@ export function formatActivityEvent(event: ActivityEvent): string {
       return `Created the workspace "${m.workspaceName ?? ""}" (${m.workspaceType ?? "unknown type"}).`;
     case "workspace.deleted":
       return `Deleted the workspace "${m.workspaceName ?? ""}".`;
+    case "workspace.restored":
+      return `Restored the workspace "${m.workspaceName ?? ""}".`;
     case "workspace_access.user_granted":
       return `Granted ${m.role ?? "?"} access to a user on workspace ${m.workspaceId ?? "?"}.`;
     case "workspace_access.user_revoked":

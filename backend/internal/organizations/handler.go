@@ -21,6 +21,8 @@ type routeService interface {
 	ResendInvitation(ctx context.Context, requesterUserID, organizationID, invitationID string) (InvitationCreation, error)
 	CancelInvitation(ctx context.Context, requesterUserID, organizationID, invitationID string) error
 	DeleteOrganization(ctx context.Context, requesterUserID, organizationID string) error
+	RestoreOrganization(ctx context.Context, requesterUserID, organizationID string) error
+	ListDeletedOrganizations(ctx context.Context, requesterUserID string) ([]DeletedOrganization, error)
 }
 
 type creationTxService interface {
@@ -269,6 +271,37 @@ func RegisterRoutes(mux *http.ServeMux, authMiddleware func(http.Handler) http.H
 		}
 
 		w.WriteHeader(http.StatusNoContent)
+	})))
+
+	mux.Handle("POST /organizations/{organizationId}/restore", authMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		principal, ok := auth.PrincipalFromContext(r.Context())
+		if !ok {
+			httpapi.WriteError(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+
+		if err := service.RestoreOrganization(r.Context(), principal.UserID, r.PathValue("organizationId")); err != nil {
+			writeOrganizationError(w, err)
+			return
+		}
+
+		w.WriteHeader(http.StatusNoContent)
+	})))
+
+	mux.Handle("GET /organizations/deleted", authMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		principal, ok := auth.PrincipalFromContext(r.Context())
+		if !ok {
+			httpapi.WriteError(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+
+		deleted, err := service.ListDeletedOrganizations(r.Context(), principal.UserID)
+		if err != nil {
+			writeOrganizationError(w, err)
+			return
+		}
+
+		httpapi.WriteJSON(w, http.StatusOK, map[string]any{"organizations": deleted})
 	})))
 }
 

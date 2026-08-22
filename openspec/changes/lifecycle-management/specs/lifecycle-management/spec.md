@@ -70,6 +70,8 @@ An org owner/admin MUST be able to cancel a `pending` invitation, transitioning 
 
 ### Requirement: Delete Workspace
 
+> **Superseded by `soft-delete-recovery`**: as of that change, workspace deletion is no longer permanent. `Delete` now soft-deletes (`deleted_at`/`deleted_by_user_id` stamped, row and children kept) within a 30-day recovery window, restorable via `POST /workspaces/{workspaceId}/restore` or from the admin-web Trash view (`/trash`), with a scheduled purge sweep hard-deleting rows only after the window expires. The scenarios below describe the pre-`soft-delete-recovery` hard-delete behavior and are kept for historical context; see `openspec/changes/soft-delete-recovery/specs/` for the current behavior.
+
 An org owner/admin MUST be able to permanently delete a workspace and all its contents via a new `Delete`/`DeleteTx` on `workspaces.Service`, relying on existing `ON DELETE CASCADE` for folders, bookmarks, access, cursors, and sync events.
 
 #### Scenario: Admin deletes a workspace (happy path)
@@ -98,6 +100,8 @@ An org owner/admin MUST be able to permanently delete a workspace and all its co
 - THEN the row shows a busy state and the workspace list is invalidated/refetched without it; a failed request surfaces an error and the row returns to normal
 
 ### Requirement: Delete Organization (Guarded)
+
+> **Superseded by `soft-delete-recovery`**: as of that change, organization deletion is no longer permanent. `DeleteOrganization` now soft-deletes (`deleted_at`/`deleted_by_user_id` stamped, nothing cascades) within a 30-day recovery window, restorable via `POST /organizations/{organizationId}/restore` or from the admin-web Trash view (`/trash`, reachable even with zero live organizations via a link on the organization setup page), with a scheduled purge sweep hard-deleting rows only after the window expires. The scenarios below describe the pre-`soft-delete-recovery` hard-delete behavior and are kept for historical context; see `openspec/changes/soft-delete-recovery/specs/` for the current behavior.
 
 An org owner or admin MUST be able to permanently delete an organization through a new `DeleteOrganization`/`DeleteOrganizationTx`, gated by role, a confirm-by-typing-the-organization-name UI step, and a cross-member orphan check that blocks deletion when any OTHER member would be left with zero organization memberships.
 

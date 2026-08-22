@@ -20,6 +20,7 @@ import (
 	"github.com/furia/shared-bookmark-sync/backend/internal/httpapi"
 	"github.com/furia/shared-bookmark-sync/backend/internal/mailer"
 	"github.com/furia/shared-bookmark-sync/backend/internal/organizations"
+	"github.com/furia/shared-bookmark-sync/backend/internal/purge"
 	"github.com/furia/shared-bookmark-sync/backend/internal/secrethide"
 	syncapi "github.com/furia/shared-bookmark-sync/backend/internal/sync"
 	wsapi "github.com/furia/shared-bookmark-sync/backend/internal/websocket"
@@ -121,6 +122,8 @@ func main() {
 			}
 		}
 	}()
+	purgeSweeper := purge.NewSweeper(pool, os.Stdout)
+	go purgeSweeper.Run(ctx, time.Hour)
 	bookmarksService := bookmarks.NewService(pool, accessService)
 	websocketHub := wsapi.NewHub()
 	syncService := syncapi.NewService(syncapi.NewPostgresStore(pool, bookmarksService, workspacesService, websocketHub))

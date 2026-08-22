@@ -5,6 +5,8 @@ import { apiRequest } from "./client";
 // compile-time exhaustiveness pressure in format.ts's switch.
 export type ActivityKind =
   | "organization.created"
+  | "organization.deleted"
+  | "organization.restored"
   | "invitation.created"
   | "invitation.resent"
   | "invitation.accepted"
@@ -13,6 +15,7 @@ export type ActivityKind =
   | "organization_member.removed"
   | "workspace.created"
   | "workspace.deleted"
+  | "workspace.restored"
   | "workspace_access.user_granted"
   | "workspace_access.user_revoked"
   | "workspace_access.group_granted"

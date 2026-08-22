@@ -102,11 +102,13 @@ describe("admin router", () => {
       return jsonResponse({ error: "not found" }, 404);
     });
 
+    const user = userEvent.setup();
     renderAppRoute("/workspaces", defaultAdminSnapshot);
 
     expect((await screen.findAllByRole("heading", { name: /workspaces/i })).length).toBeGreaterThan(0);
     expect(screen.getByRole("navigation", { name: /admin sections/i })).toBeInTheDocument();
     expect(screen.getByText("URLises")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /owner/i }));
     expect(screen.getByRole("combobox", { name: "Active organization" })).toHaveDisplayValue("Acme");
     expect(screen.getByRole("link", { name: "Overview" })).toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "Invitations" })).not.toBeInTheDocument();
@@ -200,6 +202,7 @@ describe("admin router", () => {
     });
     const { router } = renderAppRoute("/", defaultAdminSnapshot);
     expect(await screen.findByText(/1 pending invitation/i)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Directory" }));
     expect(screen.getByRole("link", { name: "People" })).toBeInTheDocument();
     await userEvent.click(screen.getByRole("link", { name: /review people/i }));
     expect(router.state.location.pathname).toBe("/members");
@@ -208,19 +211,22 @@ describe("admin router", () => {
     expect(screen.queryByRole("dialog", { name: /invite person/i })).not.toBeInTheDocument();
   });
 
-  it("switches the applied theme when the color scheme select changes", async () => {
+  it("switches the applied theme when a color scheme toggle button is clicked", async () => {
     const user = userEvent.setup();
     renderAppRoute("/", defaultAdminSnapshot);
-    const select = await screen.findByRole("combobox", { name: "Color scheme" });
-    expect(select).toHaveDisplayValue("System");
+    await user.click(await screen.findByRole("button", { name: /owner/i }));
+    const systemButton = await screen.findByRole("button", { name: "Match system theme" });
+    expect(systemButton).toHaveAttribute("aria-pressed", "true");
 
-    await user.selectOptions(select, "Dark");
+    await user.click(screen.getByRole("button", { name: "Dark theme" }));
     expect(document.documentElement.dataset.theme).toBe("dark");
     expect(window.localStorage.getItem("urlises-color-scheme")).toBe("dark");
+    expect(screen.getByRole("button", { name: "Dark theme" })).toHaveAttribute("aria-pressed", "true");
 
-    await user.selectOptions(select, "Light");
+    await user.click(screen.getByRole("button", { name: "Light theme" }));
     expect(document.documentElement.dataset.theme).toBeUndefined();
     expect(window.localStorage.getItem("urlises-color-scheme")).toBe("light");
+    expect(screen.getByRole("button", { name: "Light theme" })).toHaveAttribute("aria-pressed", "true");
   });
 
   it("blocks authenticated non-admin users", async () => {

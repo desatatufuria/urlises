@@ -76,7 +76,7 @@ describe("access page", () => {
       return jsonResponse({ error: "not found" }, 404);
     });
 
-    renderAppRoute("/access?panel=access&workspace=workspace-1");
+    renderAppRoute("/access?workspace=workspace-1");
 
     expect(await screen.findByText(/effective access review/i)).toBeInTheDocument();
     expect(screen.getAllByText(/launch room/i).length).toBeGreaterThan(0);
@@ -149,7 +149,7 @@ describe("access page", () => {
       return jsonResponse({ error: "not found" }, 404);
     });
 
-    renderAppRoute("/access?panel=access&workspace=workspace-1");
+    renderAppRoute("/access?workspace=workspace-1");
 
     expect(await screen.findByText(/creator-only access/i)).toBeInTheDocument();
 
@@ -221,7 +221,7 @@ describe("access page", () => {
       return jsonResponse({ error: "not found" }, 404);
     });
 
-    renderAppRoute("/access?panel=access&workspace=workspace-1");
+    renderAppRoute("/access?workspace=workspace-1");
 
     expect(await screen.findByText(/creator-only access/i)).toBeInTheDocument();
 
@@ -284,7 +284,7 @@ describe("access page", () => {
       return jsonResponse({ error: "not found" }, 404);
     });
 
-    renderAppRoute("/access?panel=access&workspace=workspace-1");
+    renderAppRoute("/access?workspace=workspace-1");
 
     expect(await screen.findByText(/everyone already has a direct grant/i)).toBeInTheDocument();
     expect(screen.queryByLabelText(/^organization member$/i)).not.toBeInTheDocument();
@@ -317,7 +317,7 @@ describe("access page", () => {
       if (url.includes("/workspaces/workspace-1/groups/group-1/access") && method === "DELETE") { snapshot.groupGrants.splice(0, 1); return Promise.resolve(new Response(null, { status: 204 })); }
       return jsonResponse({ error: "not found" }, 404);
     });
-    renderAppRoute("/access?panel=access&workspace=workspace-1");
+    renderAppRoute("/access?workspace=workspace-1");
     await userEvent.click(await screen.findByRole("button", { name: /show raw grants/i }));
     await userEvent.selectOptions(await screen.findByLabelText(/direct role for editor@example.com/i), "editor");
     expect(confirmSpy).toHaveBeenCalledWith("Change editor@example.com's access to Launch Room from viewer to editor?");
@@ -354,7 +354,7 @@ describe("access page", () => {
       if (url.includes("/workspaces/workspace-1/users/user-2/access") && method === "DELETE") { deleteCalls += 1; return Promise.resolve(new Response(null, { status: 204 })); }
       return jsonResponse({ error: "not found" }, 404);
     });
-    renderAppRoute("/access?panel=access&workspace=workspace-1");
+    renderAppRoute("/access?workspace=workspace-1");
     await userEvent.click(await screen.findByRole("button", { name: /show raw grants/i }));
     const select = await screen.findByLabelText(/direct role for editor@example.com/i);
     await userEvent.selectOptions(select, "editor");
@@ -385,7 +385,7 @@ describe("access page", () => {
       return jsonResponse({ error: "not found" }, 404);
     });
 
-    renderAppRoute("/access?panel=access&workspace=workspace-1");
+    renderAppRoute("/access?workspace=workspace-1");
 
     await screen.findByText(/effective access review/i);
     expect(screen.queryByText(/direct user grants/i)).not.toBeInTheDocument();
@@ -402,5 +402,41 @@ describe("access page", () => {
 
     await userEvent.click(screen.getByRole("button", { name: /hide raw grants/i }));
     expect(screen.queryByText(/direct user grants/i)).not.toBeInTheDocument();
+  });
+
+  it("shows a link back to Workspaces instead of a picker when no workspace query param is present", async () => {
+    fetchMock.mockImplementation((input) => {
+      const url = String(input);
+      if (url.endsWith("/organizations/org-1/workspaces")) {
+        return jsonResponse({ workspaces: [{ workspaceId: "workspace-1", workspaceName: "Launch Room", workspaceType: "shared", organizationId: "org-1", organizationName: "Acme", role: "admin" }] });
+      }
+      if (url.endsWith("/organizations/org-1/members")) return jsonResponse({ members: [] });
+      if (url.endsWith("/organizations/org-1/groups")) return jsonResponse({ groups: [] });
+      return jsonResponse({ error: "not found" }, 404);
+    });
+
+    renderAppRoute("/access");
+
+    expect(await screen.findByText(/no workspace selected/i)).toBeInTheDocument();
+    expect(screen.queryByText(/workspace access targets/i)).not.toBeInTheDocument();
+    const link = screen.getByRole("link", { name: /go to workspaces/i });
+    expect(link).toHaveAttribute("href", "/workspaces");
+  });
+
+  it("shows a link back to Workspaces when the workspace query param does not resolve to an accessible workspace", async () => {
+    fetchMock.mockImplementation((input) => {
+      const url = String(input);
+      if (url.endsWith("/organizations/org-1/workspaces")) {
+        return jsonResponse({ workspaces: [{ workspaceId: "workspace-1", workspaceName: "Launch Room", workspaceType: "shared", organizationId: "org-1", organizationName: "Acme", role: "admin" }] });
+      }
+      if (url.endsWith("/organizations/org-1/members")) return jsonResponse({ members: [] });
+      if (url.endsWith("/organizations/org-1/groups")) return jsonResponse({ groups: [] });
+      return jsonResponse({ error: "not found" }, 404);
+    });
+
+    renderAppRoute("/access?workspace=unknown-workspace");
+
+    expect(await screen.findByText(/no workspace selected/i)).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /go to workspaces/i })).toHaveAttribute("href", "/workspaces");
   });
 });

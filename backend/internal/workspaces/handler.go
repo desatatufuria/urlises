@@ -21,6 +21,8 @@ type routeService interface {
 	GrantGroupAccess(context.Context, string, string, string, UpdateGroupAccessInput) (GroupAccessGrant, error)
 	RevokeGroupAccess(context.Context, string, string, string) error
 	Delete(context.Context, string, string) error
+	Restore(context.Context, string, string) error
+	ListDeleted(context.Context, string) ([]DeletedWorkspace, error)
 }
 
 type creationTxService interface {
@@ -158,6 +160,42 @@ func RegisterRoutes(mux *http.ServeMux, authMiddleware func(http.Handler) http.H
 		}
 
 		w.WriteHeader(http.StatusNoContent)
+	})))
+
+	// GET /workspaces/deleted coexists with GET /workspaces/{workspaceId}
+	// (registered above) because Go 1.22+ ServeMux prefers the more
+	// specific literal segment over a wildcard, regardless of registration
+	// order (design.md "Route-precedence note"). See
+	// TestWorkspacesDeletedRoutePrecedenceOverWorkspaceIDPattern.
+	mux.Handle("POST /workspaces/{workspaceId}/restore", authMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		principal, ok := auth.PrincipalFromContext(r.Context())
+		if !ok {
+			httpapi.WriteError(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+
+		if err := service.Restore(r.Context(), principal.UserID, r.PathValue("workspaceId")); err != nil {
+			writeWorkspaceError(w, err)
+			return
+		}
+
+		w.WriteHeader(http.StatusNoContent)
+	})))
+
+	mux.Handle("GET /workspaces/deleted", authMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		principal, ok := auth.PrincipalFromContext(r.Context())
+		if !ok {
+			httpapi.WriteError(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+
+		deleted, err := service.ListDeleted(r.Context(), principal.UserID)
+		if err != nil {
+			writeWorkspaceError(w, err)
+			return
+		}
+
+		httpapi.WriteJSON(w, http.StatusOK, map[string]any{"workspaces": deleted})
 	})))
 
 	mux.Handle("PUT /workspaces/{workspaceId}/users/{userId}/access", authMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

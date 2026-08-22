@@ -9,6 +9,7 @@ import { WorkspaceForm } from "./WorkspaceForm";
 import { useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { ContextPanel } from "../../lib/ui/components/ContextPanel";
+import { ConfirmByTyping } from "../../lib/ui/components/ConfirmByTyping";
 
 export function WorkspacesPage() {
   const { session } = useAuth();
@@ -18,12 +19,16 @@ export function WorkspacesPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const createOpen = searchParams.get("panel") === "workspace-create";
   const closePanel = () => setSearchParams((current) => { const next = new URLSearchParams(current); next.delete("panel"); return next; });
+  const selectedWorkspaceId = searchParams.get("panel") === "workspace-delete" ? searchParams.get("workspace") : null;
+  const closeDeletePanel = () => setSearchParams((current) => { const next = new URLSearchParams(current); next.delete("panel"); next.delete("workspace"); return next; });
+  const openDeletePanel = (workspaceId: string) => setSearchParams({ panel: "workspace-delete", workspace: workspaceId });
 
   const token = session?.accessToken;
   const organizationId = activeOrganization?.organizationId;
   const workspacesQuery = useWorkspaces(token, organizationId);
   const createWorkspaceMutation = useCreateWorkspaceMutation(token, organizationId);
   const deleteWorkspaceMutation = useDeleteWorkspaceMutation(token, organizationId);
+  const deletingWorkspace = workspacesQuery.data?.find((workspace) => workspace.workspaceId === selectedWorkspaceId) ?? null;
 
   if (!token || !organizationId) {
     return <DataState tone="danger" title="Organization context missing" description="Choose an admin organization before managing workspaces." />;
@@ -96,7 +101,7 @@ export function WorkspacesPage() {
                 </td>
                 <td>
                   <div className="ui-actions-row">
-                    <Link className="ui-button ui-button-secondary" to={`/access?panel=access&workspace=${workspace.workspaceId}`}>
+                    <Link className="ui-button ui-button-secondary" to={`/access?workspace=${workspace.workspaceId}`}>
                       Manage access
                     </Link>
                     <button
@@ -104,30 +109,7 @@ export function WorkspacesPage() {
                       type="button"
                       disabled={deletingWorkspaceId === workspace.workspaceId}
                       aria-label={`Delete ${workspace.workspaceName}`}
-                      onClick={() => {
-                        if (!window.confirm(`Delete the workspace "${workspace.workspaceName}"? This cannot be undone.`)) {
-                          return;
-                        }
-                        setNotice(null);
-                        setDeletingWorkspaceId(workspace.workspaceId);
-                        void deleteWorkspaceMutation
-                          .mutateAsync(workspace.workspaceId)
-                          .then(() => {
-                            setNotice({
-                              tone: "neutral",
-                              title: "Workspace deleted",
-                              description: `${workspace.workspaceName} and all of its contents have been removed.`,
-                            });
-                          })
-                          .catch((error) => {
-                            setNotice({
-                              tone: "danger",
-                              title: "Workspace deletion rejected",
-                              description: error instanceof Error ? error.message : "The backend rejected the deletion request.",
-                            });
-                          })
-                          .finally(() => setDeletingWorkspaceId(null));
-                      }}
+                      onClick={() => openDeletePanel(workspace.workspaceId)}
                     >
                       {deletingWorkspaceId === workspace.workspaceId ? "Deleting…" : "Delete"}
                     </button>
@@ -139,6 +121,40 @@ export function WorkspacesPage() {
         ) : null}
       </section>
       {createOpen ? <ContextPanel title="Create workspace" onClose={closePanel}><p className="ui-copy">New workspaces begin with only the creator as the initial admin.</p><WorkspaceForm submitting={createWorkspaceMutation.isPending} onSubmit={async (input) => { setNotice(null); try { const workspace = await createWorkspaceMutation.mutateAsync(input); setNotice({ tone: "neutral", title: "Workspace created", description: `${workspace.workspaceName} is ready for access review and grant assignment.` }); closePanel(); } catch (error) { setNotice({ tone: "danger", title: "Workspace creation failed", description: error instanceof Error ? error.message : "The workspace could not be created." }); throw error; } }} /></ContextPanel> : null}
+      {selectedWorkspaceId && deletingWorkspace ? (
+        <ContextPanel key={selectedWorkspaceId} title="Delete workspace" onClose={closeDeletePanel}>
+          <p className="ui-copy">{`This permanently deletes ${deletingWorkspace.workspaceName} and all of its contents. This cannot be undone.`}</p>
+          <ConfirmByTyping
+            expected={deletingWorkspace.workspaceName}
+            confirmLabel="Delete workspace"
+            disabled={deletingWorkspaceId === deletingWorkspace.workspaceId}
+            onConfirm={() => {
+              setNotice(null);
+              setDeletingWorkspaceId(deletingWorkspace.workspaceId);
+              void deleteWorkspaceMutation
+                .mutateAsync(deletingWorkspace.workspaceId)
+                .then(() => {
+                  setNotice({
+                    tone: "neutral",
+                    title: "Workspace deleted",
+                    description: `${deletingWorkspace.workspaceName} and all of its contents have been removed.`,
+                  });
+                })
+                .catch((error) => {
+                  setNotice({
+                    tone: "danger",
+                    title: "Workspace deletion rejected",
+                    description: error instanceof Error ? error.message : "The backend rejected the deletion request.",
+                  });
+                })
+                .finally(() => {
+                  setDeletingWorkspaceId(null);
+                  closeDeletePanel();
+                });
+            }}
+          />
+        </ContextPanel>
+      ) : null}
     </section>
   );
 }

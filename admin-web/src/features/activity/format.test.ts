@@ -98,6 +98,18 @@ describe("formatActivityEvent", () => {
     );
   });
 
+  it("organization.deleted", () => {
+    expect(
+      formatActivityEvent(event({ kind: "organization.deleted", metadata: { organizationName: "Acme" } })),
+    ).toBe('Deleted the organization "Acme".');
+  });
+
+  it("organization.deleted with missing metadata degrades to a placeholder", () => {
+    expect(formatActivityEvent(event({ kind: "organization.deleted", metadata: {} }))).toBe(
+      'Deleted the organization "".',
+    );
+  });
+
   it("workspace_access.user_granted", () => {
     expect(
       formatActivityEvent(
@@ -153,6 +165,32 @@ describe("formatActivityEvent", () => {
   it("group_member.removed", () => {
     expect(formatActivityEvent(event({ kind: "group_member.removed", metadata: { groupId: "group-1" } }))).toBe(
       "Removed a user from group group-1.",
+    );
+  });
+
+  it("organization.restored", () => {
+    expect(
+      formatActivityEvent(event({ kind: "organization.restored", metadata: { organizationName: "Acme" } })),
+    ).toBe('Restored the organization "Acme".');
+  });
+
+  it("organization.restored with missing metadata degrades to a placeholder", () => {
+    expect(formatActivityEvent(event({ kind: "organization.restored", metadata: {} }))).toBe(
+      'Restored the organization "".',
+    );
+  });
+
+  it("workspace.restored", () => {
+    expect(
+      formatActivityEvent(
+        event({ kind: "workspace.restored", metadata: { workspaceName: "Launch Room", workspaceType: "shared" } }),
+      ),
+    ).toBe('Restored the workspace "Launch Room".');
+  });
+
+  it("workspace.restored with missing metadata degrades to a placeholder", () => {
+    expect(formatActivityEvent(event({ kind: "workspace.restored", metadata: {} }))).toBe(
+      'Restored the workspace "".',
     );
   });
 
