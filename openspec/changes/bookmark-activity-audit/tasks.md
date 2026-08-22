@@ -67,15 +67,15 @@ Each unit is developed, tested, and merged into the previous unit's branch befor
 
 ## Phase A1: Audit Wiring Foundation
 
-- [ ] A1.1 RED: `backend/internal/activity/kind_test.go` — assert the 6 new `Kind` constants' exact wire values (`bookmark.created/.updated/.deleted`, `folder.created/.updated/.deleted`).
-- [ ] A1.2 GREEN: `backend/internal/activity/service.go` — add the 6 `Kind` constants; correct the package doc comment (drop "zero callers", name organizations/workspaces/groups/bookmarks/folders).
-- [ ] A1.3 RED: `backend/internal/sync/activity_kind_map_test.go` (new) — `activityKindByEventType` has exactly 6 entries; each of the 8 call sites' `eventType` literals is present and maps to the matching `Kind` constant.
-- [ ] A1.4 GREEN: `backend/internal/sync/postgres.go` — add `activityKindByEventType` map and the `activityRecorder` interface (declared next to `workspaceAccessChecker`).
-- [ ] A1.5 GREEN: `backend/internal/sync/postgres.go` — add `activity activityRecorder` field to `PostgresStore`; update `NewPostgresStore` to accept it (Decision 6: no nil guard).
-- [ ] A1.6 GREEN: `backend/internal/sync/postgres.go` — add `folderAuditMetadata(f bookmarks.Folder)` and `bookmarkAuditMetadata(b bookmarks.Bookmark)` helpers.
-- [ ] A1.7 GREEN: `backend/internal/sync/postgres.go` — `folderDeletePayload`/`bookmarkDeletePayload` gain `name`/`title,url` columns on the existing pre-delete SELECT and return a 3rd `audit map[string]any` value; sync payload keys stay byte-identical.
-- [ ] A1.8 GREEN: `backend/cmd/api/main.go:129` — pass `activityService` into `syncapi.NewPostgresStore(...)`.
-- [ ] A1.9 GREEN: `backend/internal/sync/{postgres_integration,bookmark_routes,handler,replay}_test.go` — update every `NewPostgresStore` call site to pass the new `activityRecorder` argument (mechanical; nil or a no-op stub as each test already does for `publisher`).
+- [x] A1.1 RED: `backend/internal/activity/kind_test.go` — assert the 6 new `Kind` constants' exact wire values (`bookmark.created/.updated/.deleted`, `folder.created/.updated/.deleted`).
+- [x] A1.2 GREEN: `backend/internal/activity/service.go` — add the 6 `Kind` constants; correct the package doc comment (drop "zero callers", name organizations/workspaces/groups/bookmarks/folders).
+- [x] A1.3 RED: `backend/internal/sync/activity_kind_map_test.go` (new) — `activityKindByEventType` has exactly 6 entries; each of the 8 call sites' `eventType` literals is present and maps to the matching `Kind` constant.
+- [x] A1.4 GREEN: `backend/internal/sync/postgres.go` — add `activityKindByEventType` map and the `activityRecorder` interface (declared next to `workspaceAccessChecker`).
+- [x] A1.5 GREEN: `backend/internal/sync/postgres.go` — add `activity activityRecorder` field to `PostgresStore`; update `NewPostgresStore` to accept it (Decision 6: no nil guard).
+- [x] A1.6 GREEN: `backend/internal/sync/postgres.go` — add `folderAuditMetadata(f bookmarks.Folder)` and `bookmarkAuditMetadata(b bookmarks.Bookmark)` helpers.
+- [ ] A1.7 DEFERRED to A2a: `backend/internal/sync/postgres.go` — `folderDeletePayload`/`bookmarkDeletePayload` gain `name`/`title,url` columns on the existing pre-delete SELECT and return a 3rd `audit map[string]any` value; sync payload keys stay byte-identical. Explicit scope narrowing for this apply batch: the delete-payload helpers are bound up with `recordEvent`'s `auditMetadata` wiring (A2a.3), so they move there instead of landing unused in A1.
+- [x] A1.8 GREEN: `backend/cmd/api/main.go:129` — pass `activityService` into `syncapi.NewPostgresStore(...)`.
+- [x] A1.9 GREEN: `backend/internal/sync/{postgres_integration,bookmark_routes,handler,replay}_test.go` — update every `NewPostgresStore` call site to pass the new `activityRecorder` argument (mechanical; nil or a no-op stub as each test already does for `publisher`). Only `postgres_integration_test.go` had call sites (5); `bookmark_routes_test.go`/`handler_test.go`/`replay_test.go` don't call `NewPostgresStore` directly, so no changes were needed there.
 
 ## Phase A2a: `recordEvent` Wiring + Core Mutation Audit Tests
 

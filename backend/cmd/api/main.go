@@ -126,7 +126,7 @@ func main() {
 	go purgeSweeper.Run(ctx, time.Hour)
 	bookmarksService := bookmarks.NewService(pool, accessService)
 	websocketHub := wsapi.NewHub()
-	syncService := syncapi.NewService(syncapi.NewPostgresStore(pool, bookmarksService, workspacesService, websocketHub))
+	syncService := syncapi.NewService(syncapi.NewPostgresStore(pool, bookmarksService, workspacesService, activityService, websocketHub))
 	secrethideService := secrethide.NewService(pool)
 
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {

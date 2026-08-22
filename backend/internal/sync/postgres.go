@@ -10,6 +10,7 @@ import (
 	"hash/fnv"
 	"time"
 
+	"github.com/furia/shared-bookmark-sync/backend/internal/activity"
 	"github.com/furia/shared-bookmark-sync/backend/internal/bookmarks"
 	"github.com/furia/shared-bookmark-sync/backend/internal/workspaces"
 	"github.com/jackc/pgx/v5"
@@ -20,20 +21,60 @@ type workspaceAccessChecker interface {
 	GetAccessibleWorkspace(ctx context.Context, userID, workspaceID string) (workspaces.WorkspaceAccess, error)
 }
 
+// activityRecorder is the subset of *activity.Service this store depends on,
+// mirroring workspaceAccessChecker's narrow-interface pattern above. The
+// activity import is type-only (activity.Kind); activity does not import
+// sync, so there is no cycle.
+type activityRecorder interface {
+	Record(ctx context.Context, tx pgx.Tx, orgID, actorUserID string, kind activity.Kind,
+		targetType, targetID string, metadata map[string]any) error
+}
+
 type PostgresStore struct {
 	pool       *pgxpool.Pool
 	bookmarks  *bookmarks.Service
 	workspaces workspaceAccessChecker
+	activity   activityRecorder // NEW — never nil; see design.md Decision 6
 	publisher  Publisher
 }
 
-func NewPostgresStore(pool *pgxpool.Pool, bookmarkService *bookmarks.Service, workspaceService workspaceAccessChecker, publisher Publisher) *PostgresStore {
+func NewPostgresStore(pool *pgxpool.Pool, bookmarkService *bookmarks.Service,
+	workspaceService workspaceAccessChecker, activityService activityRecorder,
+	publisher Publisher) *PostgresStore {
 	return &PostgresStore{
 		pool:       pool,
 		bookmarks:  bookmarkService,
 		workspaces: workspaceService,
+		activity:   activityService,
 		publisher:  publisher,
 	}
+}
+
+// activityKindByEventType is the ONLY bridge between sync's wire-protocol
+// event_type vocabulary and activity's audit Kind vocabulary. They read alike
+// today by convention, not by contract — this table is what makes the
+// relationship explicit, reviewable, and fail-closed.
+var activityKindByEventType = map[string]activity.Kind{
+	"folder.created":   activity.KindFolderCreated,
+	"folder.updated":   activity.KindFolderUpdated,
+	"folder.deleted":   activity.KindFolderDeleted,
+	"bookmark.created": activity.KindBookmarkCreated,
+	"bookmark.updated": activity.KindBookmarkUpdated,
+	"bookmark.deleted": activity.KindBookmarkDeleted,
+}
+
+// folderAuditMetadata projects the audit-relevant fields off a Folder
+// (design.md "Recorded metadata" table). It is deliberately a narrow
+// projection, never the full resource blob (design.md Decision A).
+func folderAuditMetadata(f bookmarks.Folder) map[string]any {
+	return map[string]any{"name": f.Name}
+}
+
+// bookmarkAuditMetadata projects the audit-relevant fields off a Bookmark
+// (design.md "Recorded metadata" table). It is deliberately a narrow
+// projection, never the full resource blob (design.md Decision A).
+func bookmarkAuditMetadata(b bookmarks.Bookmark) map[string]any {
+	return map[string]any{"title": b.Title, "url": b.URL}
 }
 
 func (s *PostgresStore) CreateFolder(ctx context.Context, userID, workspaceID string, input bookmarks.CreateFolderInput, metadata Metadata) (MutationResult[bookmarks.Folder], error) {
