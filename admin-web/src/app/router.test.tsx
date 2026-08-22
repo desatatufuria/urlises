@@ -203,8 +203,9 @@ describe("admin router", () => {
     expect(screen.getByRole("link", { name: "People" })).toBeInTheDocument();
     await userEvent.click(screen.getByRole("link", { name: /review people/i }));
     expect(router.state.location.pathname).toBe("/members");
-    expect(router.state.location.search).toBe("?panel=invite");
-    expect(await screen.findByRole("dialog", { name: /invite person/i })).toBeInTheDocument();
+    expect(router.state.location.search).toBe("");
+    expect(await screen.findByText("new@example.com")).toBeInTheDocument();
+    expect(screen.queryByRole("dialog", { name: /invite person/i })).not.toBeInTheDocument();
   });
 
   it("switches the applied theme when the color scheme select changes", async () => {

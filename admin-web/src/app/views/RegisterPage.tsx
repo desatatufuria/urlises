@@ -57,7 +57,7 @@ export function RegisterPage() {
           <p className="ui-copy">
             {invitation
               ? "Create your credentials to accept the invitation and join this organization."
-              : "Use your own credentials. No default administrator password is stored in the image."}
+              : "You choose your own password — there's no default to change later."}
           </p>
           <form className="ui-form" onSubmit={handleSubmit}>
             <FormRow label="Name"><input autoComplete="name" required value={form.name} onChange={(event) => setForm((current) => ({ ...current, name: event.target.value }))} /></FormRow>
