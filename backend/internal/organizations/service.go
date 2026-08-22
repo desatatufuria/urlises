@@ -58,6 +58,17 @@ type OrganizationMember struct {
 	Role   string `json:"role"`
 }
 
+// MemberName is the deliberately minimized projection of a coworker used by
+// the secret-recipient directory: enough to identify a delivery target and
+// nothing else. It is a DISTINCT type from OrganizationMember (which carries
+// Role) precisely so this non-admin path cannot leak a role even by
+// accident -- there is no field to populate. Do not add fields here.
+type MemberName struct {
+	UserID string `json:"userId"`
+	Email  string `json:"email"`
+	Name   string `json:"name,omitempty"`
+}
+
 type PatchMemberInput struct {
 	UserID string  `json:"userId"`
 	Role   *string `json:"role,omitempty"`
@@ -104,6 +115,11 @@ type AcceptedInvitation struct {
 
 // invitationTTL is D1: a fixed 7-day expiry, no env knob, no migration.
 const invitationTTL = 168 * time.Hour
+
+// maxSecretRecipientResults caps the directory, mirroring
+// secrethide.maxListOwnedResults. The picker filters client-side, so this is
+// a blast-radius bound, not pagination.
+const maxSecretRecipientResults = 500
 
 // InvitationCreation carries the created invitation plus the organization and
 // inviter context needed to compose the invitation email, without widening
@@ -262,6 +278,47 @@ func (s *Service) ListMembers(ctx context.Context, requesterUserID, organization
 	}
 
 	return members, nil
+}
+
+// ListSecretRecipients returns the deduplicated union of every accepted,
+// active member of every LIVE organization the requester belongs to,
+// including the requester (self-send is supported). It is gated by
+// MEMBERSHIP, not by admin role, and it deliberately does not accept an
+// organization ID: the only caller-derived input is requesterUserID, so a
+// caller cannot name an organization they do not belong to. ListMembers'
+// requireOrganizationAdmin gate and role exposure are untouched by this path.
+func (s *Service) ListSecretRecipients(ctx context.Context, requesterUserID string) ([]MemberName, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT DISTINCT u.id, u.email, COALESCE(u.name, '')
+		FROM organization_members peer
+		JOIN users u ON u.id = peer.user_id AND u.disabled_at IS NULL
+		WHERE peer.organization_id IN (
+			SELECT om.organization_id
+			FROM organization_members om
+			JOIN organizations o ON o.id = om.organization_id AND o.deleted_at IS NULL
+			WHERE om.user_id = $1
+		)
+		ORDER BY u.email, u.id
+		LIMIT $2
+	`, requesterUserID, maxSecretRecipientResults)
+	if err != nil {
+		return nil, fmt.Errorf("query secret recipients: %w", err)
+	}
+	defer rows.Close()
+
+	recipients := make([]MemberName, 0)
+	for rows.Next() {
+		var recipient MemberName
+		if err := rows.Scan(&recipient.UserID, &recipient.Email, &recipient.Name); err != nil {
+			return nil, fmt.Errorf("scan secret recipient: %w", err)
+		}
+		recipients = append(recipients, recipient)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate secret recipients: %w", err)
+	}
+
+	return recipients, nil
 }
 
 func (s *Service) PatchMember(ctx context.Context, requesterUserID, organizationID string, input PatchMemberInput) (OrganizationMember, error) {

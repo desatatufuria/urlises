@@ -33,35 +33,35 @@ Each unit is developed, tested, and merged into the previous unit's branch befor
 
 ## Phase B1: Backend — Type, Query, Service Method
 
-- [ ] B1.1 GREEN: `backend/internal/organizations/service.go` — add `MemberName{UserID,Email,Name}` struct (no `role` field) and `const maxSecretRecipientResults = 500`, per design.md's exact doc comments.
-- [ ] B1.2 RED: `backend/internal/organizations/service_test.go` — minimized-shape test: `MemberName` has exactly 3 fields; `json.Marshal` of a populated value never emits `"role"`.
-- [ ] B1.3 RED: `backend/internal/organizations/predicate_test.go` — update `membershipJoin` expected count from 3 to 4 and its comment/failure message to name CP14/`ListSecretRecipients`, in the SAME commit as B1.4 (design.md: this test fails on GREEN otherwise).
-- [ ] B1.4 GREEN: `backend/internal/organizations/service.go` — implement `ListSecretRecipients(ctx, requesterUserID)` with the CP14 SQL (membership subquery + `u.disabled_at IS NULL` + `DISTINCT` + `ORDER BY u.email, u.id` + `LIMIT $2`), `make([]MemberName, 0)` default. Confirm B1.3 now passes (count is 4).
+- [x] B1.1 GREEN: `backend/internal/organizations/service.go` — add `MemberName{UserID,Email,Name}` struct (no `role` field) and `const maxSecretRecipientResults = 500`, per design.md's exact doc comments.
+- [x] B1.2 RED: `backend/internal/organizations/service_test.go` — minimized-shape test: `MemberName` has exactly 3 fields; `json.Marshal` of a populated value never emits `"role"`.
+- [x] B1.3 RED: `backend/internal/organizations/predicate_test.go` — update `membershipJoin` expected count from 3 to 4 and its comment/failure message to name CP14/`ListSecretRecipients`, in the SAME commit as B1.4 (design.md: this test fails on GREEN otherwise).
+- [x] B1.4 GREEN: `backend/internal/organizations/service.go` — implement `ListSecretRecipients(ctx, requesterUserID)` with the CP14 SQL (membership subquery + `u.disabled_at IS NULL` + `DISTINCT` + `ORDER BY u.email, u.id` + `LIMIT $2`), `make([]MemberName, 0)` default. Confirm B1.3 now passes (count is 4).
 
 ## Phase B2: Backend — Integration Coverage (DB-backed)
 
-- [ ] B2.1 RED: `service_test.go` — cross-org union + dedup: requester in org A and org B; shared peer appears exactly once; peers unique to A and unique to B both appear.
-- [ ] B2.2 RED: `service_test.go` — self-inclusion: requester's own `userId` present in their own result.
-- [ ] B2.3 RED: `service_test.go` — membership-gate-not-admin-gate: requester seeded with role `member` gets a full non-empty result.
-- [ ] B2.4 RED: `service_test.go` — cross-org isolation: a third org the requester does not belong to contributes zero rows.
-- [ ] B2.5 RED: `service_test.go` — pending-invitation exclusion: seed via `insertOrganizationsTestInvitation` with `status='pending'`, assert absent; after `AcceptInvitation`, assert present.
-- [ ] B2.6 RED: `service_test.go` — deactivated-user exclusion: add `disableOrganizationsTestUser` helper (mirrors `softDeleteGroupsTestOrganization`); set `disabled_at`, assert the peer disappears while their `organization_members` row still exists.
-- [ ] B2.7 RED: `service_test.go` — soft-deleted-org exclusion: stamp `deleted_at` on the shared org, assert its peers vanish (mirrors `groups/service_integration_test.go:120`'s CP11 case).
-- [ ] B2.8 RED: `service_test.go` — zero-orgs case: requester with no membership gets `[]`, not null, not an error.
-- [ ] B2.9 RED: `service_test.go` — `LIMIT` honoured: seed more than `maxSecretRecipientResults` peers, assert exactly the cap is returned.
-- [ ] B2.10 RED: `service_test.go` — `ListMembers` regression proof: in the same fixture, assert `ListMembers` still returns `ErrForbidden` for a plain member and still populates `role` for an admin with the existing ordering (Success Criterion 2).
-- [ ] B2.11 GREEN: run B2.1–B2.10 against B1.4's implementation; confirm all pass with no further production changes.
+- [x] B2.1 RED: `service_test.go` — cross-org union + dedup: requester in org A and org B; shared peer appears exactly once; peers unique to A and unique to B both appear.
+- [x] B2.2 RED: `service_test.go` — self-inclusion: requester's own `userId` present in their own result.
+- [x] B2.3 RED: `service_test.go` — membership-gate-not-admin-gate: requester seeded with role `member` gets a full non-empty result.
+- [x] B2.4 RED: `service_test.go` — cross-org isolation: a third org the requester does not belong to contributes zero rows.
+- [x] B2.5 RED: `service_test.go` — pending-invitation exclusion: seed via `insertOrganizationsTestInvitation` with `status='pending'`, assert absent; after `AcceptInvitation`, assert present.
+- [x] B2.6 RED: `service_test.go` — deactivated-user exclusion: add `disableOrganizationsTestUser` helper (mirrors `softDeleteGroupsTestOrganization`); set `disabled_at`, assert the peer disappears while their `organization_members` row still exists.
+- [x] B2.7 RED: `service_test.go` — soft-deleted-org exclusion: stamp `deleted_at` on the shared org, assert its peers vanish (mirrors `groups/service_integration_test.go:120`'s CP11 case).
+- [x] B2.8 RED: `service_test.go` — zero-orgs case: requester with no membership gets `[]`, not null, not an error.
+- [x] B2.9 RED: `service_test.go` — `LIMIT` honoured: seed more than `maxSecretRecipientResults` peers, assert exactly the cap is returned.
+- [x] B2.10 RED: `service_test.go` — `ListMembers` regression proof: in the same fixture, assert `ListMembers` still returns `ErrForbidden` for a plain member and still populates `role` for an admin with the existing ordering (Success Criterion 2).
+- [x] B2.11 GREEN: run B2.1–B2.10 against B1.4's implementation; confirm all pass with no further production changes. (All 10 cases SKIP cleanly — no `ORGANIZATIONS_TEST_DATABASE_URL`/`DATABASE_URL` this session — package build/vet is clean and all DB-free tests pass.)
 
 ## Phase B3: Backend — Route + Handler Coverage
 
-- [ ] B3.1 GREEN: `backend/internal/organizations/handler.go` — add `ListSecretRecipients(context.Context, string) ([]MemberName, error)` to the `routeService` interface.
-- [ ] B3.2 GREEN: `handler.go` — register `mux.Handle("GET /me/secret-recipients", authMiddleware(...))`: 401 via `PrincipalFromContext` when absent; else call `service.ListSecretRecipients(ctx, principal.UserID)` and `httpapi.WriteJSON(w, 200, map[string]any{"recipients": recipients})`; errors through the existing `writeOrganizationError`. Add the namespace-ownership doc comment above it.
-- [ ] B3.3 GREEN: `backend/internal/auth/handler.go` — add the reciprocal one-line comment beside `POST /me/deactivate` (line ~162) noting `GET /me/secret-recipients` is registered in `organizations/handler.go`. No behavior change.
-- [ ] B3.4 RED: `backend/internal/organizations/handler_test.go` — add `ListSecretRecipients` to `organizationsRouteStub`, recording the received `requesterUserID` only (no org id param).
-- [ ] B3.5 RED: `handler_test.go` — no principal ⇒ 401 with no body leakage; with principal ⇒ 200 and raw-JSON assertion (not decoded struct) that the body contains `userId`/`email`/`name` keys and no `role` key.
-- [ ] B3.6 RED: `handler_test.go` — stub receives exactly `principal.UserID` and no organization id argument (locks the "no client-supplied org id" property).
-- [ ] B3.7 RED: `handler_test.go` — register all routes on one mux and assert `GET /me/secret-recipients` resolves without shadowing/being shadowed by `GET /me` or `GET /me/preferences`.
-- [ ] B3.8 GREEN: run B3.4–B3.7 against B3.1–B3.2; confirm all pass.
+- [x] B3.1 GREEN: `backend/internal/organizations/handler.go` — add `ListSecretRecipients(context.Context, string) ([]MemberName, error)` to the `routeService` interface.
+- [x] B3.2 GREEN: `handler.go` — register `mux.Handle("GET /me/secret-recipients", authMiddleware(...))`: 401 via `PrincipalFromContext` when absent; else call `service.ListSecretRecipients(ctx, principal.UserID)` and `httpapi.WriteJSON(w, 200, map[string]any{"recipients": recipients})`; errors through the existing `writeOrganizationError`. Add the namespace-ownership doc comment above it.
+- [x] B3.3 GREEN: `backend/internal/auth/handler.go` — add the reciprocal one-line comment beside `POST /me/deactivate` (line ~162) noting `GET /me/secret-recipients` is registered in `organizations/handler.go`. No behavior change.
+- [x] B3.4 RED: `backend/internal/organizations/handler_test.go` — add `ListSecretRecipients` to `organizationsRouteStub`, recording the received `requesterUserID` only (no org id param).
+- [x] B3.5 RED: `handler_test.go` — no principal ⇒ 401 with no body leakage; with principal ⇒ 200 and raw-JSON assertion (not decoded struct) that the body contains `userId`/`email`/`name` keys and no `role` key.
+- [x] B3.6 RED: `handler_test.go` — stub receives exactly `principal.UserID` and no organization id argument (locks the "no client-supplied org id" property).
+- [x] B3.7 RED: `handler_test.go` — register all routes on one mux and assert `GET /me/secret-recipients` resolves without shadowing/being shadowed by `GET /me` or `GET /me/preferences`.
+- [x] B3.8 GREEN: run B3.4–B3.7 against B3.1–B3.2; confirm all pass.
 
 ## Phase E1: Extension — Types, API, Background Wiring
 
