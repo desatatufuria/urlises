@@ -122,22 +122,22 @@ Each unit is developed, tested, and merged into the previous unit's branch befor
 
 ### 3a — Backend restore + list-deleted
 
-- [ ] 3.1 CREATE: `backend/internal/purge/purge.go` — `Window = 30 * 24 * time.Hour` const + package doc (slice 3 scope only; `Sweeper` added in slice 4).
-- [ ] 3.2 RED: `organizations/service_test.go` — `RestoreOrganization`: owner/admin restore succeeds, `deleted_at` cleared, entity fully usable (memberships, workspaces, bookmarks, pre-deletion activity trail intact); a plain `member` → `ErrForbidden`; a non-member → `ErrForbidden`; restoring a live org → `ErrNotFound`; unknown id → `ErrNotFound`; no orphan/sole-owner guard re-runs; `organization.restored` recorded.
-- [ ] 3.3 GREEN: `organizations/service.go` — `lockDeletedOrganization` (`WHERE id=$1 AND deleted_at IS NOT NULL FOR UPDATE`); `loadOrganizationRoleIncludingDeleted` (byte-identical to pre-slice-2 `loadOrganizationRole` SQL — the deliberate exception); `RestoreOrganization(ctx, requesterUserID, organizationID) error`.
-- [ ] 3.4 GREEN: `activity/service.go` — add `KindOrganizationRestored`, `KindWorkspaceRestored`.
-- [ ] 3.5 RED: `organizations/service_test.go` — `ListDeletedOrganizations`: returns only orgs the requester owns/admins; a plain member of a trashed org gets an empty result, not a 403; `purgeAt == deletedAt + purge.Window`.
-- [ ] 3.6 GREEN: `organizations/service.go` — `ListDeletedOrganizations` running the Trash organizations query (inline `JOIN organization_members` role filter as authorization, `LEFT JOIN users` for `deleted_by`).
-- [ ] 3.7 RED: `organizations/handler_test.go` — `POST /organizations/{organizationId}/restore` → 204/403/404; `GET /organizations/deleted` → 200 `{"organizations":[...]}`.
-- [ ] 3.8 GREEN: `organizations/handler.go` — `routeService` +`RestoreOrganization`,+`ListDeletedOrganizations`; register both routes.
-- [ ] 3.9 RED: `workspaces/service_test.go` — `Restore`: succeeds inside a live org; a workspace inside a soft-deleted org → `ErrNotFound` (restore the org first); restoring a live workspace → `ErrNotFound`; non-admin → `ErrForbidden`; `workspace.restored` recorded.
-- [ ] 3.10 GREEN: `workspaces/service.go` — `loadDeletedWorkspaceMetadataRecord` (`w.deleted_at IS NOT NULL AND o.deleted_at IS NULL`); `Restore(ctx, requesterUserID, workspaceID) error` via `access.RequireOrganizationAdmin`.
-- [ ] 3.11 RED: `workspaces/service_test.go` — `ListDeleted`: returns only workspaces the requester owns/admins; workspaces of a trashed organization are excluded; `purgeAt == deletedAt + purge.Window`.
-- [ ] 3.12 GREEN: `workspaces/service.go` — `ListDeleted` running the Trash workspaces query.
-- [ ] 3.13 RED: `workspaces/handler_test.go` — `POST /workspaces/{workspaceId}/restore` → 204/403/404; `GET /workspaces/deleted` → 200; route-precedence test that `/workspaces/deleted` does not match `{workspaceId}`.
-- [ ] 3.14 GREEN: `workspaces/handler.go` — `routeService` +`Restore`,+`ListDeleted`; register both routes.
-- [ ] 3.15 RED: `admin-web/src/features/activity/format.test.ts` — renders `organization.restored` and `workspace.restored` with representative and missing metadata.
-- [ ] 3.16 GREEN: `admin-web/src/features/activity/format.ts` — add both case branches; `admin-web/src/lib/api/activity.ts` — add both to `ActivityKind`.
+- [x] 3.1 CREATE: `backend/internal/purge/purge.go` — `Window = 30 * 24 * time.Hour` const + package doc (slice 3 scope only; `Sweeper` added in slice 4).
+- [x] 3.2 RED: `organizations/service_test.go` — `RestoreOrganization`: owner/admin restore succeeds, `deleted_at` cleared, entity fully usable (memberships, workspaces, bookmarks, pre-deletion activity trail intact); a plain `member` → `ErrForbidden`; a non-member → `ErrForbidden`; restoring a live org → `ErrNotFound`; unknown id → `ErrNotFound`; no orphan/sole-owner guard re-runs; `organization.restored` recorded.
+- [x] 3.3 GREEN: `organizations/service.go` — `lockDeletedOrganization` (`WHERE id=$1 AND deleted_at IS NOT NULL FOR UPDATE`); `loadOrganizationRoleIncludingDeleted` (byte-identical to pre-slice-2 `loadOrganizationRole` SQL — the deliberate exception); `RestoreOrganization(ctx, requesterUserID, organizationID) error`.
+- [x] 3.4 GREEN: `activity/service.go` — add `KindOrganizationRestored`, `KindWorkspaceRestored`.
+- [x] 3.5 RED: `organizations/service_test.go` — `ListDeletedOrganizations`: returns only orgs the requester owns/admins; a plain member of a trashed org gets an empty result, not a 403; `purgeAt == deletedAt + purge.Window`.
+- [x] 3.6 GREEN: `organizations/service.go` — `ListDeletedOrganizations` running the Trash organizations query (inline `JOIN organization_members` role filter as authorization, `LEFT JOIN users` for `deleted_by`).
+- [x] 3.7 RED: `organizations/handler_test.go` — `POST /organizations/{organizationId}/restore` → 204/403/404; `GET /organizations/deleted` → 200 `{"organizations":[...]}`.
+- [x] 3.8 GREEN: `organizations/handler.go` — `routeService` +`RestoreOrganization`,+`ListDeletedOrganizations`; register both routes.
+- [x] 3.9 RED: `workspaces/service_test.go` — `Restore`: succeeds inside a live org; a workspace inside a soft-deleted org → `ErrNotFound` (restore the org first); restoring a live workspace → `ErrNotFound`; non-admin → `ErrForbidden`; `workspace.restored` recorded.
+- [x] 3.10 GREEN: `workspaces/service.go` — `loadDeletedWorkspaceMetadataRecord` (`w.deleted_at IS NOT NULL AND o.deleted_at IS NULL`); `Restore(ctx, requesterUserID, workspaceID) error` via `access.RequireOrganizationAdmin`.
+- [x] 3.11 RED: `workspaces/service_test.go` — `ListDeleted`: returns only workspaces the requester owns/admins; workspaces of a trashed organization are excluded; `purgeAt == deletedAt + purge.Window`.
+- [x] 3.12 GREEN: `workspaces/service.go` — `ListDeleted` running the Trash workspaces query.
+- [x] 3.13 RED: `workspaces/handler_test.go` — `POST /workspaces/{workspaceId}/restore` → 204/403/404; `GET /workspaces/deleted` → 200; route-precedence test that `/workspaces/deleted` does not match `{workspaceId}`.
+- [x] 3.14 GREEN: `workspaces/handler.go` — `routeService` +`Restore`,+`ListDeleted`; register both routes.
+- [ ] 3.15 RED: `admin-web/src/features/activity/format.test.ts` — renders `organization.restored` and `workspace.restored` with representative and missing metadata. **BLOCKED this batch**: apply instructions explicitly forbade touching admin-web files this unit, which conflicts with this task's numeric inclusion in "3a" — see apply-progress risks.
+- [ ] 3.16 GREEN: `admin-web/src/features/activity/format.ts` — add both case branches; `admin-web/src/lib/api/activity.ts` — add both to `ActivityKind`. **BLOCKED this batch**, same reason as 3.15.
 
 ### 3b — Trash frontend feature + wiring
 

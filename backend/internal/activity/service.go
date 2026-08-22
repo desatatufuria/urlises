@@ -47,6 +47,11 @@ const (
 	// nothing" decision for organization delete: under soft delete nothing
 	// cascades the row away, so the event survives (design.md Deviation 3).
 	KindOrganizationDeleted Kind = "organization.deleted"
+	// KindOrganizationRestored and KindWorkspaceRestored record the slice 3
+	// restore mutation, symmetric with KindOrganizationDeleted and
+	// KindWorkspaceDeleted.
+	KindOrganizationRestored Kind = "organization.restored"
+	KindWorkspaceRestored    Kind = "workspace.restored"
 )
 
 // minListLimit and maxListLimit are the clamp bounds ListByOrganization

@@ -12,6 +12,7 @@ import (
 
 	"github.com/furia/shared-bookmark-sync/backend/internal/access"
 	"github.com/furia/shared-bookmark-sync/backend/internal/activity"
+	"github.com/furia/shared-bookmark-sync/backend/internal/purge"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -938,6 +939,110 @@ func (s *Service) ValidatePendingInvitation(ctx context.Context, token, email st
 	return nil
 }
 
+// DeletedOrganization is one row of ListDeletedOrganizations, the Trash list
+// for organizations. PurgeAt is computed server-side (deleted_at +
+// purge.Window) so the 30-day window lives in exactly one place (design.md
+// "Home of the window constant").
+type DeletedOrganization struct {
+	OrganizationID   string  `json:"organizationId"`
+	OrganizationName string  `json:"organizationName"`
+	Role             string  `json:"role"`
+	DeletedAt        string  `json:"deletedAt"`
+	DeletedByEmail   *string `json:"deletedByEmail,omitempty"`
+	PurgeAt          string  `json:"purgeAt"`
+}
+
+// RestoreOrganization reverses a soft delete. Modeled on DeleteOrganization's
+// locking sequence but using the deleted-side counterparts:
+// lockDeletedOrganization (FOR UPDATE, only matches a currently-trashed row)
+// -> loadOrganizationRoleIncludingDeleted (THE deliberate exception -- see
+// its own doc comment) -> reject anything other than owner/admin -> UPDATE
+// clearing deleted_at/deleted_by_user_id -> activity.Record(KindOrganizationRestored)
+// -> commit. No orphan/sole-owner guard re-runs here: design.md Decision D
+// notes memberships were never touched by the soft delete, so there is
+// nothing to re-verify.
+func (s *Service) RestoreOrganization(ctx context.Context, requesterUserID, organizationID string) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin restore organization tx: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	if err := lockDeletedOrganization(ctx, tx, organizationID); err != nil {
+		return err
+	}
+
+	role, err := loadOrganizationRoleIncludingDeleted(ctx, tx, organizationID, requesterUserID)
+	if err != nil {
+		return err
+	}
+	if role != access.OrganizationRoleOwner && role != access.OrganizationRoleAdmin {
+		return ErrForbidden
+	}
+
+	result, err := tx.Exec(ctx, `
+		UPDATE organizations
+		SET deleted_at = NULL, deleted_by_user_id = NULL, updated_at = NOW()
+		WHERE id = $1 AND deleted_at IS NOT NULL
+	`, organizationID)
+	if err != nil {
+		return fmt.Errorf("restore organization: %w", err)
+	}
+	if result.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+
+	if err := s.activity.Record(ctx, tx, organizationID, requesterUserID, activity.KindOrganizationRestored, "organization", organizationID, map[string]any{}); err != nil {
+		return fmt.Errorf("record organization restored activity: %w", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit restore organization tx: %w", err)
+	}
+
+	return nil
+}
+
+// ListDeletedOrganizations is requester-scoped, not org-scoped: there is no
+// live org to scope Trash to for a deleted organization. Authorization is
+// inline in the query -- JOIN organization_members om ON ... AND
+// om.role IN ('owner', 'admin') -- never a separate gate call, so a
+// non-admin requester (including a plain member of a trashed org) simply
+// gets an empty result set, never a 403 (design.md "Trash scoping and route
+// shape" decision -- intentional, not a bug).
+func (s *Service) ListDeletedOrganizations(ctx context.Context, requesterUserID string) ([]DeletedOrganization, error) {
+	windowInterval := purgeWindowIntervalLiteral()
+
+	rows, err := s.pool.Query(ctx, `
+		SELECT o.id, o.name, om.role, o.deleted_at::text, u.email, (o.deleted_at + $2::interval)::text
+		FROM organizations o
+		JOIN organization_members om ON om.organization_id = o.id
+									AND om.user_id = $1
+									AND om.role IN ('owner', 'admin')
+		LEFT JOIN users u ON u.id = o.deleted_by_user_id
+		WHERE o.deleted_at IS NOT NULL
+		ORDER BY o.deleted_at DESC, o.id
+	`, requesterUserID, windowInterval)
+	if err != nil {
+		return nil, fmt.Errorf("query deleted organizations: %w", err)
+	}
+	defer rows.Close()
+
+	deleted := make([]DeletedOrganization, 0)
+	for rows.Next() {
+		var d DeletedOrganization
+		if err := rows.Scan(&d.OrganizationID, &d.OrganizationName, &d.Role, &d.DeletedAt, &d.DeletedByEmail, &d.PurgeAt); err != nil {
+			return nil, fmt.Errorf("scan deleted organization: %w", err)
+		}
+		deleted = append(deleted, d)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate deleted organizations: %w", err)
+	}
+
+	return deleted, nil
+}
+
 func requireOrganizationAdmin(ctx context.Context, querier dbQuerier, userID, organizationID string) error {
 	role, err := loadOrganizationRole(ctx, querier, organizationID, userID)
 	if err != nil {
@@ -975,6 +1080,65 @@ func loadOrganizationRole(ctx context.Context, querier dbQuerier, organizationID
 	}
 
 	return normalizedRole, nil
+}
+
+// loadOrganizationRoleIncludingDeleted is THE single deliberate exception in
+// this codebase: it resolves an organization role with NO soft-delete
+// predicate at all. It exists only because RestoreOrganization must
+// authorize against an organization that is, by definition, currently
+// soft-deleted -- loadOrganizationRole (choke point 2, JOIN ... AND
+// o.deleted_at IS NULL) would return ErrForbidden for every single restore
+// attempt, making restore unreachable. Soft delete never touches
+// organization_members, so this reads exactly the role the requester held
+// at deletion time. Byte-identical to loadOrganizationRole's SQL from
+// before choke point 2 was added: organization_members only, no
+// organizations JOIN at all. Reachable ONLY from RestoreOrganization. The
+// caller MUST reject any role other than owner/admin -- including the
+// pgx.ErrNoRows case (a non-member), which this function reports as
+// ErrForbidden, matching loadOrganizationRole's own no-rows mapping.
+func loadOrganizationRoleIncludingDeleted(ctx context.Context, querier dbQuerier, organizationID, userID string) (access.OrganizationRole, error) {
+	var role string
+	err := querier.QueryRow(ctx, `
+		SELECT role FROM organization_members WHERE organization_id = $1 AND user_id = $2
+	`, organizationID, userID).Scan(&role)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return "", ErrForbidden
+		}
+		return "", fmt.Errorf("query organization role including deleted: %w", err)
+	}
+
+	normalizedRole, err := normalizeOrganizationRole(role)
+	if err != nil {
+		return "", err
+	}
+
+	return normalizedRole, nil
+}
+
+// lockDeletedOrganization is RestoreOrganization's counterpart to
+// lockOrganization: it locks the row FOR UPDATE but requires deleted_at IS
+// NOT NULL, so it matches only a currently-trashed organization. A live
+// organization and an unknown id both resolve to ErrNotFound here --
+// restoring something that is not in the trash is not a distinct error
+// case (design.md "Restore idempotency error" decision).
+func lockDeletedOrganization(ctx context.Context, querier dbQuerier, organizationID string) error {
+	var id string
+	err := querier.QueryRow(ctx, `SELECT id FROM organizations WHERE id = $1 AND deleted_at IS NOT NULL FOR UPDATE`, organizationID).Scan(&id)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrNotFound
+		}
+		return fmt.Errorf("lock deleted organization: %w", err)
+	}
+	return nil
+}
+
+// purgeWindowIntervalLiteral formats purge.Window as a Postgres interval
+// literal ("N seconds"), the unambiguous format for a Go time.Duration
+// passed as a query parameter and cast with ::interval in SQL.
+func purgeWindowIntervalLiteral() string {
+	return fmt.Sprintf("%d seconds", int64(purge.Window/time.Second))
 }
 
 // loadOrganizationMember is choke point 3: defense in depth behind choke

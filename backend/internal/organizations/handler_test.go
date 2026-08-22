@@ -21,11 +21,14 @@ import (
 )
 
 type organizationsRouteStub struct {
-	requester   string
-	invitations []PendingInvitation
-	err         error
-	cancelErr   error
-	deleteErr   error
+	requester            string
+	invitations          []PendingInvitation
+	err                  error
+	cancelErr            error
+	deleteErr            error
+	restoreErr           error
+	deletedOrganizations []DeletedOrganization
+	listDeletedErr       error
 }
 
 func TestCreationRoutesRequireIdempotencyKey(t *testing.T) {
@@ -77,6 +80,14 @@ func (s *organizationsRouteStub) CancelInvitation(context.Context, string, strin
 func (s *organizationsRouteStub) DeleteOrganization(_ context.Context, requester, _ string) error {
 	s.requester = requester
 	return s.deleteErr
+}
+func (s *organizationsRouteStub) RestoreOrganization(_ context.Context, requester, _ string) error {
+	s.requester = requester
+	return s.restoreErr
+}
+func (s *organizationsRouteStub) ListDeletedOrganizations(_ context.Context, requester string) ([]DeletedOrganization, error) {
+	s.requester = requester
+	return s.deletedOrganizations, s.listDeletedErr
 }
 
 func organizationPrincipal(next http.Handler) http.Handler {
@@ -192,6 +203,83 @@ func TestDeleteOrganizationRouteEnvelopeAuthAndErrors(t *testing.T) {
 	RegisterRoutes(mux, func(next http.Handler) http.Handler { return next }, stub, nil)
 	recorder = httptest.NewRecorder()
 	mux.ServeHTTP(recorder, httptest.NewRequest(http.MethodDelete, "/organizations/org-1", nil))
+	if recorder.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthorized status=%d, want 401", recorder.Code)
+	}
+}
+
+// Slice 3a — RED: POST /organizations/{organizationId}/restore returns 204
+// on success, 403 on ErrForbidden (mapped from loadOrganizationRoleIncludingDeleted's
+// non-owner/non-admin rejection), 404 on ErrNotFound (already-live org or
+// unknown id, both reuse the Restore idempotency error decision), and 401
+// when unauthenticated -- mirrors TestDeleteOrganizationRouteEnvelopeAuthAndErrors's
+// stub-driven style so this runs without a database.
+func TestRestoreOrganizationRouteEnvelopeAuthAndErrors(t *testing.T) {
+	stub := &organizationsRouteStub{}
+	mux := http.NewServeMux()
+	RegisterRoutes(mux, organizationPrincipal, stub, nil)
+
+	recorder := httptest.NewRecorder()
+	mux.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/organizations/org-1/restore", nil))
+	if recorder.Code != http.StatusNoContent {
+		t.Fatalf("status=%d, want 204", recorder.Code)
+	}
+	if recorder.Body.Len() != 0 {
+		t.Fatalf("body=%q, want empty", recorder.Body.String())
+	}
+	if stub.requester != "admin-1" {
+		t.Fatalf("requester=%q, want admin-1", stub.requester)
+	}
+
+	stub.restoreErr = ErrForbidden
+	recorder = httptest.NewRecorder()
+	mux.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/organizations/org-1/restore", nil))
+	if recorder.Code != http.StatusForbidden {
+		t.Fatalf("forbidden status=%d, want 403", recorder.Code)
+	}
+
+	stub.restoreErr = ErrNotFound
+	recorder = httptest.NewRecorder()
+	mux.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/organizations/org-1/restore", nil))
+	if recorder.Code != http.StatusNotFound {
+		t.Fatalf("not found status=%d, want 404", recorder.Code)
+	}
+
+	mux = http.NewServeMux()
+	RegisterRoutes(mux, func(next http.Handler) http.Handler { return next }, stub, nil)
+	recorder = httptest.NewRecorder()
+	mux.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/organizations/org-1/restore", nil))
+	if recorder.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthorized status=%d, want 401", recorder.Code)
+	}
+}
+
+// Slice 3a — RED: GET /organizations/deleted returns 200 with a
+// {"organizations": [...]} envelope, and 401 when unauthenticated. There is
+// no 403 case: design.md's "Trash scoping and route shape" decision makes
+// authorization inline in the query -- an unauthorized requester gets an
+// empty list, never a 403 -- so the route itself never produces one.
+func TestListDeletedOrganizationsRouteEnvelope(t *testing.T) {
+	stub := &organizationsRouteStub{deletedOrganizations: []DeletedOrganization{{OrganizationID: "org-1", OrganizationName: "Trashed Org", Role: "owner"}}}
+	mux := http.NewServeMux()
+	RegisterRoutes(mux, organizationPrincipal, stub, nil)
+
+	recorder := httptest.NewRecorder()
+	mux.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/organizations/deleted", nil))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status=%d, want 200", recorder.Code)
+	}
+	if stub.requester != "admin-1" {
+		t.Fatalf("requester=%q, want admin-1", stub.requester)
+	}
+	if got := recorder.Body.String(); !contains(got, "organizations") || !contains(got, "Trashed Org") {
+		t.Fatalf("unexpected envelope %s", got)
+	}
+
+	mux = http.NewServeMux()
+	RegisterRoutes(mux, func(next http.Handler) http.Handler { return next }, stub, nil)
+	recorder = httptest.NewRecorder()
+	mux.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/organizations/deleted", nil))
 	if recorder.Code != http.StatusUnauthorized {
 		t.Fatalf("unauthorized status=%d, want 401", recorder.Code)
 	}

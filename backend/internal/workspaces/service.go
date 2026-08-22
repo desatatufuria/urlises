@@ -6,9 +6,11 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/furia/shared-bookmark-sync/backend/internal/access"
 	"github.com/furia/shared-bookmark-sync/backend/internal/activity"
+	"github.com/furia/shared-bookmark-sync/backend/internal/purge"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -654,6 +656,140 @@ func (s *Service) GetTree(ctx context.Context, userID, workspaceID string) (Tree
 	}
 
 	return TreeResponse{Workspace: workspace, Folders: buildFolderTree(folders, bookmarks)}, nil
+}
+
+// DeletedWorkspace is one row of ListDeleted, the Trash list for
+// workspaces. PurgeAt is computed server-side, mirroring
+// organizations.DeletedOrganization.
+type DeletedWorkspace struct {
+	WorkspaceID      string  `json:"workspaceId"`
+	WorkspaceName    string  `json:"workspaceName"`
+	WorkspaceType    string  `json:"workspaceType"`
+	OrganizationID   string  `json:"organizationId"`
+	OrganizationName string  `json:"organizationName"`
+	DeletedAt        string  `json:"deletedAt"`
+	DeletedByEmail   *string `json:"deletedByEmail,omitempty"`
+	PurgeAt          string  `json:"purgeAt"`
+}
+
+// Restore reverses a soft delete. Unlike organizations.RestoreOrganization,
+// no admin-gate exception is needed here: loadDeletedWorkspaceMetadataRecord
+// already requires the organization to be live, so
+// access.RequireOrganizationAdmin -- the same org-liveness-filtered gate
+// every other workspace mutation uses -- is correct as-is on this path
+// (design.md "Restore admin gate for a workspace" decision).
+func (s *Service) Restore(ctx context.Context, requesterUserID, workspaceID string) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin restore workspace tx: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	metadata, err := loadDeletedWorkspaceMetadataRecord(ctx, tx, workspaceID)
+	if err != nil {
+		return err
+	}
+	if err := access.RequireOrganizationAdmin(ctx, tx, requesterUserID, metadata.OrganizationID); err != nil {
+		return mapAccessError(err)
+	}
+
+	result, err := tx.Exec(ctx, `
+		UPDATE workspaces
+		SET deleted_at = NULL, deleted_by_user_id = NULL, updated_at = NOW()
+		WHERE id = $1 AND organization_id = $2 AND deleted_at IS NOT NULL
+	`, workspaceID, metadata.OrganizationID)
+	if err != nil {
+		return fmt.Errorf("restore workspace: %w", err)
+	}
+	if result.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+
+	if err := s.activity.Record(ctx, tx, metadata.OrganizationID, requesterUserID, activity.KindWorkspaceRestored, "workspace", workspaceID, map[string]any{
+		"workspaceName": metadata.WorkspaceName,
+		"workspaceType": metadata.WorkspaceType,
+	}); err != nil {
+		return fmt.Errorf("record workspace restored activity: %w", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit restore workspace tx: %w", err)
+	}
+
+	return nil
+}
+
+// ListDeleted is requester-scoped, mirroring
+// organizations.ListDeletedOrganizations: authorization is inline in the
+// query (JOIN organization_members ... role IN ('owner', 'admin')), never a
+// separate gate call. o.deleted_at IS NULL on the organizations JOIN is
+// deliberate: a workspace inside a trashed organization is not individually
+// restorable, so it must not be individually listed either (design.md
+// "Trash: workspaces" query comment).
+func (s *Service) ListDeleted(ctx context.Context, requesterUserID string) ([]DeletedWorkspace, error) {
+	windowInterval := fmt.Sprintf("%d seconds", int64(purge.Window/time.Second))
+
+	rows, err := s.pool.Query(ctx, `
+		SELECT w.id, w.name, w.type, o.id, o.name, w.deleted_at::text, u.email,
+			   (w.deleted_at + $2::interval)::text
+		FROM workspaces w
+		JOIN organizations o ON o.id = w.organization_id AND o.deleted_at IS NULL
+		JOIN organization_members om ON om.organization_id = w.organization_id
+									AND om.user_id = $1
+									AND om.role IN ('owner', 'admin')
+		LEFT JOIN users u ON u.id = w.deleted_by_user_id
+		WHERE w.deleted_at IS NOT NULL
+		ORDER BY w.deleted_at DESC, w.id
+	`, requesterUserID, windowInterval)
+	if err != nil {
+		return nil, fmt.Errorf("query deleted workspaces: %w", err)
+	}
+	defer rows.Close()
+
+	deleted := make([]DeletedWorkspace, 0)
+	for rows.Next() {
+		var d DeletedWorkspace
+		if err := rows.Scan(&d.WorkspaceID, &d.WorkspaceName, &d.WorkspaceType, &d.OrganizationID, &d.OrganizationName, &d.DeletedAt, &d.DeletedByEmail, &d.PurgeAt); err != nil {
+			return nil, fmt.Errorf("scan deleted workspace: %w", err)
+		}
+		deleted = append(deleted, d)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate deleted workspaces: %w", err)
+	}
+
+	return deleted, nil
+}
+
+// loadDeletedWorkspaceMetadataRecord is Restore's counterpart to
+// loadWorkspaceMetadataRecord (choke point 15): it requires the workspace to
+// be soft-deleted AND its organization to be live. No admin-gate exception
+// is needed here (unlike organizations.RestoreOrganization) -- a workspace
+// inside a soft-deleted organization is simply not individually restorable;
+// the organization must be restored first (design.md "Restore admin gate
+// for a workspace" decision).
+func loadDeletedWorkspaceMetadataRecord(ctx context.Context, querier dbQuerier, workspaceID string) (workspaceMetadataRecord, error) {
+	var metadata workspaceMetadataRecord
+	err := querier.QueryRow(ctx, `
+		SELECT w.id, w.name, w.type, o.id, o.name
+		FROM workspaces w
+		JOIN organizations o ON o.id = w.organization_id
+		WHERE w.id = $1 AND w.deleted_at IS NOT NULL AND o.deleted_at IS NULL
+	`, workspaceID).Scan(
+		&metadata.WorkspaceID,
+		&metadata.WorkspaceName,
+		&metadata.WorkspaceType,
+		&metadata.OrganizationID,
+		&metadata.OrganizationName,
+	)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return workspaceMetadataRecord{}, ErrNotFound
+		}
+		return workspaceMetadataRecord{}, fmt.Errorf("query deleted workspace metadata: %w", err)
+	}
+
+	return metadata, nil
 }
 
 // loadWorkspaceOrganizationID is choke point 16: AND deleted_at IS NULL
