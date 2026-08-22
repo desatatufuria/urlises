@@ -286,6 +286,40 @@ func TestBurnIsIdempotentOnRepeat(t *testing.T) {
 	}
 }
 
+// --- activity-log spec: "Secret Events Are Excluded" — secrethide is
+// deliberately never wired to activity.Record (secrets have no unambiguous
+// organization owner). This is a negative-case regression guard: it fails
+// loudly if a future change ever wires Create/Burn into the activity log
+// without a deliberate decision to resolve the org-scoping ambiguity first. ---
+
+func TestCreateAndBurnRecordNoActivityEvent(t *testing.T) {
+	t.Parallel()
+
+	ctx, pool := openSecrethideTestPool(t, "secrethide_no_activity_event_test")
+	service := NewService(pool)
+	userID := insertSecrethideTestUser(t, ctx, pool, "creator-no-activity@example.com")
+
+	created, err := service.Create(ctx, userID, CreateSecretInput{
+		Ciphertext: "Y2lwaGVydGV4dA==",
+		IV:         "aXZieXRlcw==",
+	})
+	if err != nil {
+		t.Fatalf("create secret: %v", err)
+	}
+
+	if _, _, _, err := service.Burn(ctx, created.Token); err != nil {
+		t.Fatalf("burn secret: %v", err)
+	}
+
+	var count int
+	if err := pool.QueryRow(ctx, `SELECT COUNT(*) FROM activity_events`).Scan(&count); err != nil {
+		t.Fatalf("count activity_events: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("activity_events row count = %d after secret create+burn, want 0 — secrethide must never record activity events", count)
+	}
+}
+
 // --- Task: LoadOwned collapses unknown token, wrong owner, and non-pending
 // status into the same ErrNotFound, so the send-email endpoint built on top
 // of it can never be used to enumerate other users' tokens or a secret's

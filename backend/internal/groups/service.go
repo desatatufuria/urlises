@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/furia/shared-bookmark-sync/backend/internal/access"
+	"github.com/furia/shared-bookmark-sync/backend/internal/activity"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -24,7 +25,8 @@ type dbQuerier interface {
 }
 
 type Service struct {
-	pool *pgxpool.Pool
+	pool     *pgxpool.Pool
+	activity *activity.Service
 }
 
 type Group struct {
@@ -54,8 +56,8 @@ type AddGroupMemberInput struct {
 	UserID string `json:"userId"`
 }
 
-func NewService(pool *pgxpool.Pool) *Service {
-	return &Service{pool: pool}
+func NewService(pool *pgxpool.Pool, activityService *activity.Service) *Service {
+	return &Service{pool: pool, activity: activityService}
 }
 
 func (s *Service) List(ctx context.Context, requesterUserID, organizationID string) ([]Group, error) {
@@ -123,6 +125,12 @@ func (s *Service) CreateTx(ctx context.Context, tx pgx.Tx, requesterUserID, orga
 		return Group{}, fmt.Errorf("create group: %w", err)
 	}
 
+	if err := s.activity.Record(ctx, tx, organizationID, requesterUserID, activity.KindGroupCreated, "group", group.ID, map[string]any{
+		"groupName": group.Name,
+	}); err != nil {
+		return Group{}, fmt.Errorf("record group created activity: %w", err)
+	}
+
 	return group, nil
 }
 
@@ -131,7 +139,13 @@ func (s *Service) AuthorizeCreateTx(ctx context.Context, tx pgx.Tx, requesterUse
 }
 
 func (s *Service) Update(ctx context.Context, requesterUserID, organizationID, groupID string, input UpdateGroupInput) (Group, error) {
-	if err := requireOrganizationAdmin(ctx, s.pool, requesterUserID, organizationID); err != nil {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return Group{}, fmt.Errorf("begin update group tx: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	if err := requireOrganizationAdmin(ctx, tx, requesterUserID, organizationID); err != nil {
 		return Group{}, err
 	}
 
@@ -140,29 +154,53 @@ func (s *Service) Update(ctx context.Context, requesterUserID, organizationID, g
 		return Group{}, fmt.Errorf("group name is required")
 	}
 
+	var previousName string
+	if err := tx.QueryRow(ctx, `
+		SELECT name FROM groups WHERE id = $1 AND organization_id = $2 FOR UPDATE
+	`, groupID, organizationID).Scan(&previousName); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return Group{}, ErrNotFound
+		}
+		return Group{}, fmt.Errorf("lock group for update: %w", err)
+	}
+
 	var group Group
-	err := s.pool.QueryRow(ctx, `
+	err = tx.QueryRow(ctx, `
 		UPDATE groups
 		SET name = $3, updated_at = NOW()
 		WHERE id = $1 AND organization_id = $2
 		RETURNING id, organization_id, name, created_at::text, updated_at::text
 	`, groupID, organizationID, name).Scan(&group.ID, &group.OrganizationID, &group.Name, &group.CreatedAt, &group.UpdatedAt)
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return Group{}, ErrNotFound
-		}
 		return Group{}, fmt.Errorf("update group: %w", err)
+	}
+
+	if err := s.activity.Record(ctx, tx, organizationID, requesterUserID, activity.KindGroupRenamed, "group", group.ID, map[string]any{
+		"previousName": previousName,
+		"name":         group.Name,
+	}); err != nil {
+		return Group{}, fmt.Errorf("record group rename activity: %w", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return Group{}, fmt.Errorf("commit update group tx: %w", err)
 	}
 
 	return group, nil
 }
 
 func (s *Service) Delete(ctx context.Context, requesterUserID, organizationID, groupID string) error {
-	if err := requireOrganizationAdmin(ctx, s.pool, requesterUserID, organizationID); err != nil {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin delete group tx: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	if err := requireOrganizationAdmin(ctx, tx, requesterUserID, organizationID); err != nil {
 		return err
 	}
 
-	result, err := s.pool.Exec(ctx, `
+	result, err := tx.Exec(ctx, `
 		DELETE FROM groups
 		WHERE id = $1 AND organization_id = $2
 	`, groupID, organizationID)
@@ -171,6 +209,14 @@ func (s *Service) Delete(ctx context.Context, requesterUserID, organizationID, g
 	}
 	if result.RowsAffected() == 0 {
 		return ErrNotFound
+	}
+
+	if err := s.activity.Record(ctx, tx, organizationID, requesterUserID, activity.KindGroupDeleted, "group", groupID, map[string]any{}); err != nil {
+		return fmt.Errorf("record group deleted activity: %w", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit delete group tx: %w", err)
 	}
 
 	return nil
@@ -222,6 +268,13 @@ func (s *Service) AddMemberTx(ctx context.Context, tx pgx.Tx, requesterUserID, g
 		return GroupMember{}, err
 	}
 
+	if err := s.activity.Record(ctx, tx, organizationID, requesterUserID, activity.KindGroupMemberAdded, "group_member", userID, map[string]any{
+		"groupId":     groupID,
+		"targetEmail": member.Email,
+	}); err != nil {
+		return GroupMember{}, fmt.Errorf("record group member added activity: %w", err)
+	}
+
 	return member, nil
 }
 
@@ -234,15 +287,21 @@ func (s *Service) AuthorizeAddMemberTx(ctx context.Context, tx pgx.Tx, requester
 }
 
 func (s *Service) ListMembers(ctx context.Context, requesterUserID, groupID string) ([]GroupMember, error) {
-	organizationID, err := loadGroupOrganizationID(ctx, s.pool, groupID)
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("begin list group members tx: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	organizationID, err := loadGroupOrganizationID(ctx, tx, groupID)
 	if err != nil {
 		return nil, err
 	}
-	if err := requireOrganizationAdmin(ctx, s.pool, requesterUserID, organizationID); err != nil {
+	if err := requireOrganizationAdmin(ctx, tx, requesterUserID, organizationID); err != nil {
 		return nil, err
 	}
 
-	rows, err := s.pool.Query(ctx, `
+	rows, err := tx.Query(ctx, `
 		SELECT gm.group_id, u.id, u.email, COALESCE(u.name, '')
 		FROM group_members gm
 		JOIN users u ON u.id = gm.user_id
@@ -264,6 +323,10 @@ func (s *Service) ListMembers(ctx context.Context, requesterUserID, groupID stri
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate group members: %w", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("commit list group members tx: %w", err)
 	}
 
 	return members, nil
@@ -293,6 +356,12 @@ func (s *Service) RemoveMember(ctx context.Context, requesterUserID, groupID, us
 	}
 	if result.RowsAffected() == 0 {
 		return ErrNotFound
+	}
+
+	if err := s.activity.Record(ctx, tx, organizationID, requesterUserID, activity.KindGroupMemberRemoved, "group_member", userID, map[string]any{
+		"groupId": groupID,
+	}); err != nil {
+		return fmt.Errorf("record group member removed activity: %w", err)
 	}
 
 	if err := tx.Commit(ctx); err != nil {
