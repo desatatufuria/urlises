@@ -51,6 +51,34 @@ describe("listOrgActivity", () => {
     expect(String(url)).toContain("cursor=cursor-abc");
   });
 
+  it("omits the category query param entirely when category is \"all\" (rollback guarantee)", async () => {
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(
+        new Response(JSON.stringify({ events: [], nextCursor: "" }), { status: 200, headers: { "Content-Type": "application/json" } }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await listOrgActivity("org-1", "token-1", undefined, "all");
+
+    const [url] = fetchMock.mock.calls[0];
+    expect(String(url)).not.toContain("category=");
+  });
+
+  it("includes the category query param when a non-default category is passed", async () => {
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(
+        new Response(JSON.stringify({ events: [], nextCursor: "" }), { status: 200, headers: { "Content-Type": "application/json" } }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await listOrgActivity("org-1", "token-1", undefined, "bookmarks");
+
+    const [url] = fetchMock.mock.calls[0];
+    expect(String(url)).toContain("category=bookmarks");
+  });
+
   it("propagates the backend error message when the request fails", async () => {
     const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
       new Response(JSON.stringify({ error: "Forbidden" }), { status: 403, headers: { "Content-Type": "application/json" } }),
