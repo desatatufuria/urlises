@@ -113,18 +113,18 @@ Each unit is developed, tested, and merged into the previous unit's branch befor
 
 ## Phase 5: Self-Service Account Deactivation (Slice 5)
 
-- [ ] 5.1 `backend/migrations/000013_user_deactivation.sql` — `ALTER TABLE users ADD COLUMN IF NOT EXISTS disabled_at TIMESTAMPTZ` per design DDL (migration only, no RED counterpart).
-- [ ] 5.2 RED: `backend/internal/auth/service_test.go` (new) — `DeactivateSelf`: sole-owner in any org → `ErrSoleOwner`, `disabled_at` untouched, refresh families intact; happy path sets `disabled_at` **and** revokes all families in one commit; second call is a no-op.
-- [ ] 5.3 GREEN: `backend/internal/auth/service.go` — `ErrAccountDisabled`, `ErrSoleOwner` sentinels; `DeactivateSelf(ctx, userID) error` using the sole-owner probe + `RevokeAllRefreshFamiliesTx`.
-- [ ] 5.4 RED: `service_test.go` — `login()` with valid password on a disabled account → `ErrAccountDisabled` (not `ErrInvalidCredentials`); wrong password on a disabled account → `ErrInvalidCredentials`; `AuthenticateToken` with a pre-deactivation token → `ErrUnauthorized`; `Refresh` cannot mint a session after family revocation.
-- [ ] 5.5 GREEN: `service.go` — `disabled_at` gate in `login()` (post-`bcrypt.CompareHashAndPassword`) and in `AuthenticateToken` (`AND u.disabled_at IS NULL`).
-- [ ] 5.6 RED: `backend/internal/auth/handler_integration_test.go` — `POST /me/deactivate`: 204 self-only success; 403 `ErrAccountDisabled` surfaced at a subsequent `login()`; 409 `ErrSoleOwner`; unauthenticated → 401.
-- [ ] 5.7 GREEN: `backend/internal/auth/handler.go` — register `POST /me/deactivate` → 204 (no body, no user identifier — self-only is structural); `writeAuthError` cases for `ErrAccountDisabled`(403)/`ErrSoleOwner`(409).
-- [ ] 5.8 GREEN: `admin-web/src/lib/api/auth.ts` — `deactivateSelf(token)`.
-- [ ] 5.9 RED: `admin-web/src/features/account/AccountPage.test.tsx` (new) — deactivate button disabled until `principal.email` is typed exactly via `ConfirmByTyping`; confirmed success signs out and redirects to `/login`; confirm-dismissal sends no request.
-- [ ] 5.10 GREEN: `admin-web/src/features/account/AccountPage.tsx` (new) — `ConfirmByTyping(expected=principal.email)`, on success `signOut()` + navigate `/login`.
-- [ ] 5.11 GREEN: `admin-web/src/app/router.tsx` — register `{ path: "account", element: <AccountPage /> }` under `AdminLayout`.
-- [ ] 5.12 GREEN: `admin-web/src/app/shell/AdminLayout.tsx` — trailing nav item `{ to: "/account", label: "Account" }`.
+- [x] 5.1 `backend/migrations/000013_user_deactivation.sql` — `ALTER TABLE users ADD COLUMN IF NOT EXISTS disabled_at TIMESTAMPTZ` per design DDL (migration only, no RED counterpart).
+- [x] 5.2 RED: `backend/internal/auth/service_test.go` (new) — `DeactivateSelf`: sole-owner in any org → `ErrSoleOwner`, `disabled_at` untouched, refresh families intact; happy path sets `disabled_at` **and** revokes all families in one commit; second call is a no-op.
+- [x] 5.3 GREEN: `backend/internal/auth/service.go` — `ErrAccountDisabled`, `ErrSoleOwner` sentinels; `DeactivateSelf(ctx, userID) error` using the sole-owner probe + `RevokeAllRefreshFamiliesTx`.
+- [x] 5.4 RED: `service_test.go` — `login()` with valid password on a disabled account → `ErrAccountDisabled` (not `ErrInvalidCredentials`); wrong password on a disabled account → `ErrInvalidCredentials`; `AuthenticateToken` with a pre-deactivation token → `ErrUnauthorized`; `Refresh` cannot mint a session after family revocation.
+- [x] 5.5 GREEN: `service.go` — `disabled_at` gate in `login()` (post-`bcrypt.CompareHashAndPassword`) and in `AuthenticateToken` (`AND u.disabled_at IS NULL`).
+- [x] 5.6 RED: `backend/internal/auth/handler_integration_test.go` — `POST /me/deactivate`: 204 self-only success; 403 `ErrAccountDisabled` surfaced at a subsequent `login()`; 409 `ErrSoleOwner`; unauthenticated → 401. (Also `handler_error_mapping_test.go`: pure-logic `writeAuthError` mapping test, no DB — real RED→GREEN executed this session.)
+- [x] 5.7 GREEN: `backend/internal/auth/handler.go` — register `POST /me/deactivate` → 204 (no body, no user identifier — self-only is structural); `writeAuthError` cases for `ErrAccountDisabled`(403)/`ErrSoleOwner`(409).
+- [x] 5.8 GREEN: `admin-web/src/lib/api/auth.ts` — `deactivateSelf(token)`.
+- [x] 5.9 RED: `admin-web/src/features/account/AccountPage.test.tsx` (new) — deactivate button disabled until `principal.email` is typed exactly via `ConfirmByTyping`; confirmed success signs out and redirects to `/login`; confirm-dismissal sends no request.
+- [x] 5.10 GREEN: `admin-web/src/features/account/AccountPage.tsx` (new) — `ConfirmByTyping(expected=principal.email)`, on success `signOut()` + navigate `/login`.
+- [x] 5.11 GREEN: `admin-web/src/app/router.tsx` — register `{ path: "account", element: <AccountPage /> }` under `AdminLayout`.
+- [x] 5.12 GREEN: `admin-web/src/app/shell/AdminLayout.tsx` — trailing nav item `{ to: "/account", label: "Account" }`.
 
 ## Phase 6: Verification
 
