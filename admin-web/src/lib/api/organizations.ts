@@ -76,6 +76,13 @@ export function cancelOrganizationInvitation(token: string, organizationId: stri
   });
 }
 
+export function deleteOrganization(token: string, organizationId: string) {
+  return apiRequest<void>(`/organizations/${organizationId}`, {
+    method: "DELETE",
+    token,
+  });
+}
+
 export function patchOrganizationMember(
   token: string,
   organizationId: string,

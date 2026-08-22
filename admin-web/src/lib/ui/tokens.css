@@ -59,6 +59,11 @@ a { color: inherit; text-decoration: none; }
 .ui-button-primary { background: var(--ui-accent); border-color: var(--ui-accent); color: white; }
 .ui-button-primary:hover { background: #28483d; }
 .ui-button-secondary { background: transparent; }
+.ui-button-danger { background: transparent; border-color: var(--ui-danger); color: var(--ui-danger); }
+.ui-button-danger:hover:not(:disabled) { background: var(--ui-danger-soft); }
+.ui-button:disabled { cursor: not-allowed; opacity: .5; }
+.ui-confirm-by-typing { display: grid; gap: .75rem; max-width: 360px; }
+.ui-danger-zone { padding: 1.25rem 0; border-top: 2px solid var(--ui-danger); }
 .ui-secret-mask { filter: blur(6px); user-select: none; }
 .ui-badge { display: inline-flex; align-items: center; padding: .22rem .48rem; border: 1px solid var(--ui-rule); font-size: .76rem; text-transform: capitalize; }
 .ui-badge--accent { color: var(--ui-accent); border-color: #9eb6a8; background: var(--ui-accent-soft); }

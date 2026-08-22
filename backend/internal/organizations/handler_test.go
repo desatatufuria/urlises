@@ -25,6 +25,7 @@ type organizationsRouteStub struct {
 	invitations []PendingInvitation
 	err         error
 	cancelErr   error
+	deleteErr   error
 }
 
 func TestCreationRoutesRequireIdempotencyKey(t *testing.T) {
@@ -72,6 +73,10 @@ func (s *organizationsRouteStub) ResendInvitation(context.Context, string, strin
 }
 func (s *organizationsRouteStub) CancelInvitation(context.Context, string, string, string) error {
 	return s.cancelErr
+}
+func (s *organizationsRouteStub) DeleteOrganization(_ context.Context, requester, _ string) error {
+	s.requester = requester
+	return s.deleteErr
 }
 
 func organizationPrincipal(next http.Handler) http.Handler {
@@ -136,6 +141,57 @@ func TestCancelInvitationRouteEnvelopeAuthAndErrors(t *testing.T) {
 	RegisterRoutes(mux, func(next http.Handler) http.Handler { return next }, stub, nil)
 	recorder = httptest.NewRecorder()
 	mux.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/organizations/org-1/invitations/invite-1/cancel", nil))
+	if recorder.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthorized status=%d, want 401", recorder.Code)
+	}
+}
+
+// Phase 4 (Slice 4) — RED: the delete-organization route returns 204 on
+// success, 403 on ErrForbidden, 409 on ErrWouldOrphanMember, 404 on
+// ErrNotFound, and 401 when unauthenticated -- stub-driven so this runs
+// without a database, mirroring TestCancelInvitationRouteEnvelopeAuthAndErrors.
+func TestDeleteOrganizationRouteEnvelopeAuthAndErrors(t *testing.T) {
+	stub := &organizationsRouteStub{}
+	mux := http.NewServeMux()
+	RegisterRoutes(mux, organizationPrincipal, stub, nil)
+
+	recorder := httptest.NewRecorder()
+	mux.ServeHTTP(recorder, httptest.NewRequest(http.MethodDelete, "/organizations/org-1", nil))
+	if recorder.Code != http.StatusNoContent {
+		t.Fatalf("status=%d, want 204", recorder.Code)
+	}
+	if recorder.Body.Len() != 0 {
+		t.Fatalf("body=%q, want empty", recorder.Body.String())
+	}
+	if stub.requester != "admin-1" {
+		t.Fatalf("requester=%q, want admin-1", stub.requester)
+	}
+
+	stub.deleteErr = ErrForbidden
+	recorder = httptest.NewRecorder()
+	mux.ServeHTTP(recorder, httptest.NewRequest(http.MethodDelete, "/organizations/org-1", nil))
+	if recorder.Code != http.StatusForbidden {
+		t.Fatalf("forbidden status=%d, want 403", recorder.Code)
+	}
+
+	stub.deleteErr = ErrWouldOrphanMember
+	recorder = httptest.NewRecorder()
+	mux.ServeHTTP(recorder, httptest.NewRequest(http.MethodDelete, "/organizations/org-1", nil))
+	if recorder.Code != http.StatusConflict {
+		t.Fatalf("orphan status=%d, want 409", recorder.Code)
+	}
+
+	stub.deleteErr = ErrNotFound
+	recorder = httptest.NewRecorder()
+	mux.ServeHTTP(recorder, httptest.NewRequest(http.MethodDelete, "/organizations/org-1", nil))
+	if recorder.Code != http.StatusNotFound {
+		t.Fatalf("not found status=%d, want 404", recorder.Code)
+	}
+
+	mux = http.NewServeMux()
+	RegisterRoutes(mux, func(next http.Handler) http.Handler { return next }, stub, nil)
+	recorder = httptest.NewRecorder()
+	mux.ServeHTTP(recorder, httptest.NewRequest(http.MethodDelete, "/organizations/org-1", nil))
 	if recorder.Code != http.StatusUnauthorized {
 		t.Fatalf("unauthorized status=%d, want 401", recorder.Code)
 	}

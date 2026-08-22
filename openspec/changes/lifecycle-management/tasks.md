@@ -98,18 +98,18 @@ Each unit is developed, tested, and merged into the previous unit's branch befor
 
 ## Phase 4: Delete Organization, Guarded (Slice 4)
 
-- [ ] 4.1 RED: `backend/internal/organizations/service_test.go` — `DeleteOrganization`: admin gate; happy path removes org + all cascades, other orgs' `activity_events` intact; orphan probe blocks with **zero** rows deleted; requester's own orphaning does not block; unknown ID → `ErrNotFound`; explicit assertion that no activity row exists anywhere after a successful delete.
-- [ ] 4.2 GREEN: `backend/internal/organizations/service.go` — `ErrWouldOrphanMember` sentinel; `lockOrganization`/`lockOrganizationMemberships` helpers; orphan probe query (`om.user_id <> $2`); `DeleteOrganization(ctx, requesterUserID, organizationID) error`.
-- [ ] 4.3 RED: `service_test.go` — concurrent deletion race: two requests evaluating the orphan check concurrently only commit one consistent result (`FOR UPDATE`, matching `ErrLastOwner`).
-- [ ] 4.4 GREEN: `service.go` — verify/adjust lock ordering to satisfy 4.3.
-- [ ] 4.5 RED: `backend/internal/organizations/handler_test.go` — `DELETE /organizations/{organizationId}`: 204 admin/owner; 403 member role; 409 `ErrWouldOrphanMember`; 404 unknown.
-- [ ] 4.6 GREEN: `backend/internal/organizations/handler.go` — `routeService` +`DeleteOrganization`; register `DELETE /organizations/{organizationId}`; new `writeOrganizationError` case for `ErrWouldOrphanMember` → 409.
-- [ ] 4.7 RED: `admin-web/src/lib/ui/components/ConfirmByTyping.test.tsx` — button stays disabled on partial/mismatched/whitespace-only input; enabled only on exact case-sensitive match.
-- [ ] 4.8 GREEN: `admin-web/src/lib/ui/components/ConfirmByTyping.tsx` — controlled input + confirm button, disabled until `value.trim() === expected`.
-- [ ] 4.9 GREEN: `admin-web/src/lib/api/organizations.ts` — `deleteOrganization(token, organizationId)`.
-- [ ] 4.10 RED: `admin-web/src/features/home/StateHome.test.tsx` (new) — danger-zone delete stays disabled until the org name is typed exactly; confirmed deletion calls `refreshOrganizations()` then signs out (empty list) or navigates to `/` (non-empty list).
-- [ ] 4.11 GREEN: `admin-web/src/features/organizations/mutations.ts` (new) — `useDeleteOrganizationMutation` with the post-delete `refreshOrganizations()` → empty ? `signOut()`+`/login` : `navigate("/")` branch.
-- [ ] 4.12 GREEN: `admin-web/src/features/home/StateHome.tsx` — danger-zone `ContextPanel` section wired to `ConfirmByTyping(expected=organizationName)`.
+- [x] 4.1 RED: `backend/internal/organizations/service_test.go` — `DeleteOrganization`: admin gate; happy path removes org + all cascades, other orgs' `activity_events` intact; orphan probe blocks with **zero** rows deleted; requester's own orphaning does not block; unknown ID → `ErrNotFound`; explicit assertion that no activity row exists anywhere after a successful delete.
+- [x] 4.2 GREEN: `backend/internal/organizations/service.go` — `ErrWouldOrphanMember` sentinel; `lockOrganization`/`lockOrganizationMemberships` helpers; orphan probe query (`om.user_id <> $2`); `DeleteOrganization(ctx, requesterUserID, organizationID) error`.
+- [x] 4.3 RED: `service_test.go` — concurrent deletion race: two requests evaluating the orphan check concurrently only commit one consistent result (`FOR UPDATE`, matching `ErrLastOwner`).
+- [x] 4.4 GREEN: `service.go` — verify/adjust lock ordering to satisfy 4.3.
+- [x] 4.5 RED: `backend/internal/organizations/handler_test.go` — `DELETE /organizations/{organizationId}`: 204 admin/owner; 403 member role; 409 `ErrWouldOrphanMember`; 404 unknown.
+- [x] 4.6 GREEN: `backend/internal/organizations/handler.go` — `routeService` +`DeleteOrganization`; register `DELETE /organizations/{organizationId}`; new `writeOrganizationError` case for `ErrWouldOrphanMember` → 409.
+- [x] 4.7 RED: `admin-web/src/lib/ui/components/ConfirmByTyping.test.tsx` — button stays disabled on partial/mismatched/whitespace-only input; enabled only on exact case-sensitive match.
+- [x] 4.8 GREEN: `admin-web/src/lib/ui/components/ConfirmByTyping.tsx` — controlled input + confirm button, disabled until `value.trim() === expected`.
+- [x] 4.9 GREEN: `admin-web/src/lib/api/organizations.ts` — `deleteOrganization(token, organizationId)`.
+- [x] 4.10 RED: `admin-web/src/features/home/StateHome.test.tsx` (new) — danger-zone delete stays disabled until the org name is typed exactly; confirmed deletion calls `refreshOrganizations()` then signs out (empty list) or navigates to `/` (non-empty list).
+- [x] 4.11 GREEN: `admin-web/src/features/organizations/mutations.ts` (new) — `useDeleteOrganizationMutation` with the post-delete `refreshOrganizations()` → empty ? `signOut()`+`/login` : `navigate("/")` branch.
+- [x] 4.12 GREEN: `admin-web/src/features/home/StateHome.tsx` — danger-zone `ContextPanel` section wired to `ConfirmByTyping(expected=organizationName)`.
 
 ## Phase 5: Self-Service Account Deactivation (Slice 5)
 
