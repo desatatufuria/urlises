@@ -2,21 +2,21 @@
 @media (prefers-color-scheme: dark) {
   :root {
     color-scheme: dark;
-    --ui-paper: #201c16;
-    --ui-canvas: #17140f;
-    --ui-ink: #f1ece3;
-    --ui-muted: #9a9285;
-    --ui-rule: #332e25;
+    --ui-paper: #191b1f;
+    --ui-canvas: #101215;
+    --ui-ink: #eef0f2;
+    --ui-muted: #8f959c;
+    --ui-rule: #2b2e33;
     --ui-accent: #6e8ca3;
     --ui-accent-soft: rgba(110, 140, 163, 0.16);
-    --ui-danger: #d98f7f;
-    --ui-danger-soft: rgba(217, 143, 127, 0.16);
+    --ui-danger: #d97a7a;
+    --ui-danger-soft: rgba(217, 122, 122, 0.16);
   }
   .ui-button-primary { color: #12181d; }
   .ui-button-primary:hover { background: #83a0b5; color: #12181d; }
-  .ui-button:hover { background: #2a2620; }
+  .ui-button:hover { background: #21242a; }
   .ui-badge--accent { border-color: rgba(110, 140, 163, 0.4); }
-  .ui-badge--danger { border-color: rgba(217, 143, 127, 0.4); }
+  .ui-badge--danger { border-color: rgba(217, 122, 122, 0.4); }
 }
 * { box-sizing: border-box; }
 html, body, #root { min-height: 100%; }
