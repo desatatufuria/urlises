@@ -24,7 +24,13 @@ export type ActivityKind =
   | "group.renamed"
   | "group.deleted"
   | "group_member.added"
-  | "group_member.removed";
+  | "group_member.removed"
+  | "bookmark.created"
+  | "bookmark.updated"
+  | "bookmark.deleted"
+  | "folder.created"
+  | "folder.updated"
+  | "folder.deleted";
 
 // ActivityEvent mirrors backend/internal/activity/service.go's Event struct
 // JSON tags verbatim. actorUserId/actorEmail/actorName are nullable --

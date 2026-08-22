@@ -1,7 +1,7 @@
 import type { ActivityEvent } from "../../lib/api/activity";
 
 // formatActivityEvent renders one activity_events row as a single
-// human-readable sentence, covering all 16 recorded Kind values. It never
+// human-readable sentence, covering all 27 recorded Kind values. It never
 // names the actor -- ActivityPage already has a dedicated "Actor" column,
 // and repeating "jane@co.com" at the start of every sentence in the
 // adjacent "Event" column would say the same thing twice on one row.
@@ -55,8 +55,20 @@ export function formatActivityEvent(event: ActivityEvent): string {
       return `Added ${m.targetEmail ?? "a user"} to group ${m.groupId ?? "?"}.`;
     case "group_member.removed":
       return `Removed a user from group ${m.groupId ?? "?"}.`;
+    case "bookmark.created":
+      return `Added the bookmark "${m.title ?? ""}" to workspace "${m.workspaceName ?? "?"}".`;
+    case "bookmark.updated":
+      return `Updated the bookmark "${m.title ?? ""}" in workspace "${m.workspaceName ?? "?"}".`;
+    case "bookmark.deleted":
+      return `Deleted the bookmark "${m.title ?? ""}" from workspace "${m.workspaceName ?? "?"}".`;
+    case "folder.created":
+      return `Created the folder "${m.name ?? ""}" in workspace "${m.workspaceName ?? "?"}".`;
+    case "folder.updated":
+      return `Updated the folder "${m.name ?? ""}" in workspace "${m.workspaceName ?? "?"}".`;
+    case "folder.deleted":
+      return `Deleted the folder "${m.name ?? ""}" from workspace "${m.workspaceName ?? "?"}".`;
     default:
-      // Defensive only -- unreachable for the 16 recorded kinds today. A
+      // Defensive only -- unreachable for the 27 recorded kinds today. A
       // future kind added to the backend without a matching branch here
       // degrades to a readable-if-generic sentence instead of throwing or
       // rendering blank/undefined text.

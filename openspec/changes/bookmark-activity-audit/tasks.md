@@ -103,9 +103,9 @@ Each unit is developed, tested, and merged into the previous unit's branch befor
 
 ## Phase A3: Frontend Rendering of New Kinds
 
-- [ ] A3.1 GREEN: `admin-web/src/lib/api/activity.ts` — add the 6 new members to the `ActivityKind` union.
-- [ ] A3.2 RED: `admin-web/src/features/activity/format.test.ts` — for each of the 6 new kinds, one fixture with full metadata and one with missing metadata, asserting a readable sentence with no actor-name prefix and no literal `"undefined"`.
-- [ ] A3.3 GREEN: `admin-web/src/features/activity/format.ts` — add the 6 `case` branches before `default:`; update the stale "16 recorded Kind values" doc comment to 27; `url` is recorded but deliberately not rendered.
+- [x] A3.1 GREEN: `admin-web/src/lib/api/activity.ts` — add the 6 new members to the `ActivityKind` union.
+- [x] A3.2 RED: `admin-web/src/features/activity/format.test.ts` — for each of the 6 new kinds, one fixture with full metadata and one with missing metadata, asserting a readable sentence with no actor-name prefix and no literal `"undefined"`.
+- [x] A3.3 GREEN: `admin-web/src/features/activity/format.ts` — add the 6 `case` branches before `default:`; update the stale "16 recorded Kind values" doc comment to 27; `url` is recorded but deliberately not rendered.
 
 ## Phase B1: Backend Category Filter
 
