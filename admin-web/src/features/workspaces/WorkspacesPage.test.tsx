@@ -73,8 +73,6 @@ describe("workspaces page", () => {
     await screen.findByLabelText(/workspace name/i);
 
     await userEvent.type(screen.getByLabelText(/workspace name/i), "Launch Room");
-    await userEvent.clear(screen.getByLabelText(/workspace type/i));
-    await userEvent.type(screen.getByLabelText(/workspace type/i), "shared");
     await userEvent.click(screen.getByRole("button", { name: /create workspace/i }));
 
     expect(await screen.findByText(/workspace created/i)).toBeInTheDocument();
