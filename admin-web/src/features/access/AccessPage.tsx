@@ -43,6 +43,7 @@ export function AccessPage() {
   const [notice, setNotice] = useState<{ tone: "neutral" | "danger"; title: string; description: string } | null>(null);
   const [savingUserId, setSavingUserId] = useState<string | null>(null);
   const [savingGroupId, setSavingGroupId] = useState<string | null>(null);
+  const [showRawGrants, setShowRawGrants] = useState(false);
 
   const token = session?.accessToken;
   const organizationId = activeOrganization?.organizationId;
@@ -234,168 +235,6 @@ export function AccessPage() {
 
                     <section className="ui-section-stack">
                       <header className="ui-section-header">
-                        <h3 className="ui-section-title">Direct user grants</h3>
-                        <p className="ui-copy">Changing a role updates the raw direct grant and then refreshes the effective-access view.</p>
-                      </header>
-
-                      {accessSnapshot.userGrants.length === 0 ? <DataState compact title="No direct user grants" description="Add a member grant when a workspace needs explicit access beyond the creator." /> : null}
-
-                      {accessSnapshot.userGrants.length > 0 ? (
-                        <Table columns={["Member", "Role", "Actions"]}>
-                          {accessSnapshot.userGrants.map((grant) => (
-                            <tr key={grant.userId}>
-                              <td>
-                                <div className="ui-cell-stack">
-                                  <strong>{grant.email}</strong>
-                                  <span className="ui-muted">Direct workspace grant</span>
-                                </div>
-                              </td>
-                              <td>
-                                <select
-                                  aria-label={`Direct role for ${grant.email}`}
-                                  disabled={savingUserId === grant.userId}
-                                  value={grant.role}
-                                  onChange={(event) => {
-                                    const role = event.target.value as WorkspaceRole;
-                                    setSavingUserId(grant.userId);
-                                    setNotice(null);
-                                    void grantUserMutation
-                                      .mutateAsync({ userId: grant.userId, role })
-                                      .then(() => {
-                                        setNotice({ tone: "neutral", title: "Direct grant updated", description: `${grant.email} now uses the ${role} workspace role.` });
-                                      })
-                                      .catch((error) => {
-                                        setNotice({
-                                          tone: "danger",
-                                          title: "Direct grant update failed",
-                                          description: error instanceof Error ? error.message : "The direct grant could not be updated.",
-                                        });
-                                      })
-                                      .finally(() => setSavingUserId(null));
-                                  }}
-                                >
-                                  {roleOptions.map((option) => (
-                                    <option key={option} value={option}>
-                                      {option}
-                                    </option>
-                                  ))}
-                                </select>
-                              </td>
-                              <td>
-                                <button
-                                  className="ui-button ui-button-secondary"
-                                  disabled={savingUserId === grant.userId}
-                                  type="button"
-                                  onClick={() => {
-                                    setSavingUserId(grant.userId);
-                                    setNotice(null);
-                                    void revokeUserMutation
-                                      .mutateAsync(grant.userId)
-                                      .then(() => {
-                                        setNotice({ tone: "neutral", title: "Direct grant removed", description: `${grant.email} no longer has an explicit direct grant.` });
-                                      })
-                                      .catch((error) => {
-                                        setNotice({
-                                          tone: "danger",
-                                          title: "Direct grant removal failed",
-                                          description: error instanceof Error ? error.message : "The direct grant could not be removed.",
-                                        });
-                                      })
-                                      .finally(() => setSavingUserId(null));
-                                  }}
-                                >
-                                  {savingUserId === grant.userId ? "Saving…" : "Remove"}
-                                </button>
-                              </td>
-                            </tr>
-                          ))}
-                        </Table>
-                      ) : null}
-                    </section>
-
-                    <section className="ui-section-stack">
-                      <header className="ui-section-header">
-                        <h3 className="ui-section-title">Group grants</h3>
-                        <p className="ui-copy">Group grants remain flat and reusable, but they only matter after the workspace explicitly includes the group.</p>
-                      </header>
-
-                      {accessSnapshot.groupGrants.length === 0 ? <DataState compact title="No group grants" description="Attach a group when multiple members should inherit the same workspace role path." /> : null}
-
-                      {accessSnapshot.groupGrants.length > 0 ? (
-                        <Table columns={["Group", "Role", "Actions"]}>
-                          {accessSnapshot.groupGrants.map((grant) => (
-                            <tr key={grant.groupId}>
-                              <td>
-                                <div className="ui-cell-stack">
-                                  <strong>{grant.groupName}</strong>
-                                  <span className="ui-muted">Reusable group source</span>
-                                </div>
-                              </td>
-                              <td>
-                                <select
-                                  aria-label={`Group role for ${grant.groupName}`}
-                                  disabled={savingGroupId === grant.groupId}
-                                  value={grant.role}
-                                  onChange={(event) => {
-                                    const role = event.target.value as WorkspaceRole;
-                                    setSavingGroupId(grant.groupId);
-                                    setNotice(null);
-                                    void grantGroupMutation
-                                      .mutateAsync({ groupId: grant.groupId, role })
-                                      .then(() => {
-                                        setNotice({ tone: "neutral", title: "Group grant updated", description: `${grant.groupName} now uses the ${role} workspace role.` });
-                                      })
-                                      .catch((error) => {
-                                        setNotice({
-                                          tone: "danger",
-                                          title: "Group grant update failed",
-                                          description: error instanceof Error ? error.message : "The group grant could not be updated.",
-                                        });
-                                      })
-                                      .finally(() => setSavingGroupId(null));
-                                  }}
-                                >
-                                  {roleOptions.map((option) => (
-                                    <option key={option} value={option}>
-                                      {option}
-                                    </option>
-                                  ))}
-                                </select>
-                              </td>
-                              <td>
-                                <button
-                                  className="ui-button ui-button-secondary"
-                                  disabled={savingGroupId === grant.groupId}
-                                  type="button"
-                                  onClick={() => {
-                                    setSavingGroupId(grant.groupId);
-                                    setNotice(null);
-                                    void revokeGroupMutation
-                                      .mutateAsync(grant.groupId)
-                                      .then(() => {
-                                        setNotice({ tone: "neutral", title: "Group grant removed", description: `${grant.groupName} no longer grants access to this workspace.` });
-                                      })
-                                      .catch((error) => {
-                                        setNotice({
-                                          tone: "danger",
-                                          title: "Group grant removal failed",
-                                          description: error instanceof Error ? error.message : "The group grant could not be removed.",
-                                        });
-                                      })
-                                      .finally(() => setSavingGroupId(null));
-                                  }}
-                                >
-                                  {savingGroupId === grant.groupId ? "Saving…" : "Remove"}
-                                </button>
-                              </td>
-                            </tr>
-                          ))}
-                        </Table>
-                      ) : null}
-                    </section>
-
-                    <section className="ui-section-stack">
-                      <header className="ui-section-header">
                         <h3 className="ui-section-title">Effective access review</h3>
                         <p className="ui-copy">This table reflects the backend highest-role-wins result plus the contributing grant paths.</p>
                       </header>
@@ -424,6 +263,191 @@ export function AccessPage() {
                         </Table>
                       ) : null}
                     </section>
+
+                    <div className="ui-actions-row">
+                      <button
+                        className="ui-button ui-button-secondary"
+                        type="button"
+                        aria-expanded={showRawGrants}
+                        onClick={() => setShowRawGrants((current) => !current)}
+                      >
+                        {showRawGrants ? "Hide raw grants" : "Show raw grants"}
+                      </button>
+                    </div>
+
+                    {showRawGrants ? (
+                      <>
+                        <section className="ui-section-stack">
+                          <header className="ui-section-header">
+                            <h3 className="ui-section-title">Direct user grants</h3>
+                            <p className="ui-copy">Changing a role updates the raw direct grant and then refreshes the effective-access view.</p>
+                          </header>
+
+                          {accessSnapshot.userGrants.length === 0 ? <DataState compact title="No direct user grants" description="Add a member grant when a workspace needs explicit access beyond the creator." /> : null}
+
+                          {accessSnapshot.userGrants.length > 0 ? (
+                            <Table columns={["Member", "Role", "Actions"]}>
+                              {accessSnapshot.userGrants.map((grant) => (
+                                <tr key={grant.userId}>
+                                  <td>
+                                    <strong>{grant.email}</strong>
+                                  </td>
+                                  <td>
+                                    <select
+                                      aria-label={`Direct role for ${grant.email}`}
+                                      disabled={savingUserId === grant.userId}
+                                      value={grant.role}
+                                      onChange={(event) => {
+                                        const role = event.target.value as WorkspaceRole;
+                                        if (!window.confirm(`Change ${grant.email}'s access to ${selectedWorkspace.workspaceName} from ${grant.role} to ${role}?`)) {
+                                          event.target.value = grant.role;
+                                          return;
+                                        }
+                                        setSavingUserId(grant.userId);
+                                        setNotice(null);
+                                        void grantUserMutation
+                                          .mutateAsync({ userId: grant.userId, role })
+                                          .then(() => {
+                                            setNotice({ tone: "neutral", title: "Direct grant updated", description: `${grant.email} now uses the ${role} workspace role.` });
+                                          })
+                                          .catch((error) => {
+                                            setNotice({
+                                              tone: "danger",
+                                              title: "Direct grant update failed",
+                                              description: error instanceof Error ? error.message : "The direct grant could not be updated.",
+                                            });
+                                          })
+                                          .finally(() => setSavingUserId(null));
+                                      }}
+                                    >
+                                      {roleOptions.map((option) => (
+                                        <option key={option} value={option}>
+                                          {option}
+                                        </option>
+                                      ))}
+                                    </select>
+                                  </td>
+                                  <td>
+                                    <button
+                                      className="ui-button ui-button-secondary"
+                                      disabled={savingUserId === grant.userId}
+                                      type="button"
+                                      onClick={() => {
+                                        if (!window.confirm(`Remove ${grant.email}'s direct access to ${selectedWorkspace.workspaceName}?`)) {
+                                          return;
+                                        }
+                                        setSavingUserId(grant.userId);
+                                        setNotice(null);
+                                        void revokeUserMutation
+                                          .mutateAsync(grant.userId)
+                                          .then(() => {
+                                            setNotice({ tone: "neutral", title: "Direct grant removed", description: `${grant.email} no longer has an explicit direct grant.` });
+                                          })
+                                          .catch((error) => {
+                                            setNotice({
+                                              tone: "danger",
+                                              title: "Direct grant removal failed",
+                                              description: error instanceof Error ? error.message : "The direct grant could not be removed.",
+                                            });
+                                          })
+                                          .finally(() => setSavingUserId(null));
+                                      }}
+                                    >
+                                      {savingUserId === grant.userId ? "Saving…" : "Remove"}
+                                    </button>
+                                  </td>
+                                </tr>
+                              ))}
+                            </Table>
+                          ) : null}
+                        </section>
+
+                        <section className="ui-section-stack">
+                          <header className="ui-section-header">
+                            <h3 className="ui-section-title">Group grants</h3>
+                            <p className="ui-copy">Group grants remain flat and reusable, but they only matter after the workspace explicitly includes the group.</p>
+                          </header>
+
+                          {accessSnapshot.groupGrants.length === 0 ? <DataState compact title="No group grants" description="Attach a group when multiple members should inherit the same workspace role path." /> : null}
+
+                          {accessSnapshot.groupGrants.length > 0 ? (
+                            <Table columns={["Group", "Role", "Actions"]}>
+                              {accessSnapshot.groupGrants.map((grant) => (
+                                <tr key={grant.groupId}>
+                                  <td>
+                                    <strong>{grant.groupName}</strong>
+                                  </td>
+                                  <td>
+                                    <select
+                                      aria-label={`Group role for ${grant.groupName}`}
+                                      disabled={savingGroupId === grant.groupId}
+                                      value={grant.role}
+                                      onChange={(event) => {
+                                        const role = event.target.value as WorkspaceRole;
+                                        if (!window.confirm(`Change ${grant.groupName}'s access to ${selectedWorkspace.workspaceName} from ${grant.role} to ${role}?`)) {
+                                          event.target.value = grant.role;
+                                          return;
+                                        }
+                                        setSavingGroupId(grant.groupId);
+                                        setNotice(null);
+                                        void grantGroupMutation
+                                          .mutateAsync({ groupId: grant.groupId, role })
+                                          .then(() => {
+                                            setNotice({ tone: "neutral", title: "Group grant updated", description: `${grant.groupName} now uses the ${role} workspace role.` });
+                                          })
+                                          .catch((error) => {
+                                            setNotice({
+                                              tone: "danger",
+                                              title: "Group grant update failed",
+                                              description: error instanceof Error ? error.message : "The group grant could not be updated.",
+                                            });
+                                          })
+                                          .finally(() => setSavingGroupId(null));
+                                      }}
+                                    >
+                                      {roleOptions.map((option) => (
+                                        <option key={option} value={option}>
+                                          {option}
+                                        </option>
+                                      ))}
+                                    </select>
+                                  </td>
+                                  <td>
+                                    <button
+                                      className="ui-button ui-button-secondary"
+                                      disabled={savingGroupId === grant.groupId}
+                                      type="button"
+                                      onClick={() => {
+                                        if (!window.confirm(`Remove ${grant.groupName}'s group access to ${selectedWorkspace.workspaceName}?`)) {
+                                          return;
+                                        }
+                                        setSavingGroupId(grant.groupId);
+                                        setNotice(null);
+                                        void revokeGroupMutation
+                                          .mutateAsync(grant.groupId)
+                                          .then(() => {
+                                            setNotice({ tone: "neutral", title: "Group grant removed", description: `${grant.groupName} no longer grants access to this workspace.` });
+                                          })
+                                          .catch((error) => {
+                                            setNotice({
+                                              tone: "danger",
+                                              title: "Group grant removal failed",
+                                              description: error instanceof Error ? error.message : "The group grant could not be removed.",
+                                            });
+                                          })
+                                          .finally(() => setSavingGroupId(null));
+                                      }}
+                                    >
+                                      {savingGroupId === grant.groupId ? "Saving…" : "Remove"}
+                                    </button>
+                                  </td>
+                                </tr>
+                              ))}
+                            </Table>
+                          ) : null}
+                        </section>
+                      </>
+                    ) : null}
                   </>
                 ) : null}
               </section>

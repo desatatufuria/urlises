@@ -136,6 +136,7 @@ describe("members page", () => {
   });
 
   it("keeps the previous role visible when the backend rejects a role change", async () => {
+    vi.stubGlobal("confirm", vi.fn(() => true));
     fetchMock.mockImplementation((input, init) => {
       const url = String(input);
       const method = init?.method ?? "GET";
@@ -246,6 +247,7 @@ describe("members page", () => {
   });
 
   it("revokes the current operator shell immediately after self-demotion", async () => {
+    vi.stubGlobal("confirm", vi.fn(() => true));
     fetchMock.mockImplementation((input, init) => {
       const url = String(input); const method = init?.method ?? "GET";
       if (url.endsWith("/organizations/org-1/members") && method === "GET") return jsonResponse({ members: [{ userId: "user-1", email: "owner@example.com", name: "Owner", role: "owner" }] });
@@ -257,5 +259,69 @@ describe("members page", () => {
     renderAppRoute("/members");
     await userEvent.selectOptions(await screen.findByLabelText(/role for owner@example.com/i), "member");
     expect(await screen.findByRole("button", { name: /sign in/i })).toBeInTheDocument();
+  });
+
+  it("asks for confirmation before applying a role change", async () => {
+    const confirmSpy = vi.fn(() => true);
+    vi.stubGlobal("confirm", confirmSpy);
+    fetchMock.mockImplementation((input, init) => {
+      const url = String(input);
+      const method = init?.method ?? "GET";
+      if (url.endsWith("/organizations/org-1/members") && method === "GET") {
+        return jsonResponse({
+          members: [
+            { userId: "user-1", email: "owner@example.com", name: "Owner", role: "owner" },
+            { userId: "user-2", email: "editor@example.com", name: "Editor", role: "member" },
+          ],
+        });
+      }
+      if (url.endsWith("/organizations/org-1/invitations")) {
+        return jsonResponse({ invitations: [] });
+      }
+      if (url.endsWith("/organizations/org-1/members") && method === "PATCH") {
+        return jsonResponse({ userId: "user-2", email: "editor@example.com", role: "admin" });
+      }
+      return jsonResponse({ error: "not found" }, 404);
+    });
+
+    renderAppRoute("/members");
+
+    await userEvent.selectOptions(await screen.findByLabelText(/role for editor@example.com/i), "admin");
+
+    expect(confirmSpy).toHaveBeenCalledWith("Change editor@example.com's role to admin?");
+    expect(await screen.findByText(/role updated/i)).toBeInTheDocument();
+  });
+
+  it("keeps the previous role when the role-change confirmation is cancelled", async () => {
+    vi.stubGlobal("confirm", vi.fn(() => false));
+    let patchCalls = 0;
+    fetchMock.mockImplementation((input, init) => {
+      const url = String(input);
+      const method = init?.method ?? "GET";
+      if (url.endsWith("/organizations/org-1/members") && method === "GET") {
+        return jsonResponse({
+          members: [
+            { userId: "user-1", email: "owner@example.com", name: "Owner", role: "owner" },
+            { userId: "user-2", email: "editor@example.com", name: "Editor", role: "member" },
+          ],
+        });
+      }
+      if (url.endsWith("/organizations/org-1/invitations")) {
+        return jsonResponse({ invitations: [] });
+      }
+      if (url.endsWith("/organizations/org-1/members") && method === "PATCH") {
+        patchCalls += 1;
+        return jsonResponse({ userId: "user-2", email: "editor@example.com", role: "admin" });
+      }
+      return jsonResponse({ error: "not found" }, 404);
+    });
+
+    renderAppRoute("/members");
+
+    const select = await screen.findByLabelText(/role for editor@example.com/i);
+    await userEvent.selectOptions(select, "admin");
+
+    expect(patchCalls).toBe(0);
+    await waitFor(() => expect(select).toHaveValue("member"));
   });
 });

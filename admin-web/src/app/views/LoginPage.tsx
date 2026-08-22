@@ -66,7 +66,7 @@ export function LoginPage() {
               onChange={(event) => setForm((current) => ({ ...current, password: event.target.value }))}
             />
           </FormRow>
-          <FormRow hint="Device name is sent to the backend auth session contract.">
+          <FormRow label="Device name" hint="Helps you recognize this session later.">
             <input
               name="deviceName"
               type="text"

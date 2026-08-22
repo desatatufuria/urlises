@@ -18,6 +18,7 @@ const navItems = [
   { to: "/groups", label: "Groups" },
   { to: "/workspaces", label: "Workspaces" },
   { to: "/access", label: "Access" },
+  { to: "/secrets", label: "Secrets" },
 ] as const;
 
 export function AdminLayout() {

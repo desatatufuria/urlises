@@ -173,7 +173,7 @@ export function SecretRevealPage() {
 
           {status === "revealed" && plaintext !== null ? (
             <>
-              <DataState tone="neutral" title="Secret revealed" description="This secret has now been burned and cannot be viewed again." compact />
+              <DataState tone="neutral" title="Secret revealed" description="This secret has now been used up and can't be viewed again." compact />
               <pre className={visible ? "ui-copy" : "ui-copy ui-secret-mask"}>{plaintext}</pre>
               <div className="ui-actions">
                 <button className="ui-button ui-button-secondary" type="button" onClick={() => setVisible((current) => !current)}>

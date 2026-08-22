@@ -73,11 +73,39 @@ describe("workspaces page", () => {
     await screen.findByLabelText(/workspace name/i);
 
     await userEvent.type(screen.getByLabelText(/workspace name/i), "Launch Room");
-    await userEvent.clear(screen.getByLabelText(/workspace type/i));
-    await userEvent.type(screen.getByLabelText(/workspace type/i), "shared");
     await userEvent.click(screen.getByRole("button", { name: /create workspace/i }));
 
     expect(await screen.findByText(/workspace created/i)).toBeInTheDocument();
     expect((await screen.findAllByText(/launch room/i)).length).toBeGreaterThan(0);
+  });
+
+  it("links each workspace row to its access panel and renders grant sources as badges", async () => {
+    fetchMock.mockImplementation((input) => {
+      const url = String(input);
+      if (url.endsWith("/organizations/org-1/workspaces")) {
+        return jsonResponse({
+          workspaces: [
+            {
+              workspaceId: "workspace-1",
+              workspaceName: "Launch Room",
+              workspaceType: "shared",
+              organizationId: "org-1",
+              organizationName: "Acme",
+              role: "admin",
+              sources: ["direct", "group:Operators"],
+            },
+          ],
+        });
+      }
+      return jsonResponse({ error: "not found" }, 404);
+    });
+
+    renderAppRoute("/workspaces");
+
+    const link = await screen.findByRole("link", { name: /manage access/i });
+    expect(link).toHaveAttribute("href", "/access?panel=access&workspace=workspace-1");
+
+    expect(screen.getByText("direct")).toBeInTheDocument();
+    expect(screen.getByText("group:Operators")).toBeInTheDocument();
   });
 });
