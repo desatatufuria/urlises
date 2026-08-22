@@ -246,19 +246,20 @@ describe("members page", () => {
     expect(await screen.findByText(/resend failed/i)).toBeInTheDocument();
   });
 
-  it("revokes the current operator shell immediately after self-demotion", async () => {
+  it("does not sign out after a self role change while the org membership remains", async () => {
     vi.stubGlobal("confirm", vi.fn(() => true));
     fetchMock.mockImplementation((input, init) => {
       const url = String(input); const method = init?.method ?? "GET";
       if (url.endsWith("/organizations/org-1/members") && method === "GET") return jsonResponse({ members: [{ userId: "user-1", email: "owner@example.com", name: "Owner", role: "owner" }] });
       if (url.endsWith("/organizations/org-1/invitations")) return jsonResponse({ invitations: [] });
-      if (url.endsWith("/organizations/org-1/members") && method === "PATCH") return jsonResponse({ userId: "user-1", email: "owner@example.com", role: "member" });
-      if (url.endsWith("/organizations") && method === "GET") return jsonResponse({ organizations: [{ organizationId: "org-1", organizationName: "Acme", role: "member" }] });
+      if (url.endsWith("/organizations/org-1/members") && method === "PATCH") return jsonResponse({ userId: "user-1", email: "owner@example.com", role: "admin" });
+      if (url.endsWith("/organizations") && method === "GET") return jsonResponse({ organizations: [{ organizationId: "org-1", organizationName: "Acme", role: "admin" }] });
       return jsonResponse({ error: "not found" }, 404);
     });
     renderAppRoute("/members");
-    await userEvent.selectOptions(await screen.findByLabelText(/role for owner@example.com/i), "member");
-    expect(await screen.findByRole("button", { name: /sign in/i })).toBeInTheDocument();
+    await userEvent.selectOptions(await screen.findByLabelText(/role for owner@example.com/i), "admin");
+    expect(await screen.findByText(/role updated/i)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /sign in/i })).not.toBeInTheDocument();
   });
 
   it("asks for confirmation before applying a role change", async () => {
@@ -323,5 +324,146 @@ describe("members page", () => {
 
     expect(patchCalls).toBe(0);
     await waitFor(() => expect(select).toHaveValue("member"));
+  });
+
+  it("removes another member and refreshes the list without them", async () => {
+    vi.stubGlobal("confirm", vi.fn(() => true));
+    let membersFetched = 0;
+    let removeBody: Record<string, unknown> | null = null;
+    fetchMock.mockImplementation((input, init) => {
+      const url = String(input);
+      const method = init?.method ?? "GET";
+      if (url.endsWith("/organizations/org-1/members") && method === "GET") {
+        membersFetched += 1;
+        const members = membersFetched === 1
+          ? [
+              { userId: "user-1", email: "owner@example.com", name: "Owner", role: "owner" },
+              { userId: "user-2", email: "editor@example.com", name: "Editor", role: "member" },
+            ]
+          : [{ userId: "user-1", email: "owner@example.com", name: "Owner", role: "owner" }];
+        return jsonResponse({ members });
+      }
+      if (url.endsWith("/organizations/org-1/invitations")) return jsonResponse({ invitations: [] });
+      if (url.endsWith("/organizations/org-1/members") && method === "PATCH") {
+        removeBody = JSON.parse(String(init?.body ?? "{}"));
+        return jsonResponse(undefined, 204);
+      }
+      return jsonResponse({ error: "not found" }, 404);
+    });
+
+    renderAppRoute("/members");
+
+    const removeButton = await screen.findByRole("button", { name: /remove editor@example.com/i });
+    await userEvent.click(removeButton);
+
+    await waitFor(() => expect(screen.queryByText("editor@example.com")).not.toBeInTheDocument());
+    expect(removeBody).toEqual({ userId: "user-2", remove: true });
+  });
+
+  it("sends no remove request when the removal confirmation is dismissed", async () => {
+    vi.stubGlobal("confirm", vi.fn(() => false));
+    let patchCalls = 0;
+    fetchMock.mockImplementation((input, init) => {
+      const url = String(input);
+      const method = init?.method ?? "GET";
+      if (url.endsWith("/organizations/org-1/members") && method === "GET") {
+        return jsonResponse({
+          members: [
+            { userId: "user-1", email: "owner@example.com", name: "Owner", role: "owner" },
+            { userId: "user-2", email: "editor@example.com", name: "Editor", role: "member" },
+          ],
+        });
+      }
+      if (url.endsWith("/organizations/org-1/invitations")) return jsonResponse({ invitations: [] });
+      if (url.endsWith("/organizations/org-1/members") && method === "PATCH") {
+        patchCalls += 1;
+        return jsonResponse(undefined, 204);
+      }
+      return jsonResponse({ error: "not found" }, 404);
+    });
+
+    renderAppRoute("/members");
+
+    const removeButton = await screen.findByRole("button", { name: /remove editor@example.com/i });
+    await userEvent.click(removeButton);
+
+    expect(patchCalls).toBe(0);
+    expect(screen.getByText("editor@example.com")).toBeInTheDocument();
+  });
+
+  it("surfaces an error and clears busy state when member removal is rejected", async () => {
+    vi.stubGlobal("confirm", vi.fn(() => true));
+    fetchMock.mockImplementation((input, init) => {
+      const url = String(input);
+      const method = init?.method ?? "GET";
+      if (url.endsWith("/organizations/org-1/members") && method === "GET") {
+        return jsonResponse({
+          members: [
+            { userId: "user-1", email: "owner@example.com", name: "Owner", role: "owner" },
+            { userId: "user-2", email: "editor@example.com", name: "Editor", role: "member" },
+          ],
+        });
+      }
+      if (url.endsWith("/organizations/org-1/invitations")) return jsonResponse({ invitations: [] });
+      if (url.endsWith("/organizations/org-1/members") && method === "PATCH") {
+        return jsonResponse({ error: "forbidden" }, 403);
+      }
+      return jsonResponse({ error: "not found" }, 404);
+    });
+
+    renderAppRoute("/members");
+
+    const removeButton = await screen.findByRole("button", { name: /remove editor@example.com/i });
+    await userEvent.click(removeButton);
+
+    expect(await screen.findByText(/member removal rejected/i)).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole("button", { name: /remove editor@example.com/i })).not.toBeDisabled());
+  });
+
+  it("signs out after self-removal from the acting user's last organization", async () => {
+    vi.stubGlobal("confirm", vi.fn(() => true));
+    fetchMock.mockImplementation((input, init) => {
+      const url = String(input);
+      const method = init?.method ?? "GET";
+      if (url.endsWith("/organizations/org-1/members") && method === "GET") {
+        return jsonResponse({ members: [{ userId: "user-1", email: "owner@example.com", name: "Owner", role: "owner" }] });
+      }
+      if (url.endsWith("/organizations/org-1/invitations")) return jsonResponse({ invitations: [] });
+      if (url.endsWith("/organizations/org-1/members") && method === "PATCH") return jsonResponse(undefined, 204);
+      if (url.endsWith("/organizations") && method === "GET") return jsonResponse({ organizations: [] });
+      return jsonResponse({ error: "not found" }, 404);
+    });
+
+    renderAppRoute("/members");
+
+    const removeButton = await screen.findByRole("button", { name: /remove owner@example.com/i });
+    await userEvent.click(removeButton);
+
+    expect(await screen.findByRole("button", { name: /sign in/i })).toBeInTheDocument();
+  });
+
+  it("does not sign out after self-removal while other organizations remain", async () => {
+    vi.stubGlobal("confirm", vi.fn(() => true));
+    fetchMock.mockImplementation((input, init) => {
+      const url = String(input);
+      const method = init?.method ?? "GET";
+      if (url.endsWith("/organizations/org-1/members") && method === "GET") {
+        return jsonResponse({ members: [{ userId: "user-1", email: "owner@example.com", name: "Owner", role: "owner" }] });
+      }
+      if (url.endsWith("/organizations/org-1/invitations")) return jsonResponse({ invitations: [] });
+      if (url.endsWith("/organizations/org-1/members") && method === "PATCH") return jsonResponse(undefined, 204);
+      if (url.endsWith("/organizations") && method === "GET") {
+        return jsonResponse({ organizations: [{ organizationId: "org-2", organizationName: "Second Org", role: "member" }] });
+      }
+      return jsonResponse({ error: "not found" }, 404);
+    });
+
+    renderAppRoute("/members");
+
+    const removeButton = await screen.findByRole("button", { name: /remove owner@example.com/i });
+    await userEvent.click(removeButton);
+
+    await waitFor(() => expect(screen.queryByRole("button", { name: /remove owner@example.com/i })).not.toBeInTheDocument());
+    expect(screen.queryByRole("button", { name: /sign in/i })).not.toBeInTheDocument();
   });
 });

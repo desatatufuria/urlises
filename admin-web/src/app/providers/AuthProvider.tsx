@@ -22,7 +22,7 @@ interface AuthContextValue extends AuthSnapshot {
   signUp: (payload: RegistrationPayload) => Promise<void>;
   createOwnerOrganization: (name: string, idempotencyKey: string) => Promise<OrganizationMembership>;
   signOut: () => Promise<void>;
-  refreshOrganizations: () => Promise<void>;
+  refreshOrganizations: () => Promise<OrganizationMembership[]>;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -158,11 +158,12 @@ export function AuthProvider({ children, initialSnapshot }: PropsWithChildren<{ 
 	}, [snapshot.session?.accessToken]);
 
 	const refreshOrganizations = useCallback(async () => {
-		if (!snapshot.session) return;
+		if (!snapshot.session) return [];
 		const organizations = await listOrganizations(snapshot.session.accessToken);
 		const nextSnapshot = { ...snapshot, organizations };
 		setSnapshot(nextSnapshot);
 		persistSnapshot(nextSnapshot);
+		return organizations;
 	}, [snapshot]);
 
   const value = useMemo<AuthContextValue>(

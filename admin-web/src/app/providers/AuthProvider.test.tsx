@@ -1,5 +1,5 @@
 import { render, screen, waitFor } from "@testing-library/react";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AuthProvider, useAuth } from "./AuthProvider";
 
@@ -76,6 +76,22 @@ function CreateOrganizationProbe() {
   }, [createOwnerOrganization]);
 
   return <div data-testid="organizations">{JSON.stringify(organizations)}</div>;
+}
+
+function RefreshOrganizationsProbe() {
+  const { refreshOrganizations } = useAuth();
+  const [resolved, setResolved] = useState<string>("pending");
+  const attempted = useRef(false);
+
+  useEffect(() => {
+    if (attempted.current) {
+      return;
+    }
+    attempted.current = true;
+    void refreshOrganizations().then((result) => setResolved(JSON.stringify(result)));
+  }, [refreshOrganizations]);
+
+  return <div data-testid="resolved">{resolved}</div>;
 }
 
 describe("AuthProvider client id propagation", () => {
@@ -317,5 +333,21 @@ describe("AuthProvider client id propagation", () => {
     }
     render(<AuthProvider><StatusProbe /></AuthProvider>);
     await waitFor(() => expect(screen.getByTestId("status")).toHaveTextContent("anonymous"));
+  });
+
+  it("resolves refreshOrganizations() to the freshly fetched membership list", async () => {
+    const membership = { organizationId: "org-9", organizationName: "Refreshed Org", role: "admin" as const };
+    fetchMock.mockImplementation((input) =>
+      String(input).endsWith("/organizations") ? jsonResponse({ organizations: [membership] }) : jsonResponse({ error: "not found" }, 404),
+    );
+    const snapshot = {
+      session: { accessToken: "token", clientId: "client", expiresAt: "2099-01-01T00:00:00Z", user: { id: "user-1", email: "owner@example.com" } },
+      principal: { userId: "user-1", email: "owner@example.com", clientId: "client" },
+      organizations: [],
+    };
+
+    render(<AuthProvider initialSnapshot={snapshot}><RefreshOrganizationsProbe /></AuthProvider>);
+
+    await waitFor(() => expect(screen.getByTestId("resolved")).toHaveTextContent(JSON.stringify([membership])));
   });
 });
