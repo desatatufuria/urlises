@@ -101,7 +101,7 @@ export function WorkspacesPage() {
                 </td>
                 <td>
                   <div className="ui-actions-row">
-                    <Link className="ui-button ui-button-secondary" to={`/access?panel=access&workspace=${workspace.workspaceId}`}>
+                    <Link className="ui-button ui-button-secondary" to={`/access?workspace=${workspace.workspaceId}`}>
                       Manage access
                     </Link>
                     <button

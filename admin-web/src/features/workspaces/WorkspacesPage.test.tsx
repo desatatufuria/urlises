@@ -103,7 +103,7 @@ describe("workspaces page", () => {
     renderAppRoute("/workspaces");
 
     const link = await screen.findByRole("link", { name: /manage access/i });
-    expect(link).toHaveAttribute("href", "/access?panel=access&workspace=workspace-1");
+    expect(link).toHaveAttribute("href", "/access?workspace=workspace-1");
 
     expect(screen.getByText("direct")).toBeInTheDocument();
     expect(screen.getByText("group:Operators")).toBeInTheDocument();

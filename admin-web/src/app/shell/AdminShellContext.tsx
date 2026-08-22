@@ -9,7 +9,6 @@ import { useOrganization } from "../providers/OrganizationProvider";
 export const navItems = [
   { to: "/", label: "Overview", end: true },
   { to: "/workspaces", label: "Workspaces" },
-  { to: "/access", label: "Access" },
 ] as const;
 
 // Collapsed into the "Directory" nav submenu instead of sitting flat in
