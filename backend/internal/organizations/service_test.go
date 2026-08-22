@@ -374,11 +374,16 @@ func TestDeleteOrganizationRequiresAdmin(t *testing.T) {
 	}
 }
 
-// Phase 4 (Slice 4) — RED: happy path removes the organization and every
-// cascading child row (members, workspaces + children, invitations, groups +
-// children), while another organization's activity_events rows are left
-// untouched, and no activity row is recorded for the delete itself.
-func TestDeleteOrganizationHappyPathRemovesCascadesAndLeavesOtherOrgIntact(t *testing.T) {
+// Slice 2a — RED: happy path soft-deletes the organization (deleted_at and
+// deleted_by_user_id set, row NOT gone) while every child row (members,
+// workspaces + children, invitations, groups + children) survives intact —
+// the opposite assertion from the pre-soft-delete hard-delete behavior this
+// test previously covered. A second delete call on the now-trashed
+// organization returns ErrNotFound (idempotent, no silent no-op). An
+// organization.deleted activity event is recorded in the same transaction
+// (design.md Deviation 3, reversing lifecycle-management's "record nothing"
+// decision now that nothing cascades the event away).
+func TestDeleteOrganizationHappyPathSoftDeletesAndPreservesChildren(t *testing.T) {
 	t.Parallel()
 
 	ctx, pool := openOrganizationsTestPool(t, "organizations_delete_test")
@@ -437,8 +442,21 @@ func TestDeleteOrganizationHappyPathRemovesCascadesAndLeavesOtherOrgIntact(t *te
 		t.Fatalf("delete organization: %v", err)
 	}
 
+	// The organization row itself must survive with deleted_at/deleted_by_user_id set.
+	var deletedAt *time.Time
+	var deletedByUserID *string
+	if err := pool.QueryRow(ctx, `SELECT deleted_at, deleted_by_user_id FROM organizations WHERE id = $1`, organizationID).Scan(&deletedAt, &deletedByUserID); err != nil {
+		t.Fatalf("query soft-deleted organization: %v", err)
+	}
+	if deletedAt == nil {
+		t.Fatal("deleted_at = nil, want it set")
+	}
+	if deletedByUserID == nil || *deletedByUserID != ownerID {
+		t.Fatalf("deleted_by_user_id = %v, want %q", deletedByUserID, ownerID)
+	}
+
+	// Every child table must still be populated — soft delete cascades nothing.
 	for table, condition := range map[string]string{
-		"organizations":        "id = '" + organizationID + "'",
 		"organization_members": "organization_id = '" + organizationID + "'",
 		"workspaces":           "organization_id = '" + organizationID + "'",
 		"folders":              "workspace_id = '" + workspaceID + "'",
@@ -452,8 +470,8 @@ func TestDeleteOrganizationHappyPathRemovesCascadesAndLeavesOtherOrgIntact(t *te
 		if err := pool.QueryRow(ctx, `SELECT COUNT(*) FROM `+table+` WHERE `+condition).Scan(&count); err != nil {
 			t.Fatalf("count %s: %v", table, err)
 		}
-		if count != 0 {
-			t.Fatalf("%s count = %d, want 0 after cascade delete", table, count)
+		if count == 0 {
+			t.Fatalf("%s count = 0, want > 0 (soft delete must not cascade)", table)
 		}
 	}
 
@@ -465,12 +483,11 @@ func TestDeleteOrganizationHappyPathRemovesCascadesAndLeavesOtherOrgIntact(t *te
 		t.Fatal("other organization's activity_events rows must remain intact")
 	}
 
-	var totalActivityCount int
-	if err := pool.QueryRow(ctx, `SELECT COUNT(*) FROM activity_events`).Scan(&totalActivityCount); err != nil {
-		t.Fatalf("count all activity events: %v", err)
-	}
-	if totalActivityCount != otherActivityCount {
-		t.Fatalf("total activity event count = %d, want exactly %d (no delete-organization event recorded anywhere)", totalActivityCount, otherActivityCount)
+	assertOrganizationsTestActivityEvent(t, ctx, pool, organizationID, ownerID, activity.KindOrganizationDeleted, "organization", organizationID)
+
+	// A second delete on the now-trashed organization is idempotent: ErrNotFound, not a silent no-op.
+	if err := service.DeleteOrganization(ctx, ownerID, organizationID); err != ErrNotFound {
+		t.Fatalf("second delete err = %v, want %v", err, ErrNotFound)
 	}
 }
 
@@ -507,6 +524,49 @@ func TestDeleteOrganizationOrphanProbeBlocksWithZeroRowsDeleted(t *testing.T) {
 	}
 }
 
+// Slice 2a — RED: choke point 9 / design.md Deviation 5. A member whose only
+// OTHER organization is itself soft-deleted must be treated as orphaned: a
+// trashed organization is not a reachable fallback. The target organization's
+// deleted_at must stay untouched (rolled back).
+func TestDeleteOrganizationOrphanProbeBlocksWhenMembersOnlyOtherOrgIsSoftDeleted(t *testing.T) {
+	t.Parallel()
+
+	ctx, pool := openOrganizationsTestPool(t, "organizations_delete_test")
+	service := NewService(pool, activity.NewService(pool))
+
+	ownerID := insertOrganizationsTestUser(t, ctx, pool, "delete-orphan-trash-owner@example.com")
+	sharedMemberID := insertOrganizationsTestUser(t, ctx, pool, "delete-orphan-trash-member@example.com")
+
+	targetOrganizationID := insertOrganizationsTestOrganization(t, ctx, pool, "Delete Orphan Trash Target Org")
+	insertOrganizationsTestMember(t, ctx, pool, targetOrganizationID, ownerID, "owner")
+	insertOrganizationsTestMember(t, ctx, pool, targetOrganizationID, sharedMemberID, "member")
+
+	otherOrganizationID := insertOrganizationsTestOrganization(t, ctx, pool, "Delete Orphan Trash Other Org")
+	insertOrganizationsTestMember(t, ctx, pool, otherOrganizationID, sharedMemberID, "owner")
+
+	// sharedMemberID is the sole member of otherOrganizationID, so this
+	// self-delete is allowed (the orphan probe excludes the requester).
+	if err := service.DeleteOrganization(ctx, sharedMemberID, otherOrganizationID); err != nil {
+		t.Fatalf("soft delete other organization: %v", err)
+	}
+
+	// sharedMemberID's only OTHER organization (otherOrganizationID) is now
+	// in the trash, so deleting targetOrganizationID must block: it would
+	// leave sharedMemberID with zero reachable organizations.
+	err := service.DeleteOrganization(ctx, ownerID, targetOrganizationID)
+	if err != ErrWouldOrphanMember {
+		t.Fatalf("err = %v, want %v", err, ErrWouldOrphanMember)
+	}
+
+	var deletedAt *time.Time
+	if err := pool.QueryRow(ctx, `SELECT deleted_at FROM organizations WHERE id = $1`, targetOrganizationID).Scan(&deletedAt); err != nil {
+		t.Fatalf("query target organization: %v", err)
+	}
+	if deletedAt != nil {
+		t.Fatal("deleted_at set, want nil (rolled back, blocked by orphan probe)")
+	}
+}
+
 // Phase 4 (Slice 4) — RED: the requester's own orphaning does not block
 // deletion, since the orphan probe excludes the requester (om.user_id <> $2).
 func TestDeleteOrganizationRequesterOwnOrphaningDoesNotBlock(t *testing.T) {
@@ -522,12 +582,12 @@ func TestDeleteOrganizationRequesterOwnOrphaningDoesNotBlock(t *testing.T) {
 		t.Fatalf("delete organization: %v, want requester's own last-org deletion to succeed", err)
 	}
 
-	var count int
-	if err := pool.QueryRow(ctx, `SELECT COUNT(*) FROM organizations WHERE id = $1`, organizationID).Scan(&count); err != nil {
-		t.Fatalf("count organizations: %v", err)
+	var deletedAt *time.Time
+	if err := pool.QueryRow(ctx, `SELECT deleted_at FROM organizations WHERE id = $1`, organizationID).Scan(&deletedAt); err != nil {
+		t.Fatalf("query organization: %v", err)
 	}
-	if count != 0 {
-		t.Fatalf("organization count = %d, want 0", count)
+	if deletedAt == nil {
+		t.Fatal("deleted_at = nil, want it set (soft delete, row survives)")
 	}
 }
 
@@ -590,11 +650,15 @@ func TestDeleteOrganizationConcurrentRequestsOnlyOneCommits(t *testing.T) {
 	}
 
 	var count int
-	if err := pool.QueryRow(ctx, `SELECT COUNT(*) FROM organizations WHERE id = $1`, organizationID).Scan(&count); err != nil {
+	var deletedAt *time.Time
+	if err := pool.QueryRow(ctx, `SELECT COUNT(*), MAX(deleted_at) FROM organizations WHERE id = $1`, organizationID).Scan(&count, &deletedAt); err != nil {
 		t.Fatalf("count organizations: %v", err)
 	}
-	if count != 0 {
-		t.Fatalf("organization count = %d, want 0", count)
+	if count != 1 {
+		t.Fatalf("organization count = %d, want 1 (soft delete, row survives)", count)
+	}
+	if deletedAt == nil {
+		t.Fatal("deleted_at = nil, want it set")
 	}
 }
 

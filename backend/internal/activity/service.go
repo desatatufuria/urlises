@@ -43,6 +43,10 @@ const (
 	KindGroupDeleted                  Kind = "group.deleted"
 	KindGroupMemberAdded              Kind = "group_member.added"
 	KindGroupMemberRemoved            Kind = "group_member.removed"
+	// KindOrganizationDeleted reverses lifecycle-management's "record
+	// nothing" decision for organization delete: under soft delete nothing
+	// cascades the row away, so the event survives (design.md Deviation 3).
+	KindOrganizationDeleted Kind = "organization.deleted"
 )
 
 // minListLimit and maxListLimit are the clamp bounds ListByOrganization

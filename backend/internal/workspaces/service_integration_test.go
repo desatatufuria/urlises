@@ -389,11 +389,15 @@ func TestDeleteWorkspaceUnknownReturnsNotFound(t *testing.T) {
 	}
 }
 
-// Phase 3 (Slice 3) — RED: an admin deleting a workspace cascades away every
-// child table (folders, bookmarks, workspace_cursors, sync_events,
-// workspace_user_access, workspace_group_access) and records a
-// workspace.deleted activity row in the same transaction.
-func TestDeleteWorkspaceCascadesAndRecordsActivity(t *testing.T) {
+// Slice 2a — RED: an admin deleting a workspace soft-deletes it (deleted_at
+// and deleted_by_user_id set, row NOT gone) while every child table (folders,
+// bookmarks, workspace_cursors, sync_events, workspace_user_access,
+// workspace_group_access) survives intact — the opposite assertion from the
+// pre-soft-delete hard-delete behavior this test previously covered. A
+// workspace.deleted activity row is still recorded in the same transaction
+// (unchanged from lifecycle-management). A second delete call on the now-
+// trashed workspace is idempotent: ErrNotFound, not a silent no-op.
+func TestDeleteWorkspaceSoftDeletesAndPreservesChildren(t *testing.T) {
 	t.Parallel()
 
 	ctx, pool := openWorkspacesTestPool(t)
@@ -427,29 +431,46 @@ func TestDeleteWorkspaceCascadesAndRecordsActivity(t *testing.T) {
 		t.Fatalf("delete workspace: %v", err)
 	}
 
-	if countWorkspacesTestRows(t, ctx, pool, "workspaces", "id", workspaceID) != 0 {
-		t.Fatalf("expected workspace row to be gone")
+	if countWorkspacesTestRows(t, ctx, pool, "workspaces", "id", workspaceID) != 1 {
+		t.Fatalf("expected workspace row to survive soft delete")
 	}
-	if countWorkspacesTestRows(t, ctx, pool, "folders", "workspace_id", workspaceID) != 0 {
-		t.Fatalf("expected folders to cascade away")
+	var deletedAt *time.Time
+	var deletedByUserID *string
+	if err := pool.QueryRow(ctx, `SELECT deleted_at, deleted_by_user_id FROM workspaces WHERE id = $1`, workspaceID).Scan(&deletedAt, &deletedByUserID); err != nil {
+		t.Fatalf("query soft-deleted workspace: %v", err)
 	}
-	if countWorkspacesTestRows(t, ctx, pool, "bookmarks", "workspace_id", workspaceID) != 0 {
-		t.Fatalf("expected bookmarks to cascade away")
+	if deletedAt == nil {
+		t.Fatal("deleted_at = nil, want it set")
 	}
-	if countWorkspacesTestRows(t, ctx, pool, "workspace_cursors", "workspace_id", workspaceID) != 0 {
-		t.Fatalf("expected workspace_cursors to cascade away")
+	if deletedByUserID == nil || *deletedByUserID != adminID {
+		t.Fatalf("deleted_by_user_id = %v, want %q", deletedByUserID, adminID)
 	}
-	if countWorkspacesTestRows(t, ctx, pool, "sync_events", "workspace_id", workspaceID) != 0 {
-		t.Fatalf("expected sync_events to cascade away")
+
+	if countWorkspacesTestRows(t, ctx, pool, "folders", "workspace_id", workspaceID) == 0 {
+		t.Fatalf("expected folders to survive (soft delete cascades nothing)")
 	}
-	if countWorkspacesTestRows(t, ctx, pool, "workspace_user_access", "workspace_id", workspaceID) != 0 {
-		t.Fatalf("expected workspace_user_access to cascade away")
+	if countWorkspacesTestRows(t, ctx, pool, "bookmarks", "workspace_id", workspaceID) == 0 {
+		t.Fatalf("expected bookmarks to survive")
 	}
-	if countWorkspacesTestRows(t, ctx, pool, "workspace_group_access", "workspace_id", workspaceID) != 0 {
-		t.Fatalf("expected workspace_group_access to cascade away")
+	if countWorkspacesTestRows(t, ctx, pool, "workspace_cursors", "workspace_id", workspaceID) == 0 {
+		t.Fatalf("expected workspace_cursors to survive")
+	}
+	if countWorkspacesTestRows(t, ctx, pool, "sync_events", "workspace_id", workspaceID) == 0 {
+		t.Fatalf("expected sync_events to survive")
+	}
+	if countWorkspacesTestRows(t, ctx, pool, "workspace_user_access", "workspace_id", workspaceID) == 0 {
+		t.Fatalf("expected workspace_user_access to survive")
+	}
+	if countWorkspacesTestRows(t, ctx, pool, "workspace_group_access", "workspace_id", workspaceID) == 0 {
+		t.Fatalf("expected workspace_group_access to survive")
 	}
 
 	assertWorkspacesTestActivityEvent(t, ctx, pool, organizationID, adminID, activity.KindWorkspaceDeleted, "workspace", workspaceID)
+
+	// A second delete on the now-trashed workspace is idempotent: ErrNotFound, not a silent no-op.
+	if err := service.Delete(ctx, adminID, workspaceID); err != ErrNotFound {
+		t.Fatalf("second delete err = %v, want %v", err, ErrNotFound)
+	}
 }
 
 func openWorkspacesTestPool(t *testing.T) (context.Context, *pgxpool.Pool) {

@@ -652,20 +652,22 @@ func (s *Service) CancelInvitation(ctx context.Context, requesterUserID, organiz
 	return nil
 }
 
-// DeleteOrganization permanently removes an organization after an admin gate
-// and an orphan-member guard. Modeled on PatchMember's locking sequence:
+// DeleteOrganization soft-deletes an organization after an admin gate and an
+// orphan-member guard. Modeled on PatchMember's locking sequence:
 // lockOrganization (FOR UPDATE on the org row) -> requireOrganizationAdmin ->
 // lockOrganizationMemberships (FOR UPDATE on every membership row) -> the
-// orphan probe -> DELETE. lockOrganization's FOR UPDATE also serializes
-// concurrent DeleteOrganization calls against the same org: the losing
-// transaction blocks until the winner commits, then finds zero rows and
-// returns ErrNotFound (see TestDeleteOrganizationConcurrentRequestsOnlyOneCommits).
+// orphan probe -> soft-delete UPDATE. lockOrganization's FOR UPDATE also
+// serializes concurrent DeleteOrganization calls against the same org: the
+// losing transaction blocks until the winner commits, then lockOrganization's
+// own `deleted_at IS NULL` predicate finds zero rows and returns ErrNotFound
+// (see TestDeleteOrganizationConcurrentRequestsOnlyOneCommits).
 //
-// No activity.Record: activity_events.organization_id is NOT NULL REFERENCES
-// organizations(id) ON DELETE CASCADE, so a row recorded before the DELETE
-// would be cascaded away by this same transaction, and a row recorded after
-// the DELETE would violate the FK. There is no ordering in which the event
-// survives -- see design.md's "Slice 4 activity event" decision.
+// Soft delete (design.md "Migration DDL" / recovery window): the row is kept
+// with deleted_at/deleted_by_user_id set, not removed. Nothing cascades, so
+// an organization.deleted activity event is recorded inside this same
+// transaction, before commit (design.md Deviation 3, reversing
+// lifecycle-management's "record nothing" decision, which was correct only
+// for the previous hard DELETE).
 func (s *Service) DeleteOrganization(ctx context.Context, requesterUserID, organizationID string) error {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -691,8 +693,27 @@ func (s *Service) DeleteOrganization(ctx context.Context, requesterUserID, organ
 		return ErrWouldOrphanMember
 	}
 
-	if _, err := tx.Exec(ctx, `DELETE FROM organizations WHERE id = $1`, organizationID); err != nil {
-		return fmt.Errorf("delete organization: %w", err)
+	var organizationName string
+	if err := tx.QueryRow(ctx, `SELECT name FROM organizations WHERE id = $1`, organizationID).Scan(&organizationName); err != nil {
+		return fmt.Errorf("load organization name for delete: %w", err)
+	}
+
+	result, err := tx.Exec(ctx, `
+		UPDATE organizations
+		SET deleted_at = NOW(), deleted_by_user_id = $2, updated_at = NOW()
+		WHERE id = $1 AND deleted_at IS NULL
+	`, organizationID, requesterUserID)
+	if err != nil {
+		return fmt.Errorf("soft delete organization: %w", err)
+	}
+	if result.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+
+	if err := s.activity.Record(ctx, tx, organizationID, requesterUserID, activity.KindOrganizationDeleted, "organization", organizationID, map[string]any{
+		"organizationName": organizationName,
+	}); err != nil {
+		return fmt.Errorf("record organization deleted activity: %w", err)
 	}
 
 	if err := tx.Commit(ctx); err != nil {
@@ -706,7 +727,11 @@ func (s *Service) DeleteOrganization(ctx context.Context, requesterUserID, organ
 // lockOrganizationMemberships. It excludes the requester (om.user_id <> $2)
 // per design.md's "Slice 4 requester exclusion" decision: a sole member
 // deleting their own last organization is a deliberate self-service act, not
-// an accidental orphan.
+// an accidental orphan. The inner EXISTS against organizations (choke point
+// 9 / design.md Deviation 5) excludes a member's other organization from
+// counting as a fallback when that other organization is itself in the
+// trash: a soft-deleted organization is not reachable, so it must not save a
+// member from being orphaned.
 func organizationDeleteWouldOrphanMember(ctx context.Context, tx pgx.Tx, organizationID, requesterUserID string) (bool, error) {
 	var wouldOrphan bool
 	if err := tx.QueryRow(ctx, `
@@ -718,6 +743,11 @@ func organizationDeleteWouldOrphanMember(ctx context.Context, tx pgx.Tx, organiz
 					SELECT 1 FROM organization_members other
 					WHERE other.user_id = om.user_id
 						AND other.organization_id <> $1
+						AND EXISTS (
+							SELECT 1 FROM organizations o2
+							WHERE o2.id = other.organization_id
+								AND o2.deleted_at IS NULL
+						)
 				)
 		)
 	`, organizationID, requesterUserID).Scan(&wouldOrphan); err != nil {
@@ -976,7 +1006,7 @@ func countOwners(ctx context.Context, querier dbQuerier, organizationID string) 
 
 func lockOrganization(ctx context.Context, querier dbQuerier, organizationID string) error {
 	var id string
-	err := querier.QueryRow(ctx, `SELECT id FROM organizations WHERE id = $1 FOR UPDATE`, organizationID).Scan(&id)
+	err := querier.QueryRow(ctx, `SELECT id FROM organizations WHERE id = $1 AND deleted_at IS NULL FOR UPDATE`, organizationID).Scan(&id)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return ErrNotFound
