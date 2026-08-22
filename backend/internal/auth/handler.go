@@ -159,6 +159,10 @@ func RegisterRoutes(mux *http.ServeMux, service *Service, invitations invitation
 		httpapi.WriteJSON(w, http.StatusOK, prefs)
 	})))
 
+	// GET /me/secret-recipients is also registered under /me/* but lives in
+	// organizations/handler.go (Decision 8 — organizations owns the query,
+	// data and error mapping; registering it here would add an
+	// organizations dependency to this package for no benefit).
 	mux.Handle("POST /me/deactivate", service.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		principal, ok := PrincipalFromContext(r.Context())
 		if !ok {

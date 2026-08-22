@@ -23,6 +23,7 @@ type routeService interface {
 	DeleteOrganization(ctx context.Context, requesterUserID, organizationID string) error
 	RestoreOrganization(ctx context.Context, requesterUserID, organizationID string) error
 	ListDeletedOrganizations(ctx context.Context, requesterUserID string) ([]DeletedOrganization, error)
+	ListSecretRecipients(ctx context.Context, requesterUserID string) ([]MemberName, error)
 }
 
 type creationTxService interface {
@@ -302,6 +303,28 @@ func RegisterRoutes(mux *http.ServeMux, authMiddleware func(http.Handler) http.H
 		}
 
 		httpapi.WriteJSON(w, http.StatusOK, map[string]any{"organizations": deleted})
+	})))
+
+	// GET /me/secret-recipients lives under auth's /me/* path namespace but
+	// is owned here: the query, the data and the error mapping are all
+	// organizations-domain, and registering it in auth would force an
+	// organizations dependency into that package. Go 1.22's ServeMux matches
+	// "GET /me" as an exact literal, so this pattern does not interact with
+	// it (Decision 8).
+	mux.Handle("GET /me/secret-recipients", authMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		principal, ok := auth.PrincipalFromContext(r.Context())
+		if !ok {
+			httpapi.WriteError(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+
+		recipients, err := service.ListSecretRecipients(r.Context(), principal.UserID)
+		if err != nil {
+			writeOrganizationError(w, err)
+			return
+		}
+
+		httpapi.WriteJSON(w, http.StatusOK, map[string]any{"recipients": recipients})
 	})))
 }
 

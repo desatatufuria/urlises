@@ -2,11 +2,13 @@ package organizations
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -18,6 +20,29 @@ import (
 	"github.com/furia/shared-bookmark-sync/backend/internal/purge"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+// B1.2 — pure, DB-free characterization test proving Decision 2's compile-time
+// guard actually holds: MemberName has exactly 3 fields (no room for a role
+// to be added by accident) and json.Marshal of a populated value never emits
+// "role" anywhere in the output bytes -- a real executable proof, not just a
+// struct-shape assertion.
+func TestMemberNameHasNoRoleField(t *testing.T) {
+	t.Parallel()
+
+	memberNameType := reflect.TypeOf(MemberName{})
+	if got := memberNameType.NumField(); got != 3 {
+		t.Fatalf("MemberName field count = %d, want 3 (UserID, Email, Name)", got)
+	}
+
+	populated := MemberName{UserID: "user-1", Email: "someone@example.com", Name: "Someone Roleplayer"}
+	body, err := json.Marshal(populated)
+	if err != nil {
+		t.Fatalf("marshal MemberName: %v", err)
+	}
+	if strings.Contains(string(body), `"role"`) {
+		t.Fatalf("marshalled MemberName = %s, must never contain a \"role\" key", body)
+	}
+}
 
 func TestCreateOrganizationBootstrapsCreatorAsOwner(t *testing.T) {
 	t.Parallel()
@@ -1157,6 +1182,370 @@ func softDeleteOrganizationsTestOrganization(t *testing.T, ctx context.Context, 
 
 	if _, err := pool.Exec(ctx, `UPDATE organizations SET deleted_at = NOW() WHERE id = $1`, organizationID); err != nil {
 		t.Fatalf("soft delete organization fixture: %v", err)
+	}
+}
+
+// disableOrganizationsTestUser stamps disabled_at directly via SQL (mirrors
+// softDeleteOrganizationsTestOrganization), so tests can construct an
+// already-deactivated user fixture without going through
+// auth.DeactivateSelf. Their organization_members row is left untouched.
+func disableOrganizationsTestUser(t *testing.T, ctx context.Context, pool *pgxpool.Pool, userID string) {
+	t.Helper()
+
+	if _, err := pool.Exec(ctx, `UPDATE users SET disabled_at = NOW() WHERE id = $1`, userID); err != nil {
+		t.Fatalf("disable user fixture: %v", err)
+	}
+}
+
+// insertOrganizationsTestBulkMembers batch-inserts count fresh users as
+// members of organizationID in two round trips (not count*2), so B2.9's
+// LIMIT-honoured case can seed hundreds of rows without a slow per-row loop.
+// suffix must be unique per call within a test to avoid email collisions.
+func insertOrganizationsTestBulkMembers(t *testing.T, ctx context.Context, pool *pgxpool.Pool, organizationID string, count int, suffix string) {
+	t.Helper()
+
+	if _, err := pool.Exec(ctx, `
+		WITH inserted AS (
+			INSERT INTO users (email, password_hash)
+			SELECT 'bulk-recipient-' || gs || '-' || $3 || '@example.com', 'hash'
+			FROM generate_series(1, $2) AS gs
+			RETURNING id
+		)
+		INSERT INTO organization_members (organization_id, user_id, role)
+		SELECT $1, id, 'member' FROM inserted
+	`, organizationID, count, suffix); err != nil {
+		t.Fatalf("bulk insert organization members: %v", err)
+	}
+}
+
+// findOrganizationsTestSecretRecipient returns the recipient matching
+// userID, and how many times it appears (dedup proof), so callers can assert
+// both presence and cardinality with one call.
+func findOrganizationsTestSecretRecipient(recipients []MemberName, userID string) (MemberName, int) {
+	var found MemberName
+	count := 0
+	for _, recipient := range recipients {
+		if recipient.UserID == userID {
+			found = recipient
+			count++
+		}
+	}
+	return found, count
+}
+
+// B2.1 — RED: a peer shared by two of the requester's live organizations
+// appears exactly once (SELECT DISTINCT dedup), and a peer unique to each
+// org still appears.
+func TestListSecretRecipientsCrossOrgUnionAndDedup(t *testing.T) {
+	t.Parallel()
+
+	ctx, pool := openOrganizationsTestPool(t, "organizations_secret_recipients_test")
+	service := NewService(pool, activity.NewService(pool))
+
+	requesterID := insertOrganizationsTestUser(t, ctx, pool, "b2-1-requester@example.com")
+	sharedPeerID := insertOrganizationsTestUser(t, ctx, pool, "b2-1-shared-peer@example.com")
+	peerAOnlyID := insertOrganizationsTestUser(t, ctx, pool, "b2-1-peer-a@example.com")
+	peerBOnlyID := insertOrganizationsTestUser(t, ctx, pool, "b2-1-peer-b@example.com")
+
+	orgA := insertOrganizationsTestOrganization(t, ctx, pool, "B2.1 Org A")
+	orgB := insertOrganizationsTestOrganization(t, ctx, pool, "B2.1 Org B")
+	insertOrganizationsTestMember(t, ctx, pool, orgA, requesterID, "member")
+	insertOrganizationsTestMember(t, ctx, pool, orgB, requesterID, "member")
+	insertOrganizationsTestMember(t, ctx, pool, orgA, sharedPeerID, "member")
+	insertOrganizationsTestMember(t, ctx, pool, orgB, sharedPeerID, "member")
+	insertOrganizationsTestMember(t, ctx, pool, orgA, peerAOnlyID, "member")
+	insertOrganizationsTestMember(t, ctx, pool, orgB, peerBOnlyID, "member")
+
+	recipients, err := service.ListSecretRecipients(ctx, requesterID)
+	if err != nil {
+		t.Fatalf("list secret recipients: %v", err)
+	}
+
+	if _, count := findOrganizationsTestSecretRecipient(recipients, sharedPeerID); count != 1 {
+		t.Fatalf("shared peer occurrence count = %d, want exactly 1 (dedup)", count)
+	}
+	if _, count := findOrganizationsTestSecretRecipient(recipients, peerAOnlyID); count != 1 {
+		t.Fatalf("org-A-only peer occurrence count = %d, want 1", count)
+	}
+	if _, count := findOrganizationsTestSecretRecipient(recipients, peerBOnlyID); count != 1 {
+		t.Fatalf("org-B-only peer occurrence count = %d, want 1", count)
+	}
+}
+
+// B2.2 — RED: the requester's own userId is present in their own result
+// (self-send is supported; Decision 5 -- natural, no exclusion predicate).
+func TestListSecretRecipientsIncludesSelf(t *testing.T) {
+	t.Parallel()
+
+	ctx, pool := openOrganizationsTestPool(t, "organizations_secret_recipients_test")
+	service := NewService(pool, activity.NewService(pool))
+
+	requesterID := insertOrganizationsTestUser(t, ctx, pool, "b2-2-requester@example.com")
+	organizationID := insertOrganizationsTestOrganization(t, ctx, pool, "B2.2 Org")
+	insertOrganizationsTestMember(t, ctx, pool, organizationID, requesterID, "owner")
+
+	recipients, err := service.ListSecretRecipients(ctx, requesterID)
+	if err != nil {
+		t.Fatalf("list secret recipients: %v", err)
+	}
+
+	self, count := findOrganizationsTestSecretRecipient(recipients, requesterID)
+	if count != 1 {
+		t.Fatalf("self occurrence count = %d, want 1", count)
+	}
+	if self.Email != "b2-2-requester@example.com" {
+		t.Fatalf("self email = %q, want the requester's own email", self.Email)
+	}
+}
+
+// B2.3 — RED: the whole point of the change. A plain `member` (not admin,
+// not owner) gets a full, non-empty result -- membership is the gate, not
+// admin role.
+func TestListSecretRecipientsMembershipGateNotAdminGate(t *testing.T) {
+	t.Parallel()
+
+	ctx, pool := openOrganizationsTestPool(t, "organizations_secret_recipients_test")
+	service := NewService(pool, activity.NewService(pool))
+
+	memberID := insertOrganizationsTestUser(t, ctx, pool, "b2-3-member@example.com")
+	adminID := insertOrganizationsTestUser(t, ctx, pool, "b2-3-admin@example.com")
+	organizationID := insertOrganizationsTestOrganization(t, ctx, pool, "B2.3 Org")
+	insertOrganizationsTestMember(t, ctx, pool, organizationID, memberID, "member")
+	insertOrganizationsTestMember(t, ctx, pool, organizationID, adminID, "admin")
+
+	recipients, err := service.ListSecretRecipients(ctx, memberID)
+	if err != nil {
+		t.Fatalf("list secret recipients as plain member: %v", err)
+	}
+	if len(recipients) != 2 {
+		t.Fatalf("recipients for plain member = %d, want 2 (self + admin peer)", len(recipients))
+	}
+	if _, count := findOrganizationsTestSecretRecipient(recipients, adminID); count != 1 {
+		t.Fatalf("admin peer occurrence count = %d, want 1 (member can see admin as a delivery target)", count)
+	}
+}
+
+// B2.4 — RED: an org the requester does not belong to contributes zero rows,
+// even though it shares no users with the requester's own orgs.
+func TestListSecretRecipientsExcludesCrossOrgIsolation(t *testing.T) {
+	t.Parallel()
+
+	ctx, pool := openOrganizationsTestPool(t, "organizations_secret_recipients_test")
+	service := NewService(pool, activity.NewService(pool))
+
+	requesterID := insertOrganizationsTestUser(t, ctx, pool, "b2-4-requester@example.com")
+	strangerID := insertOrganizationsTestUser(t, ctx, pool, "b2-4-stranger@example.com")
+	requesterOrg := insertOrganizationsTestOrganization(t, ctx, pool, "B2.4 Requester Org")
+	strangerOrg := insertOrganizationsTestOrganization(t, ctx, pool, "B2.4 Stranger Org")
+	insertOrganizationsTestMember(t, ctx, pool, requesterOrg, requesterID, "owner")
+	insertOrganizationsTestMember(t, ctx, pool, strangerOrg, strangerID, "owner")
+
+	recipients, err := service.ListSecretRecipients(ctx, requesterID)
+	if err != nil {
+		t.Fatalf("list secret recipients: %v", err)
+	}
+	if len(recipients) != 1 {
+		t.Fatalf("recipients = %d, want 1 (self only)", len(recipients))
+	}
+	if _, count := findOrganizationsTestSecretRecipient(recipients, strangerID); count != 0 {
+		t.Fatalf("stranger occurrence count = %d, want 0 (cross-org isolation)", count)
+	}
+}
+
+// B2.5 — RED: a still-pending invitation yields no row; after acceptance,
+// that user appears (proves the exclusion is structural, via
+// organization_members, not a filter on invitations).
+func TestListSecretRecipientsPendingInvitationExcludedThenIncludedAfterAccept(t *testing.T) {
+	t.Parallel()
+
+	ctx, pool := openOrganizationsTestPool(t, "organizations_secret_recipients_test")
+	service := NewService(pool, activity.NewService(pool))
+
+	requesterID := insertOrganizationsTestUser(t, ctx, pool, "b2-5-requester@example.com")
+	inviteeID := insertOrganizationsTestUser(t, ctx, pool, "b2-5-invitee@example.com")
+	organizationID := insertOrganizationsTestOrganization(t, ctx, pool, "B2.5 Org")
+	insertOrganizationsTestMember(t, ctx, pool, organizationID, requesterID, "admin")
+	insertOrganizationsTestInvitation(t, ctx, pool, organizationID, "b2-5-invitee@example.com", "member", "pending", requesterID, "b2-5-token")
+
+	before, err := service.ListSecretRecipients(ctx, requesterID)
+	if err != nil {
+		t.Fatalf("list secret recipients before accept: %v", err)
+	}
+	if _, count := findOrganizationsTestSecretRecipient(before, inviteeID); count != 0 {
+		t.Fatalf("pending invitee occurrence count = %d, want 0 before acceptance", count)
+	}
+
+	if _, err := service.AcceptInvitation(ctx, inviteeID, "b2-5-token"); err != nil {
+		t.Fatalf("accept invitation: %v", err)
+	}
+
+	after, err := service.ListSecretRecipients(ctx, requesterID)
+	if err != nil {
+		t.Fatalf("list secret recipients after accept: %v", err)
+	}
+	if _, count := findOrganizationsTestSecretRecipient(after, inviteeID); count != 1 {
+		t.Fatalf("accepted invitee occurrence count = %d, want 1 after acceptance", count)
+	}
+}
+
+// B2.6 — RED (Deviation 2): a deactivated user disappears from the
+// directory while their organization_members row still exists untouched.
+func TestListSecretRecipientsExcludesDeactivatedUser(t *testing.T) {
+	t.Parallel()
+
+	ctx, pool := openOrganizationsTestPool(t, "organizations_secret_recipients_test")
+	service := NewService(pool, activity.NewService(pool))
+
+	requesterID := insertOrganizationsTestUser(t, ctx, pool, "b2-6-requester@example.com")
+	peerID := insertOrganizationsTestUser(t, ctx, pool, "b2-6-peer@example.com")
+	organizationID := insertOrganizationsTestOrganization(t, ctx, pool, "B2.6 Org")
+	insertOrganizationsTestMember(t, ctx, pool, organizationID, requesterID, "owner")
+	insertOrganizationsTestMember(t, ctx, pool, organizationID, peerID, "member")
+
+	before, err := service.ListSecretRecipients(ctx, requesterID)
+	if err != nil {
+		t.Fatalf("list secret recipients before disable: %v", err)
+	}
+	if _, count := findOrganizationsTestSecretRecipient(before, peerID); count != 1 {
+		t.Fatalf("peer occurrence count before disable = %d, want 1", count)
+	}
+
+	disableOrganizationsTestUser(t, ctx, pool, peerID)
+
+	after, err := service.ListSecretRecipients(ctx, requesterID)
+	if err != nil {
+		t.Fatalf("list secret recipients after disable: %v", err)
+	}
+	if _, count := findOrganizationsTestSecretRecipient(after, peerID); count != 0 {
+		t.Fatalf("peer occurrence count after disable = %d, want 0 (deactivated users are not delivery targets)", count)
+	}
+
+	var memberRowCount int
+	if err := pool.QueryRow(ctx, `SELECT COUNT(*) FROM organization_members WHERE organization_id = $1 AND user_id = $2`, organizationID, peerID).Scan(&memberRowCount); err != nil {
+		t.Fatalf("query member row: %v", err)
+	}
+	if memberRowCount != 1 {
+		t.Fatalf("member row count = %d, want 1 (disabling a user must not touch organization_members)", memberRowCount)
+	}
+}
+
+// B2.7 — RED (CP14): stamping deleted_at on a shared organization makes its
+// peers vanish, mirroring groups/service_integration_test.go's CP11 case.
+func TestListSecretRecipientsExcludesSoftDeletedOrganization(t *testing.T) {
+	t.Parallel()
+
+	ctx, pool := openOrganizationsTestPool(t, "organizations_secret_recipients_test")
+	service := NewService(pool, activity.NewService(pool))
+
+	requesterID := insertOrganizationsTestUser(t, ctx, pool, "b2-7-requester@example.com")
+	peerID := insertOrganizationsTestUser(t, ctx, pool, "b2-7-peer@example.com")
+	liveOrg := insertOrganizationsTestOrganization(t, ctx, pool, "B2.7 Live Org")
+	deletedOrg := insertOrganizationsTestOrganization(t, ctx, pool, "B2.7 Deleted Org")
+	insertOrganizationsTestMember(t, ctx, pool, liveOrg, requesterID, "owner")
+	insertOrganizationsTestMember(t, ctx, pool, deletedOrg, requesterID, "owner")
+	insertOrganizationsTestMember(t, ctx, pool, deletedOrg, peerID, "member")
+	softDeleteOrganizationsTestOrganization(t, ctx, pool, deletedOrg)
+
+	recipients, err := service.ListSecretRecipients(ctx, requesterID)
+	if err != nil {
+		t.Fatalf("list secret recipients: %v", err)
+	}
+	if len(recipients) != 1 {
+		t.Fatalf("recipients = %d, want 1 (self, from the live org only)", len(recipients))
+	}
+	if _, count := findOrganizationsTestSecretRecipient(recipients, peerID); count != 0 {
+		t.Fatalf("peer occurrence count = %d, want 0 (peer's only org is soft-deleted)", count)
+	}
+}
+
+// B2.8 — RED: a user with no membership at all gets [], not nil and not an
+// error.
+func TestListSecretRecipientsZeroOrgsReturnsEmptyNotNil(t *testing.T) {
+	t.Parallel()
+
+	ctx, pool := openOrganizationsTestPool(t, "organizations_secret_recipients_test")
+	service := NewService(pool, activity.NewService(pool))
+
+	soloUserID := insertOrganizationsTestUser(t, ctx, pool, "b2-8-solo@example.com")
+
+	recipients, err := service.ListSecretRecipients(ctx, soloUserID)
+	if err != nil {
+		t.Fatalf("list secret recipients: %v", err)
+	}
+	if recipients == nil {
+		t.Fatal("recipients = nil, want a non-nil empty slice (so JSON serializes as [] not null)")
+	}
+	if len(recipients) != 0 {
+		t.Fatalf("recipients = %d, want 0 (no memberships)", len(recipients))
+	}
+}
+
+// B2.9 — RED (Decision 10): seeding more than maxSecretRecipientResults
+// peers still returns exactly the cap.
+func TestListSecretRecipientsLimitHonoured(t *testing.T) {
+	t.Parallel()
+
+	ctx, pool := openOrganizationsTestPool(t, "organizations_secret_recipients_test")
+	service := NewService(pool, activity.NewService(pool))
+
+	requesterID := insertOrganizationsTestUser(t, ctx, pool, "b2-9-requester@example.com")
+	organizationID := insertOrganizationsTestOrganization(t, ctx, pool, "B2.9 Org")
+	insertOrganizationsTestMember(t, ctx, pool, organizationID, requesterID, "owner")
+	insertOrganizationsTestBulkMembers(t, ctx, pool, organizationID, maxSecretRecipientResults+5, "b2-9")
+
+	recipients, err := service.ListSecretRecipients(ctx, requesterID)
+	if err != nil {
+		t.Fatalf("list secret recipients: %v", err)
+	}
+	if len(recipients) != maxSecretRecipientResults {
+		t.Fatalf("recipients = %d, want exactly %d (LIMIT enforced despite %d available)", len(recipients), maxSecretRecipientResults, maxSecretRecipientResults+6)
+	}
+}
+
+// B2.10 — RED: the single strongest proof the admin gate did not move. In
+// the same fixture: a plain member still gets ErrForbidden from ListMembers,
+// while ListSecretRecipients gives that same member a full result, and an
+// admin still gets role populated by ListMembers with the existing
+// owner/admin/member ordering.
+func TestListMembersRegressionAgainstListSecretRecipients(t *testing.T) {
+	t.Parallel()
+
+	ctx, pool := openOrganizationsTestPool(t, "organizations_secret_recipients_test")
+	service := NewService(pool, activity.NewService(pool))
+
+	ownerID := insertOrganizationsTestUser(t, ctx, pool, "b2-10-owner@example.com")
+	adminID := insertOrganizationsTestUser(t, ctx, pool, "b2-10-admin@example.com")
+	memberID := insertOrganizationsTestUser(t, ctx, pool, "b2-10-member@example.com")
+	organizationID := insertOrganizationsTestOrganization(t, ctx, pool, "B2.10 Org")
+	insertOrganizationsTestMember(t, ctx, pool, organizationID, ownerID, "owner")
+	insertOrganizationsTestMember(t, ctx, pool, organizationID, adminID, "admin")
+	insertOrganizationsTestMember(t, ctx, pool, organizationID, memberID, "member")
+
+	// ListMembers: a plain member is still forbidden.
+	if _, err := service.ListMembers(ctx, memberID, organizationID); err != ErrForbidden {
+		t.Fatalf("ListMembers err for plain member = %v, want %v (admin gate must not have moved)", err, ErrForbidden)
+	}
+
+	// ListMembers: the owner still gets role populated with the existing
+	// owner/admin/member ordering.
+	members, err := service.ListMembers(ctx, ownerID, organizationID)
+	if err != nil {
+		t.Fatalf("ListMembers as owner: %v", err)
+	}
+	if len(members) != 3 {
+		t.Fatalf("ListMembers count = %d, want 3", len(members))
+	}
+	if members[0].Role != "owner" || members[1].Role != "admin" || members[2].Role != "member" {
+		t.Fatalf("ListMembers roles = %q/%q/%q, want owner/admin/member ordering", members[0].Role, members[1].Role, members[2].Role)
+	}
+
+	// ListSecretRecipients: the same plain member gets a full result.
+	recipients, err := service.ListSecretRecipients(ctx, memberID)
+	if err != nil {
+		t.Fatalf("ListSecretRecipients as plain member: %v", err)
+	}
+	if len(recipients) != 3 {
+		t.Fatalf("ListSecretRecipients count for plain member = %d, want 3 (membership gate, not admin gate)", len(recipients))
 	}
 }
 
