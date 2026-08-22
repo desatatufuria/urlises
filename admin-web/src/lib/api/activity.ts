@@ -5,6 +5,7 @@ import { apiRequest } from "./client";
 // compile-time exhaustiveness pressure in format.ts's switch.
 export type ActivityKind =
   | "organization.created"
+  | "organization.deleted"
   | "invitation.created"
   | "invitation.resent"
   | "invitation.accepted"

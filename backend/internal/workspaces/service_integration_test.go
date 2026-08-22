@@ -3,6 +3,8 @@ package workspaces
 import (
 	"context"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -10,6 +12,7 @@ import (
 	"time"
 
 	"github.com/furia/shared-bookmark-sync/backend/internal/activity"
+	"github.com/furia/shared-bookmark-sync/backend/internal/auth"
 	"github.com/furia/shared-bookmark-sync/backend/internal/database"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -470,6 +473,218 @@ func TestDeleteWorkspaceSoftDeletesAndPreservesChildren(t *testing.T) {
 	// A second delete on the now-trashed workspace is idempotent: ErrNotFound, not a silent no-op.
 	if err := service.Delete(ctx, adminID, workspaceID); err != ErrNotFound {
 		t.Fatalf("second delete err = %v, want %v", err, ErrNotFound)
+	}
+}
+
+// Slice 2b — RED: choke point 14, organization half. ListByOrganization
+// excludes every workspace of a soft-deleted organization.
+func TestListByOrganizationExcludesWorkspacesOfSoftDeletedOrganization(t *testing.T) {
+	t.Parallel()
+
+	ctx, pool := openWorkspacesTestPool(t)
+	service := NewService(pool, nil, activity.NewService(pool))
+	adminID := insertWorkspacesTestUser(t, ctx, pool, "cp14-org-admin@example.com")
+	organizationID := insertWorkspacesTestOrganization(t, ctx, pool, "CP14 Org")
+	insertWorkspacesTestMember(t, ctx, pool, organizationID, adminID, "admin")
+
+	if _, err := service.Create(ctx, adminID, organizationID, CreateWorkspaceInput{Name: "CP14 Workspace", Type: "shared"}); err != nil {
+		t.Fatalf("create workspace: %v", err)
+	}
+	softDeleteWorkspacesTestOrganization(t, ctx, pool, organizationID)
+
+	workspaces, err := service.ListByOrganization(ctx, adminID, organizationID)
+	if err != nil {
+		t.Fatalf("list by organization: %v", err)
+	}
+	if len(workspaces) != 0 {
+		t.Fatalf("workspace count = %d, want 0 (organization is soft-deleted)", len(workspaces))
+	}
+}
+
+// Slice 2b — RED: choke point 14, workspace half. ListByOrganization
+// excludes an individually soft-deleted workspace even though its
+// organization stays live.
+func TestListByOrganizationExcludesSoftDeletedWorkspaceWithinLiveOrganization(t *testing.T) {
+	t.Parallel()
+
+	ctx, pool := openWorkspacesTestPool(t)
+	service := NewService(pool, nil, activity.NewService(pool))
+	adminID := insertWorkspacesTestUser(t, ctx, pool, "cp14-workspace-admin@example.com")
+	organizationID := insertWorkspacesTestOrganization(t, ctx, pool, "CP14 Live Org")
+	insertWorkspacesTestMember(t, ctx, pool, organizationID, adminID, "admin")
+
+	live, err := service.Create(ctx, adminID, organizationID, CreateWorkspaceInput{Name: "CP14 Live Workspace", Type: "shared"})
+	if err != nil {
+		t.Fatalf("create live workspace: %v", err)
+	}
+	doomed, err := service.Create(ctx, adminID, organizationID, CreateWorkspaceInput{Name: "CP14 Doomed Workspace", Type: "shared"})
+	if err != nil {
+		t.Fatalf("create doomed workspace: %v", err)
+	}
+	if err := service.Delete(ctx, adminID, doomed.WorkspaceID); err != nil {
+		t.Fatalf("soft delete doomed workspace: %v", err)
+	}
+
+	workspaces, err := service.ListByOrganization(ctx, adminID, organizationID)
+	if err != nil {
+		t.Fatalf("list by organization: %v", err)
+	}
+	if len(workspaces) != 1 {
+		t.Fatalf("workspace count = %d, want 1 (soft-deleted workspace must be excluded)", len(workspaces))
+	}
+	if workspaces[0].WorkspaceID != live.WorkspaceID {
+		t.Fatalf("workspace id = %q, want %q", workspaces[0].WorkspaceID, live.WorkspaceID)
+	}
+}
+
+// Slice 2b — RED: choke point 15. loadWorkspaceMetadataRecord makes Delete's
+// own double-delete check return ErrNotFound once the workspace's
+// organization has been soft-deleted, even though the workspace row itself
+// was never touched.
+func TestDeleteWorkspaceReturnsNotFoundWhenOrganizationIsSoftDeleted(t *testing.T) {
+	t.Parallel()
+
+	ctx, pool := openWorkspacesTestPool(t)
+	service := NewService(pool, nil, activity.NewService(pool))
+	adminID := insertWorkspacesTestUser(t, ctx, pool, "cp15-delete-admin@example.com")
+	organizationID := insertWorkspacesTestOrganization(t, ctx, pool, "CP15 Delete Org")
+	insertWorkspacesTestMember(t, ctx, pool, organizationID, adminID, "admin")
+
+	workspace, err := service.Create(ctx, adminID, organizationID, CreateWorkspaceInput{Name: "CP15 Workspace", Type: "shared"})
+	if err != nil {
+		t.Fatalf("create workspace: %v", err)
+	}
+	softDeleteWorkspacesTestOrganization(t, ctx, pool, organizationID)
+
+	if err := service.Delete(ctx, adminID, workspace.WorkspaceID); err != ErrNotFound {
+		t.Fatalf("err = %v, want %v", err, ErrNotFound)
+	}
+}
+
+// Slice 2b — RED: choke point 15. loadWorkspaceMetadataRecord also gates
+// GetAccessSnapshot the same way.
+func TestGetAccessSnapshotReturnsNotFoundWhenOrganizationIsSoftDeleted(t *testing.T) {
+	t.Parallel()
+
+	ctx, pool := openWorkspacesTestPool(t)
+	service := NewService(pool, nil, activity.NewService(pool))
+	adminID := insertWorkspacesTestUser(t, ctx, pool, "cp15-snapshot-admin@example.com")
+	organizationID := insertWorkspacesTestOrganization(t, ctx, pool, "CP15 Snapshot Org")
+	insertWorkspacesTestMember(t, ctx, pool, organizationID, adminID, "admin")
+
+	workspace, err := service.Create(ctx, adminID, organizationID, CreateWorkspaceInput{Name: "CP15 Snapshot Workspace", Type: "shared"})
+	if err != nil {
+		t.Fatalf("create workspace: %v", err)
+	}
+	softDeleteWorkspacesTestOrganization(t, ctx, pool, organizationID)
+
+	if _, err := service.GetAccessSnapshot(ctx, adminID, workspace.WorkspaceID); err != ErrNotFound {
+		t.Fatalf("err = %v, want %v", err, ErrNotFound)
+	}
+}
+
+// Slice 2b — RED: choke point 16. loadWorkspaceOrganizationID makes
+// GrantUserAccess (and by the identical shared lookup, RevokeUserAccess,
+// GrantGroupAccess and RevokeGroupAccess) return ErrNotFound for a
+// soft-deleted workspace.
+func TestGrantUserAccessReturnsNotFoundForSoftDeletedWorkspace(t *testing.T) {
+	t.Parallel()
+
+	ctx, pool := openWorkspacesTestPool(t)
+	service := NewService(pool, nil, activity.NewService(pool))
+	adminID := insertWorkspacesTestUser(t, ctx, pool, "cp16-admin@example.com")
+	memberID := insertWorkspacesTestUser(t, ctx, pool, "cp16-member@example.com")
+	organizationID := insertWorkspacesTestOrganization(t, ctx, pool, "CP16 Org")
+	insertWorkspacesTestMember(t, ctx, pool, organizationID, adminID, "admin")
+	insertWorkspacesTestMember(t, ctx, pool, organizationID, memberID, "member")
+
+	workspace, err := service.Create(ctx, adminID, organizationID, CreateWorkspaceInput{Name: "CP16 Workspace", Type: "shared"})
+	if err != nil {
+		t.Fatalf("create workspace: %v", err)
+	}
+	if err := service.Delete(ctx, adminID, workspace.WorkspaceID); err != nil {
+		t.Fatalf("soft delete workspace: %v", err)
+	}
+
+	if _, err := service.GrantUserAccess(ctx, adminID, workspace.WorkspaceID, memberID, UpdateUserAccessInput{Role: "viewer"}); err != ErrNotFound {
+		t.Fatalf("err = %v, want %v", err, ErrNotFound)
+	}
+}
+
+// Task 2.34 — regression: DELETE /workspaces/{workspaceId} keeps its exact
+// existing 204/403/404 status set after the soft-delete conversion (unit 2a)
+// and the choke-point sweep (unit 2b) — only the persisted effect changed
+// (soft vs. hard), never the HTTP contract. Wired against the real Service
+// and a real database (unlike TestDeleteWorkspaceRouteStatuses in
+// handler_test.go, which is stub-driven and cannot observe the persisted
+// effect at all).
+func TestDeleteWorkspaceRouteHTTPContractUnchangedBySoftDeleteConversion(t *testing.T) {
+	t.Parallel()
+
+	ctx, pool := openWorkspacesTestPool(t)
+	service := NewService(pool, nil, activity.NewService(pool))
+	adminID := insertWorkspacesTestUser(t, ctx, pool, "http-contract-admin@example.com")
+	memberID := insertWorkspacesTestUser(t, ctx, pool, "http-contract-member@example.com")
+	organizationID := insertWorkspacesTestOrganization(t, ctx, pool, "HTTP Contract Workspace Org")
+	insertWorkspacesTestMember(t, ctx, pool, organizationID, adminID, "admin")
+	insertWorkspacesTestMember(t, ctx, pool, organizationID, memberID, "member")
+
+	workspace, err := service.Create(ctx, adminID, organizationID, CreateWorkspaceInput{Name: "HTTP Contract Workspace", Type: "team"})
+	if err != nil {
+		t.Fatalf("create workspace: %v", err)
+	}
+
+	currentUserID := memberID
+	dynamicPrincipal := func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			next.ServeHTTP(w, r.WithContext(auth.ContextWithPrincipal(r.Context(), auth.Principal{UserID: currentUserID})))
+		})
+	}
+	mux := http.NewServeMux()
+	RegisterRoutes(mux, dynamicPrincipal, service)
+
+	// A non-admin member gets 403, and the row stays live.
+	recorder := httptest.NewRecorder()
+	mux.ServeHTTP(recorder, httptest.NewRequest(http.MethodDelete, "/workspaces/"+workspace.WorkspaceID, nil))
+	if recorder.Code != http.StatusForbidden {
+		t.Fatalf("non-admin delete status = %d, want 403", recorder.Code)
+	}
+
+	// The admin gets 204, and the row survives soft-deleted.
+	currentUserID = adminID
+	recorder = httptest.NewRecorder()
+	mux.ServeHTTP(recorder, httptest.NewRequest(http.MethodDelete, "/workspaces/"+workspace.WorkspaceID, nil))
+	if recorder.Code != http.StatusNoContent {
+		t.Fatalf("admin delete status = %d, want 204", recorder.Code)
+	}
+	if recorder.Body.Len() != 0 {
+		t.Fatalf("admin delete body = %q, want empty", recorder.Body.String())
+	}
+	var deletedAt *time.Time
+	if err := pool.QueryRow(ctx, `SELECT deleted_at FROM workspaces WHERE id = $1`, workspace.WorkspaceID).Scan(&deletedAt); err != nil {
+		t.Fatalf("query workspace: %v", err)
+	}
+	if deletedAt == nil {
+		t.Fatal("deleted_at = nil after a successful delete, want it set (soft delete, row survives)")
+	}
+	if countWorkspacesTestRows(t, ctx, pool, "workspaces", "id", workspace.WorkspaceID) != 1 {
+		t.Fatal("expected workspace row to survive soft delete")
+	}
+
+	// A second delete on the now-trashed workspace gets 404, not a silent
+	// no-op 204.
+	recorder = httptest.NewRecorder()
+	mux.ServeHTTP(recorder, httptest.NewRequest(http.MethodDelete, "/workspaces/"+workspace.WorkspaceID, nil))
+	if recorder.Code != http.StatusNotFound {
+		t.Fatalf("second delete status = %d, want 404", recorder.Code)
+	}
+}
+
+func softDeleteWorkspacesTestOrganization(t *testing.T, ctx context.Context, pool *pgxpool.Pool, organizationID string) {
+	t.Helper()
+
+	if _, err := pool.Exec(ctx, `UPDATE organizations SET deleted_at = NOW() WHERE id = $1`, organizationID); err != nil {
+		t.Fatalf("soft delete organization fixture: %v", err)
 	}
 }
 

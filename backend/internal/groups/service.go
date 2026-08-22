@@ -371,12 +371,17 @@ func (s *Service) RemoveMember(ctx context.Context, requesterUserID, groupID, us
 	return nil
 }
 
+// requireOrganizationAdmin is choke point 10: the duplicate copy of
+// organizations.requireOrganizationAdmin in this package. The JOIN's AND
+// o.deleted_at IS NULL closes group admin operations against a soft-deleted
+// organization.
 func requireOrganizationAdmin(ctx context.Context, querier dbQuerier, userID, organizationID string) error {
 	var role string
 	err := querier.QueryRow(ctx, `
-		SELECT role
-		FROM organization_members
-		WHERE organization_id = $1 AND user_id = $2
+		SELECT om.role
+		FROM organization_members om
+		JOIN organizations o ON o.id = om.organization_id AND o.deleted_at IS NULL
+		WHERE om.organization_id = $1 AND om.user_id = $2
 	`, organizationID, userID).Scan(&role)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -393,13 +398,17 @@ func requireOrganizationAdmin(ctx context.Context, querier dbQuerier, userID, or
 	}
 }
 
+// requireOrganizationMembership is choke point 11: the JOIN inside the
+// EXISTS subquery closes group-member operations against a soft-deleted
+// organization.
 func requireOrganizationMembership(ctx context.Context, querier dbQuerier, organizationID, userID string) error {
 	var exists bool
 	err := querier.QueryRow(ctx, `
 		SELECT EXISTS(
 			SELECT 1
-			FROM organization_members
-			WHERE organization_id = $1 AND user_id = $2
+			FROM organization_members om
+			JOIN organizations o ON o.id = om.organization_id AND o.deleted_at IS NULL
+			WHERE om.organization_id = $1 AND om.user_id = $2
 		)
 	`, organizationID, userID).Scan(&exists)
 	if err != nil {

@@ -72,12 +72,16 @@ func (s *Service) IsOrganizationAdmin(ctx context.Context, userID, organizationI
 	return IsOrganizationAdmin(ctx, s.pool, userID, organizationID)
 }
 
+// IsOrganizationAdmin is choke point 12: the JOIN's AND o.deleted_at IS NULL
+// closes activity.ListByOrganization and all 8 workspaces org-admin gates
+// that call through this function against a soft-deleted organization.
 func IsOrganizationAdmin(ctx context.Context, querier OrganizationAccessQuerier, userID, organizationID string) (bool, error) {
 	var role string
 	err := querier.QueryRow(ctx, `
-		SELECT role
-		FROM organization_members
-		WHERE organization_id = $1 AND user_id = $2
+		SELECT om.role
+		FROM organization_members om
+		JOIN organizations o ON o.id = om.organization_id AND o.deleted_at IS NULL
+		WHERE om.organization_id = $1 AND om.user_id = $2
 	`, organizationID, userID).Scan(&role)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -139,13 +143,19 @@ func RequireWorkspaceWriteAccess(ctx context.Context, querier WorkspaceAccessQue
 	return access, nil
 }
 
+// loadWorkspaceMetadata is choke point 13: the HIGHEST-LEVERAGE choke point
+// in the whole inventory. AND w.deleted_at IS NULL AND o.deleted_at IS NULL
+// closes GetEffectiveWorkspaceAccess (and therefore
+// RequireWorkspaceWriteAccess, GetAccessibleWorkspace, GetTree, bookmark
+// mutations, sync ListChanges/ReplayEvents, and websocket connect) against a
+// soft-deleted workspace or a workspace inside a soft-deleted organization.
 func loadWorkspaceMetadata(ctx context.Context, querier WorkspaceAccessQuerier, workspaceID string) (workspaceMetadata, error) {
 	var metadata workspaceMetadata
 	err := querier.QueryRow(ctx, `
 		SELECT w.id, w.name, w.type, o.id, o.name
 		FROM workspaces w
 		JOIN organizations o ON o.id = w.organization_id
-		WHERE w.id = $1
+		WHERE w.id = $1 AND w.deleted_at IS NULL AND o.deleted_at IS NULL
 	`, workspaceID).Scan(
 		&metadata.WorkspaceID,
 		&metadata.WorkspaceName,

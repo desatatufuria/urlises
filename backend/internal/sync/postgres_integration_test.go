@@ -13,12 +13,90 @@ import (
 	"time"
 
 	"github.com/furia/shared-bookmark-sync/backend/internal/access"
+	"github.com/furia/shared-bookmark-sync/backend/internal/activity"
 	"github.com/furia/shared-bookmark-sync/backend/internal/auth"
 	"github.com/furia/shared-bookmark-sync/backend/internal/bookmarks"
 	"github.com/furia/shared-bookmark-sync/backend/internal/database"
 	"github.com/furia/shared-bookmark-sync/backend/internal/httpapi"
+	"github.com/furia/shared-bookmark-sync/backend/internal/workspaces"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+// Slice 2b — RED: choke point 13 propagation. Once a workspace's
+// organization is soft-deleted, both ReplayEvents (the sync read/replay
+// path — "ListChanges" in design.md's Data Flow diagram) and a bookmark
+// mutation (CreateBookmark, gated by access.RequireWorkspaceWriteAccess)
+// reject immediately, even though neither the workspace nor the sync data
+// were touched.
+func TestReplayEventsAndBookmarkMutationRejectAfterOrganizationSoftDelete(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping PostgreSQL integration test in short mode")
+	}
+	ctx, pool := openSyncTestPool(t)
+	organizationID, workspaceID := insertSyncTestOrganizationAndWorkspace(t, ctx, pool)
+	userID := insertSyncTestUser(t, ctx, pool)
+	insertSyncWorkspaceAccess(t, ctx, pool, workspaceID, userID, "editor")
+
+	bookmarkService := bookmarks.NewService(pool, access.NewService(pool))
+	workspaceService := workspaces.NewService(pool, access.NewService(pool), activity.NewService(pool))
+	store := NewPostgresStore(pool, bookmarkService, workspaceService, nil)
+
+	// Live baseline: both paths succeed before the organization is trashed.
+	if _, err := store.ReplayEvents(ctx, userID, workspaceID, 0); err != nil {
+		t.Fatalf("replay events before soft delete: %v", err)
+	}
+	if _, err := bookmarkService.CreateBookmark(ctx, userID, workspaceID, bookmarks.CreateBookmarkInput{Title: "Live", URL: "https://example.com/live"}); err != nil {
+		t.Fatalf("create bookmark before soft delete: %v", err)
+	}
+
+	if _, err := pool.Exec(ctx, `UPDATE organizations SET deleted_at = NOW() WHERE id = $1`, organizationID); err != nil {
+		t.Fatalf("soft delete organization fixture: %v", err)
+	}
+
+	if _, err := store.ReplayEvents(ctx, userID, workspaceID, 0); err != access.ErrForbidden {
+		t.Fatalf("replay events after soft delete err = %v, want %v", err, access.ErrForbidden)
+	}
+	if _, err := bookmarkService.CreateBookmark(ctx, userID, workspaceID, bookmarks.CreateBookmarkInput{Title: "Doomed", URL: "https://example.com/doomed"}); err != bookmarks.ErrForbidden {
+		t.Fatalf("create bookmark after soft delete err = %v, want %v", err, bookmarks.ErrForbidden)
+	}
+
+	// Websocket connect (websocket/handler.go) rejects through the identical
+	// workspaces.Service.GetAccessibleWorkspace -> access.loadWorkspaceMetadata
+	// path exercised above; see websocket/handler_integration_test.go for the
+	// end-to-end upgrade-request assertion (requires DATABASE_URL to execute).
+	if _, err := workspaceService.GetAccessibleWorkspace(ctx, userID, workspaceID); err != workspaces.ErrForbidden {
+		t.Fatalf("get accessible workspace after soft delete err = %v, want %v", err, workspaces.ErrForbidden)
+	}
+}
+
+// insertSyncTestOrganizationAndWorkspace mirrors insertSyncTestWorkspace but
+// also returns the organization id, needed by tests that soft-delete the
+// organization directly.
+func insertSyncTestOrganizationAndWorkspace(t *testing.T, ctx context.Context, pool *pgxpool.Pool) (string, string) {
+	t.Helper()
+
+	var organizationID string
+	err := pool.QueryRow(ctx, `
+		INSERT INTO organizations (name)
+		VALUES ($1)
+		RETURNING id
+	`, "Sync CP13 Test Org").Scan(&organizationID)
+	if err != nil {
+		t.Fatalf("insert organization: %v", err)
+	}
+
+	var workspaceID string
+	err = pool.QueryRow(ctx, `
+		INSERT INTO workspaces (organization_id, name, type)
+		VALUES ($1, $2, $3)
+		RETURNING id
+	`, organizationID, "Sync CP13 Test Workspace", "shared").Scan(&workspaceID)
+	if err != nil {
+		t.Fatalf("insert workspace: %v", err)
+	}
+
+	return organizationID, workspaceID
+}
 
 func openSyncTestPool(t *testing.T) (context.Context, *pgxpool.Pool) {
 	t.Helper()

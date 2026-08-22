@@ -137,7 +137,7 @@ func (s *Service) ListMemberships(ctx context.Context, userID string) ([]Members
 	rows, err := s.pool.Query(ctx, `
 		SELECT o.id, o.name, om.role
 		FROM organization_members om
-		JOIN organizations o ON o.id = om.organization_id
+		JOIN organizations o ON o.id = om.organization_id AND o.deleted_at IS NULL
 		WHERE om.user_id = $1
 		ORDER BY o.name, o.id
 	`, userID)
@@ -477,12 +477,14 @@ func (s *Service) CreateInvitationTx(ctx context.Context, tx pgx.Tx, requesterUs
 		return InvitationCreation{}, fmt.Errorf("create invitation: %w", err)
 	}
 
+	// Choke point 5: defense in depth behind choke point 2
+	// (requireOrganizationAdmin already gated this call above).
 	var organizationName, inviterEmail, inviterName string
 	err = tx.QueryRow(ctx, `
 		SELECT o.name, u.email, COALESCE(NULLIF(TRIM(u.name), ''), '')
 		FROM organizations o
 		JOIN users u ON u.id = $2
-		WHERE o.id = $1
+		WHERE o.id = $1 AND o.deleted_at IS NULL
 	`, organizationID, requesterUserID).Scan(&organizationName, &inviterEmail, &inviterName)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -567,12 +569,14 @@ func (s *Service) ResendInvitation(ctx context.Context, requesterUserID, organiz
 		return InvitationCreation{}, fmt.Errorf("resend invitation: %w", err)
 	}
 
+	// Choke point 6: defense in depth behind choke point 2
+	// (requireOrganizationAdmin already gated this call above).
 	var organizationName, inviterEmail, inviterName string
 	err = tx.QueryRow(ctx, `
 		SELECT o.name, u.email, COALESCE(NULLIF(TRIM(u.name), ''), '')
 		FROM organizations o
 		JOIN users u ON u.id = $2
-		WHERE o.id = $1
+		WHERE o.id = $1 AND o.deleted_at IS NULL
 	`, organizationID, requesterUserID).Scan(&organizationName, &inviterEmail, &inviterName)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -891,12 +895,15 @@ func (s *Service) ValidatePendingInvitation(ctx context.Context, token, email st
 	}
 	normalizedEmail := strings.TrimSpace(strings.ToLower(email))
 
+	// Choke point 7: REQUIRED — this is a token-based route with no upstream
+	// admin gate. Without AND o.deleted_at IS NULL, a still-valid invitation
+	// token could be used to self-register into a soft-deleted organization.
 	var record invitationRecord
 	err := s.pool.QueryRow(ctx, `
 		SELECT i.id, i.organization_id, o.name, i.email, i.role, i.status,
 			i.expires_at, i.accepted_by_user_id, i.accepted_at::text, i.created_at::text, i.updated_at::text
 		FROM invitations i
-		JOIN organizations o ON o.id = i.organization_id
+		JOIN organizations o ON o.id = i.organization_id AND o.deleted_at IS NULL
 		WHERE i.token = $1
 	`, token).Scan(
 		&record.ID,
@@ -943,12 +950,17 @@ func requireOrganizationAdmin(ctx context.Context, querier dbQuerier, userID, or
 	return nil
 }
 
+// loadOrganizationRole is choke point 2: the JOIN's AND o.deleted_at IS NULL
+// closes requireOrganizationAdmin (and therefore ListMembers, PatchMember,
+// AuthorizeInvitationTx, ListInvitations, CancelInvitation, ResendInvitation,
+// DeleteOrganization) against a soft-deleted organization.
 func loadOrganizationRole(ctx context.Context, querier dbQuerier, organizationID, userID string) (access.OrganizationRole, error) {
 	var role string
 	err := querier.QueryRow(ctx, `
-		SELECT role
-		FROM organization_members
-		WHERE organization_id = $1 AND user_id = $2
+		SELECT om.role
+		FROM organization_members om
+		JOIN organizations o ON o.id = om.organization_id AND o.deleted_at IS NULL
+		WHERE om.organization_id = $1 AND om.user_id = $2
 	`, organizationID, userID).Scan(&role)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -965,6 +977,10 @@ func loadOrganizationRole(ctx context.Context, querier dbQuerier, organizationID
 	return normalizedRole, nil
 }
 
+// loadOrganizationMember is choke point 3: defense in depth behind choke
+// point 2 (loadOrganizationRole/requireOrganizationAdmin already gate every
+// caller), returning ErrNotFound if it is ever reached directly for a
+// soft-deleted organization.
 func loadOrganizationMember(ctx context.Context, querier dbQuerier, organizationID, userID string) (OrganizationMember, access.OrganizationRole, error) {
 	var member OrganizationMember
 	var role string
@@ -972,6 +988,7 @@ func loadOrganizationMember(ctx context.Context, querier dbQuerier, organization
 		SELECT u.id, u.email, COALESCE(u.name, ''), om.role
 		FROM organization_members om
 		JOIN users u ON u.id = om.user_id
+		JOIN organizations o ON o.id = om.organization_id AND o.deleted_at IS NULL
 		WHERE om.organization_id = $1 AND om.user_id = $2
 	`, organizationID, userID).Scan(&member.UserID, &member.Email, &member.Name, &role)
 	if err != nil {
@@ -1070,13 +1087,16 @@ func loadUserEmail(ctx context.Context, querier dbQuerier, userID string) (strin
 	return strings.TrimSpace(strings.ToLower(email)), nil
 }
 
+// loadInvitationForUpdate is choke point 8: REQUIRED — AcceptInvitation is
+// token-based and ungated, so AND o.deleted_at IS NULL is the only guard
+// blocking acceptance into a soft-deleted organization.
 func loadInvitationForUpdate(ctx context.Context, querier dbQuerier, token string) (invitationRecord, error) {
 	var record invitationRecord
 	err := querier.QueryRow(ctx, `
 		SELECT i.id, i.organization_id, o.name, i.email, i.role, i.status,
 			i.expires_at, i.accepted_by_user_id, i.accepted_at::text, i.created_at::text, i.updated_at::text
 		FROM invitations i
-		JOIN organizations o ON o.id = i.organization_id
+		JOIN organizations o ON o.id = i.organization_id AND o.deleted_at IS NULL
 		WHERE i.token = $1
 		FOR UPDATE
 	`, token).Scan(
