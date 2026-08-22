@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useAuth } from "../../app/providers/AuthProvider";
+import { AdminShellContext } from "../../app/shell/AdminShellContext";
 import { AppShell } from "../../lib/ui/components/AppShell";
 import { DataState } from "../../lib/ui/components/DataState";
 import { Table } from "../../lib/ui/components/Table";
@@ -84,7 +85,7 @@ export function TrashPage() {
   }
 
   return (
-    <AppShell>
+    <AppShell context={<AdminShellContext />}>
       <section className="ui-section-stack">
         <header className="ui-section-header">
           <h1 className="ui-page-title">Trash</h1>

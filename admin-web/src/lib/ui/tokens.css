@@ -14,6 +14,7 @@
 :root[data-theme="dark"] .ui-button-primary { color: #12181d; }
 :root[data-theme="dark"] .ui-button-primary:hover { background: #83a0b5; color: #12181d; }
 :root[data-theme="dark"] .ui-button:hover { background: #21242a; }
+:root[data-theme="dark"] .ui-theme-toggle__button:hover { background: #21242a; }
 :root[data-theme="dark"] .ui-badge--accent { border-color: rgba(110, 140, 163, 0.4); }
 :root[data-theme="dark"] .ui-badge--danger { border-color: rgba(217, 122, 122, 0.4); }
 * { box-sizing: border-box; }
@@ -33,6 +34,11 @@ a { color: inherit; text-decoration: none; }
 .ui-context-identity strong { font-family: Inter, sans-serif; letter-spacing: .08em; font-size: .72rem; }
 .ui-context-actions { display: flex; align-items: center; gap: .55rem; margin-left: auto; }
 .ui-context-actions .ui-select { max-width: 180px; padding: .45rem .55rem; font-size: .82rem; }
+.ui-theme-toggle { display: flex; }
+.ui-theme-toggle__button { display: flex; align-items: center; justify-content: center; padding: .45rem .55rem; background: var(--ui-paper); color: var(--ui-muted); border-color: var(--ui-rule); }
+.ui-theme-toggle__button + .ui-theme-toggle__button { border-left: 0; }
+.ui-theme-toggle__button:hover { background: #eeeae2; }
+.ui-theme-toggle__button--active { background: var(--ui-accent-soft); color: var(--ui-accent); }
 .ui-main { padding-top: 3rem; }
 .ui-login-card { background: var(--ui-paper); border: 1px solid var(--ui-rule); padding: 2rem; }
 .ui-page-intro, .ui-section-header, .ui-section-stack, .ui-form, .ui-cell-stack, .ui-field-label { display: grid; gap: .75rem; }

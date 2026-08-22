@@ -208,19 +208,21 @@ describe("admin router", () => {
     expect(screen.queryByRole("dialog", { name: /invite person/i })).not.toBeInTheDocument();
   });
 
-  it("switches the applied theme when the color scheme select changes", async () => {
+  it("switches the applied theme when a color scheme toggle button is clicked", async () => {
     const user = userEvent.setup();
     renderAppRoute("/", defaultAdminSnapshot);
-    const select = await screen.findByRole("combobox", { name: "Color scheme" });
-    expect(select).toHaveDisplayValue("System");
+    const systemButton = await screen.findByRole("button", { name: "Match system theme" });
+    expect(systemButton).toHaveAttribute("aria-pressed", "true");
 
-    await user.selectOptions(select, "Dark");
+    await user.click(screen.getByRole("button", { name: "Dark theme" }));
     expect(document.documentElement.dataset.theme).toBe("dark");
     expect(window.localStorage.getItem("urlises-color-scheme")).toBe("dark");
+    expect(screen.getByRole("button", { name: "Dark theme" })).toHaveAttribute("aria-pressed", "true");
 
-    await user.selectOptions(select, "Light");
+    await user.click(screen.getByRole("button", { name: "Light theme" }));
     expect(document.documentElement.dataset.theme).toBeUndefined();
     expect(window.localStorage.getItem("urlises-color-scheme")).toBe("light");
+    expect(screen.getByRole("button", { name: "Light theme" })).toHaveAttribute("aria-pressed", "true");
   });
 
   it("blocks authenticated non-admin users", async () => {

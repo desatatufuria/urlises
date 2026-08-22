@@ -4,6 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AuthProvider, type AuthSnapshot } from "../../app/providers/AuthProvider";
+import { OrganizationProvider } from "../../app/providers/OrganizationProvider";
 import { TrashPage } from "./TrashPage";
 
 function jsonResponse(body: unknown, status = 200) {
@@ -31,9 +32,11 @@ function renderTrashPage() {
   return render(
     <QueryClientProvider client={queryClient}>
       <AuthProvider initialSnapshot={snapshot}>
-        <MemoryRouter>
-          <TrashPage />
-        </MemoryRouter>
+        <OrganizationProvider>
+          <MemoryRouter>
+            <TrashPage />
+          </MemoryRouter>
+        </OrganizationProvider>
       </AuthProvider>
     </QueryClientProvider>,
   );
@@ -271,5 +274,14 @@ describe("TrashPage", () => {
     await waitFor(() =>
       expect(fetchMock.mock.calls.some(([requestInput, requestInit]) => String(requestInput).endsWith("/organizations") && (requestInit?.method ?? "GET") === "GET")).toBe(true),
     );
+  });
+
+  it("renders the shared admin nav so the Trash page is not a dead end", async () => {
+    fetchMock.mockImplementation(() => jsonResponse({ error: "not found" }, 404));
+
+    renderTrashPage();
+
+    expect(await screen.findByRole("link", { name: "Overview" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "People" })).toBeInTheDocument();
   });
 });
