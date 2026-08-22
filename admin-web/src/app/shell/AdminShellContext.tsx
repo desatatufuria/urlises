@@ -12,16 +12,17 @@ export const navItems = [
   { to: "/groups", label: "Groups" },
   { to: "/workspaces", label: "Workspaces" },
   { to: "/access", label: "Access" },
-  { to: "/secrets", label: "Secrets" },
 ] as const;
 
 // Collapsed into the "History" nav submenu instead of sitting flat in
 // navItems -- Activity is the audit trail of what happened, Trash is what's
-// no longer there pending recovery; both are "look back", not day-to-day
+// no longer there pending recovery, Secrets is a personal read-only history
+// of what you've shared; all three are "look back", not day-to-day
 // navigation, so they share one dropdown.
 const historyItems = [
   { to: "/activity", label: "Activity" },
   { to: "/trash", label: "Trash" },
+  { to: "/secrets", label: "Secrets" },
 ] as const;
 
 /**
@@ -37,7 +38,7 @@ export function AdminShellContext() {
   const { preference, setPreference } = useColorScheme();
   const { pathname } = useLocation();
 
-  const historyActive = pathname.startsWith("/activity") || pathname.startsWith("/trash");
+  const historyActive = pathname.startsWith("/activity") || pathname.startsWith("/trash") || pathname.startsWith("/secrets");
   const accountLabel = principal?.name ?? principal?.email ?? "Account";
 
   return (
