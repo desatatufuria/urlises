@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -343,6 +344,257 @@ func TestListInvitationsIncludesCancelledExcludesAcceptedAndExpired(t *testing.T
 	}
 	if _, ok := statuses["expired@example.com"]; ok {
 		t.Fatalf("expired invitation must stay excluded: %v", statuses)
+	}
+}
+
+// Phase 4 (Slice 4): Delete Organization, Guarded — RED: a non-owner/non-admin
+// requester is forbidden and the organization remains intact.
+func TestDeleteOrganizationRequiresAdmin(t *testing.T) {
+	t.Parallel()
+
+	ctx, pool := openOrganizationsTestPool(t, "organizations_delete_test")
+	service := NewService(pool, activity.NewService(pool))
+	ownerID := insertOrganizationsTestUser(t, ctx, pool, "delete-owner@example.com")
+	memberID := insertOrganizationsTestUser(t, ctx, pool, "delete-member@example.com")
+	organizationID := insertOrganizationsTestOrganization(t, ctx, pool, "Delete Guard Org")
+	insertOrganizationsTestMember(t, ctx, pool, organizationID, ownerID, "owner")
+	insertOrganizationsTestMember(t, ctx, pool, organizationID, memberID, "member")
+
+	err := service.DeleteOrganization(ctx, memberID, organizationID)
+	if err != ErrForbidden {
+		t.Fatalf("err = %v, want %v", err, ErrForbidden)
+	}
+
+	var count int
+	if err := pool.QueryRow(ctx, `SELECT COUNT(*) FROM organizations WHERE id = $1`, organizationID).Scan(&count); err != nil {
+		t.Fatalf("count organizations: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("organization count = %d, want 1 (must remain intact)", count)
+	}
+}
+
+// Phase 4 (Slice 4) — RED: happy path removes the organization and every
+// cascading child row (members, workspaces + children, invitations, groups +
+// children), while another organization's activity_events rows are left
+// untouched, and no activity row is recorded for the delete itself.
+func TestDeleteOrganizationHappyPathRemovesCascadesAndLeavesOtherOrgIntact(t *testing.T) {
+	t.Parallel()
+
+	ctx, pool := openOrganizationsTestPool(t, "organizations_delete_test")
+	service := NewService(pool, activity.NewService(pool))
+	ownerID := insertOrganizationsTestUser(t, ctx, pool, "delete-happy-owner@example.com")
+	organizationID := insertOrganizationsTestOrganization(t, ctx, pool, "Delete Happy Org")
+	insertOrganizationsTestMember(t, ctx, pool, organizationID, ownerID, "owner")
+
+	var workspaceID string
+	if err := pool.QueryRow(ctx, `
+		INSERT INTO workspaces (organization_id, name, type)
+		VALUES ($1, $2, $3)
+		RETURNING id
+	`, organizationID, "Happy Workspace", "personal").Scan(&workspaceID); err != nil {
+		t.Fatalf("insert workspace: %v", err)
+	}
+	var folderID string
+	if err := pool.QueryRow(ctx, `
+		INSERT INTO folders (workspace_id, name)
+		VALUES ($1, $2)
+		RETURNING id
+	`, workspaceID, "Happy Folder").Scan(&folderID); err != nil {
+		t.Fatalf("insert folder: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO bookmarks (workspace_id, folder_id, url, title)
+		VALUES ($1, $2, $3, $4)
+	`, workspaceID, folderID, "https://example.com", "Example"); err != nil {
+		t.Fatalf("insert bookmark: %v", err)
+	}
+	var groupID string
+	if err := pool.QueryRow(ctx, `
+		INSERT INTO groups (organization_id, name)
+		VALUES ($1, $2)
+		RETURNING id
+	`, organizationID, "Happy Group").Scan(&groupID); err != nil {
+		t.Fatalf("insert group: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO group_members (group_id, user_id)
+		VALUES ($1, $2)
+	`, groupID, ownerID); err != nil {
+		t.Fatalf("insert group member: %v", err)
+	}
+	insertOrganizationsTestInvitation(t, ctx, pool, organizationID, "happy-invitee@example.com", "member", "pending", ownerID, "delete-happy-token")
+
+	// Another, unrelated organization: its activity_events row must survive.
+	otherOwnerID := insertOrganizationsTestUser(t, ctx, pool, "delete-happy-other-owner@example.com")
+	otherOrganizationID := insertOrganizationsTestOrganization(t, ctx, pool, "Delete Happy Other Org")
+	insertOrganizationsTestMember(t, ctx, pool, otherOrganizationID, otherOwnerID, "owner")
+	if _, err := service.CreateInvitation(ctx, otherOwnerID, otherOrganizationID, CreateInvitationInput{Email: "other-invitee@example.com", Role: "member"}); err != nil {
+		t.Fatalf("create invitation in other org: %v", err)
+	}
+
+	if err := service.DeleteOrganization(ctx, ownerID, organizationID); err != nil {
+		t.Fatalf("delete organization: %v", err)
+	}
+
+	for table, condition := range map[string]string{
+		"organizations":        "id = '" + organizationID + "'",
+		"organization_members": "organization_id = '" + organizationID + "'",
+		"workspaces":           "organization_id = '" + organizationID + "'",
+		"folders":              "workspace_id = '" + workspaceID + "'",
+		"bookmarks":            "workspace_id = '" + workspaceID + "'",
+		"groups":               "organization_id = '" + organizationID + "'",
+		"group_members":        "group_id = '" + groupID + "'",
+		"invitations":          "organization_id = '" + organizationID + "'",
+		"activity_events":      "organization_id = '" + organizationID + "'",
+	} {
+		var count int
+		if err := pool.QueryRow(ctx, `SELECT COUNT(*) FROM `+table+` WHERE `+condition).Scan(&count); err != nil {
+			t.Fatalf("count %s: %v", table, err)
+		}
+		if count != 0 {
+			t.Fatalf("%s count = %d, want 0 after cascade delete", table, count)
+		}
+	}
+
+	var otherActivityCount int
+	if err := pool.QueryRow(ctx, `SELECT COUNT(*) FROM activity_events WHERE organization_id = $1`, otherOrganizationID).Scan(&otherActivityCount); err != nil {
+		t.Fatalf("count other org activity events: %v", err)
+	}
+	if otherActivityCount == 0 {
+		t.Fatal("other organization's activity_events rows must remain intact")
+	}
+
+	var totalActivityCount int
+	if err := pool.QueryRow(ctx, `SELECT COUNT(*) FROM activity_events`).Scan(&totalActivityCount); err != nil {
+		t.Fatalf("count all activity events: %v", err)
+	}
+	if totalActivityCount != otherActivityCount {
+		t.Fatalf("total activity event count = %d, want exactly %d (no delete-organization event recorded anywhere)", totalActivityCount, otherActivityCount)
+	}
+}
+
+// Phase 4 (Slice 4) — RED: the orphan probe blocks deletion and rolls back
+// with zero rows deleted when another member has no other organization.
+func TestDeleteOrganizationOrphanProbeBlocksWithZeroRowsDeleted(t *testing.T) {
+	t.Parallel()
+
+	ctx, pool := openOrganizationsTestPool(t, "organizations_delete_test")
+	service := NewService(pool, activity.NewService(pool))
+	ownerID := insertOrganizationsTestUser(t, ctx, pool, "delete-orphan-owner@example.com")
+	soleMemberID := insertOrganizationsTestUser(t, ctx, pool, "delete-orphan-member@example.com")
+	organizationID := insertOrganizationsTestOrganization(t, ctx, pool, "Delete Orphan Org")
+	insertOrganizationsTestMember(t, ctx, pool, organizationID, ownerID, "owner")
+	insertOrganizationsTestMember(t, ctx, pool, organizationID, soleMemberID, "member")
+
+	err := service.DeleteOrganization(ctx, ownerID, organizationID)
+	if err != ErrWouldOrphanMember {
+		t.Fatalf("err = %v, want %v", err, ErrWouldOrphanMember)
+	}
+
+	var organizationCount, memberCount int
+	if err := pool.QueryRow(ctx, `SELECT COUNT(*) FROM organizations WHERE id = $1`, organizationID).Scan(&organizationCount); err != nil {
+		t.Fatalf("count organizations: %v", err)
+	}
+	if organizationCount != 1 {
+		t.Fatalf("organization count = %d, want 1 (rolled back)", organizationCount)
+	}
+	if err := pool.QueryRow(ctx, `SELECT COUNT(*) FROM organization_members WHERE organization_id = $1`, organizationID).Scan(&memberCount); err != nil {
+		t.Fatalf("count organization members: %v", err)
+	}
+	if memberCount != 2 {
+		t.Fatalf("member count = %d, want 2 (zero rows deleted)", memberCount)
+	}
+}
+
+// Phase 4 (Slice 4) — RED: the requester's own orphaning does not block
+// deletion, since the orphan probe excludes the requester (om.user_id <> $2).
+func TestDeleteOrganizationRequesterOwnOrphaningDoesNotBlock(t *testing.T) {
+	t.Parallel()
+
+	ctx, pool := openOrganizationsTestPool(t, "organizations_delete_test")
+	service := NewService(pool, activity.NewService(pool))
+	soleOwnerID := insertOrganizationsTestUser(t, ctx, pool, "delete-self-owner@example.com")
+	organizationID := insertOrganizationsTestOrganization(t, ctx, pool, "Delete Self Org")
+	insertOrganizationsTestMember(t, ctx, pool, organizationID, soleOwnerID, "owner")
+
+	if err := service.DeleteOrganization(ctx, soleOwnerID, organizationID); err != nil {
+		t.Fatalf("delete organization: %v, want requester's own last-org deletion to succeed", err)
+	}
+
+	var count int
+	if err := pool.QueryRow(ctx, `SELECT COUNT(*) FROM organizations WHERE id = $1`, organizationID).Scan(&count); err != nil {
+		t.Fatalf("count organizations: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("organization count = %d, want 0", count)
+	}
+}
+
+// Phase 4 (Slice 4) — RED: an unknown organization ID returns ErrNotFound.
+func TestDeleteOrganizationUnknownReturnsNotFound(t *testing.T) {
+	t.Parallel()
+
+	ctx, pool := openOrganizationsTestPool(t, "organizations_delete_test")
+	service := NewService(pool, activity.NewService(pool))
+	ownerID := insertOrganizationsTestUser(t, ctx, pool, "delete-unknown-owner@example.com")
+
+	err := service.DeleteOrganization(ctx, ownerID, "00000000-0000-0000-0000-000000000000")
+	if err != ErrNotFound {
+		t.Fatalf("err = %v, want %v", err, ErrNotFound)
+	}
+}
+
+// Phase 4 (Slice 4) — RED: two concurrent DeleteOrganization calls against the
+// same organization must serialize on lockOrganization's FOR UPDATE so only
+// one commits a consistent result (the second sees the row already gone),
+// matching the ErrLastOwner concurrency precedent
+// (TestOwnerOnlyPromotionAndConcurrentOwnerTransitions).
+func TestDeleteOrganizationConcurrentRequestsOnlyOneCommits(t *testing.T) {
+	t.Parallel()
+
+	ctx, pool := openOrganizationsTestPool(t, "organizations_delete_test")
+	service := NewService(pool, activity.NewService(pool))
+	ownerID := insertOrganizationsTestUser(t, ctx, pool, "delete-race-owner@example.com")
+	organizationID := insertOrganizationsTestOrganization(t, ctx, pool, "Delete Race Org")
+	insertOrganizationsTestMember(t, ctx, pool, organizationID, ownerID, "owner")
+
+	start := make(chan struct{})
+	errs := make(chan error, 2)
+	var wg sync.WaitGroup
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			errs <- service.DeleteOrganization(ctx, ownerID, organizationID)
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(errs)
+
+	successes, notFounds, other := 0, 0, 0
+	for err := range errs {
+		switch err {
+		case nil:
+			successes++
+		case ErrNotFound:
+			notFounds++
+		default:
+			other++
+		}
+	}
+	if successes != 1 || notFounds != 1 || other != 0 {
+		t.Fatalf("successes=%d notFounds=%d other=%d, want exactly one success and one ErrNotFound", successes, notFounds, other)
+	}
+
+	var count int
+	if err := pool.QueryRow(ctx, `SELECT COUNT(*) FROM organizations WHERE id = $1`, organizationID).Scan(&count); err != nil {
+		t.Fatalf("count organizations: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("organization count = %d, want 0", count)
 	}
 }
 
