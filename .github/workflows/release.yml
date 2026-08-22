@@ -1,0 +1,94 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*.*.*']
+  workflow_dispatch: {}
+
+jobs:
+  checks:
+    uses: ./.github/workflows/ci.yml
+
+  backend-image:
+    needs: checks
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Log in to private registry
+        uses: docker/login-action@v3
+        with:
+          registry: registry.desatatufuria.com
+          username: ${{ secrets.REGISTRY_USERNAME }}
+          password: ${{ secrets.REGISTRY_TOKEN }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: backend/Dockerfile
+          push: true
+          tags: |
+            registry.desatatufuria.com/dtf-bookmarks-sync-backend:${{ github.ref_name }}
+            registry.desatatufuria.com/dtf-bookmarks-sync-backend:latest
+
+  extension-artifact:
+    needs: checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: extension/package-lock.json
+      - working-directory: extension
+        run: npm ci
+      - working-directory: extension
+        run: npm run package
+      - uses: actions/upload-artifact@v4
+        with:
+          name: extension-zip
+          path: extension/release/*.zip
+
+  admin-web-artifact:
+    needs: checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: admin-web/package-lock.json
+      - working-directory: admin-web
+        run: npm ci
+      - working-directory: admin-web
+        run: npm run build
+      - run: tar -czf admin-web-dist.tar.gz -C admin-web/dist .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: admin-web-dist
+          path: admin-web-dist.tar.gz
+
+  github-release:
+    needs: [backend-image, extension-artifact, admin-web-artifact]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: extension-zip
+          path: dist/extension
+      - uses: actions/download-artifact@v4
+        with:
+          name: admin-web-dist
+          path: dist/admin-web
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/extension/*.zip
+            dist/admin-web/admin-web-dist.tar.gz
+          generate_release_notes: true
