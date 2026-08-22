@@ -120,4 +120,61 @@ describe("activity page", () => {
     expect(await screen.findByText(/created the group "operators"/i)).toBeInTheDocument();
     await waitFor(() => expect(screen.queryByRole("button", { name: /load more/i })).not.toBeInTheDocument());
   });
+
+  it("switching category refetches with the new category and drops the previous category's rows", async () => {
+    const allPage = {
+      events: [
+        {
+          id: "event-all",
+          organizationId: "org-1",
+          actorUserId: "user-1",
+          actorEmail: "owner@example.com",
+          actorName: "Owner",
+          kind: "organization.created",
+          targetType: "organization",
+          targetId: "org-1",
+          metadata: { organizationName: "Acme" },
+          createdAt: "2026-08-02T00:00:00Z",
+        },
+      ],
+      nextCursor: "",
+    };
+    const bookmarksPage = {
+      events: [
+        {
+          id: "event-bookmarks",
+          organizationId: "org-1",
+          actorUserId: "user-1",
+          actorEmail: "owner@example.com",
+          actorName: "Owner",
+          kind: "bookmark.created",
+          targetType: "bookmark",
+          targetId: "bookmark-1",
+          metadata: { title: "Example", url: "https://example.com", workspaceName: "Team" },
+          createdAt: "2026-08-03T00:00:00Z",
+        },
+      ],
+      nextCursor: "",
+    };
+
+    fetchMock.mockImplementation((input) => {
+      const url = String(input);
+      if (url.includes("/organizations/org-1/activity")) {
+        return url.includes("category=bookmarks") ? jsonResponse(bookmarksPage) : jsonResponse(allPage);
+      }
+      return jsonResponse({ error: "not found" }, 404);
+    });
+
+    renderAppRoute("/activity");
+
+    expect(await screen.findByText(/created the organization "acme"/i)).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Bookmarks" }));
+
+    expect(await screen.findByText(/added the bookmark "example"/i)).toBeInTheDocument();
+    expect(screen.queryByText(/created the organization "acme"/i)).not.toBeInTheDocument();
+
+    const bookmarksCall = fetchMock.mock.calls.find(([input]) => String(input).includes("category=bookmarks"));
+    expect(bookmarksCall).toBeDefined();
+  });
 });

@@ -119,18 +119,18 @@ Each unit is developed, tested, and merged into the previous unit's branch befor
 
 ## Phase B2: Frontend Category Control + CSS Rename
 
-- [ ] B2.1 RED: `admin-web/src/lib/api/activity.test.ts` — `listOrgActivity` emits `category=bookmarks` in the query string; omits the param entirely when `category="all"` (rollback guarantee: older-backend request stays byte-identical).
-- [ ] B2.2 GREEN: `admin-web/src/lib/api/activity.ts` — add `ActivityCategory` type; `listOrgActivity` gains the `category` param, inserted before `limit`.
-- [ ] B2.3 GREEN: `admin-web/src/features/activity/queries.ts` — `useOrgActivity` gains `category`; query key becomes `[...queryKeys.organization(id).activity, category]`.
-- [ ] B2.4 RED: `admin-web/src/features/activity/ActivityCategoryToggle.test.tsx` (new) — 3 buttons render; `aria-pressed` is `true` only on the active category; `onChange` fires with each value on click.
-- [ ] B2.5 GREEN: `admin-web/src/features/activity/ActivityCategoryToggle.tsx` (new) — `role="group"` segmented control, 3 text-label buttons, `className="ui-segmented"`.
-- [ ] B2.6 RED: `admin-web/src/features/activity/ActivityPage.test.tsx` — selecting a category refetches with the new category and does not render the previous category's rows (distinct query key); "Load more" pagination stays within the selected category.
-- [ ] B2.7 GREEN: `admin-web/src/features/activity/ActivityPage.tsx` — `useState<ActivityCategory>("all")`; render `ActivityCategoryToggle`; update page copy to stop claiming admin-only content.
-- [ ] B2.8 GREEN: `admin-web/src/lib/ui/tokens.css` — rename `.ui-theme-toggle*` → `.ui-segmented*` (4 rules + the dark-theme hover at line 17).
-- [ ] B2.9 GREEN: `admin-web/src/lib/ui/components/ThemeToggle.tsx` — update the 3 class strings to `.ui-segmented*`; confirm `ThemeToggle.test.tsx` stays green untouched (asserts roles/`aria-pressed` only, never class names).
+- [x] B2.1 RED: `admin-web/src/lib/api/activity.test.ts` — `listOrgActivity` emits `category=bookmarks` in the query string; omits the param entirely when `category="all"` (rollback guarantee: older-backend request stays byte-identical).
+- [x] B2.2 GREEN: `admin-web/src/lib/api/activity.ts` — add `ActivityCategory` type; `listOrgActivity` gains the `category` param, inserted before `limit`.
+- [x] B2.3 GREEN: `admin-web/src/features/activity/queries.ts` — `useOrgActivity` gains `category`; query key becomes `[...queryKeys.organization(id).activity, category]`.
+- [x] B2.4 RED: `admin-web/src/features/activity/ActivityCategoryToggle.test.tsx` (new) — 3 buttons render; `aria-pressed` is `true` only on the active category; `onChange` fires with each value on click.
+- [x] B2.5 GREEN: `admin-web/src/features/activity/ActivityCategoryToggle.tsx` (new) — `role="group"` segmented control, 3 text-label buttons, `className="ui-segmented"`.
+- [x] B2.6 RED: `admin-web/src/features/activity/ActivityPage.test.tsx` — selecting a category refetches with the new category and does not render the previous category's rows (distinct query key); "Load more" pagination stays within the selected category.
+- [x] B2.7 GREEN: `admin-web/src/features/activity/ActivityPage.tsx` — `useState<ActivityCategory>("all")`; render `ActivityCategoryToggle`; update page copy to stop claiming admin-only content.
+- [x] B2.8 GREEN: `admin-web/src/lib/ui/tokens.css` — rename `.ui-theme-toggle*` → `.ui-segmented*` (4 rules + the dark-theme hover at line 17).
+- [x] B2.9 GREEN: `admin-web/src/lib/ui/components/ThemeToggle.tsx` — update the 3 class strings to `.ui-segmented*`; confirm `ThemeToggle.test.tsx` stays green untouched (asserts roles/`aria-pressed` only, never class names).
 
 ## Phase 5: Verification
 
-- [ ] 5.1 `cd backend && go build ./... && go vet ./... && go test ./internal/activity ./internal/sync ./cmd/api` — build/vet clean; touched packages pass.
-- [ ] 5.2 `cd admin-web && npm run build && npm test` — build clean; all suites pass, including `ActivityCategoryToggle`, `ActivityPage`, `format`, `activity`, and `ThemeToggle`.
-- [ ] 5.3 Check current Postgres/Docker availability for this session (e.g. `docker ps`) before relying on it in A2a/A2b/B1/B2's runtime harness steps. If unavailable, defer to the same contingency `soft-delete-recovery` used (task 5.3 there): validate the live create/update/delete/retry/category-filter/toggle behavior against a running environment once Docker is available, rather than assuming it works from unit/integration coverage alone.
+- [x] 5.1 `cd backend && go build ./... && go vet ./... && go test ./internal/activity ./internal/sync ./cmd/api` — build/vet clean; touched packages pass. Confirmed: `go build ./...` clean, `go vet ./...` clean, `go test ./internal/activity ./internal/sync ./cmd/api` all `ok`.
+- [x] 5.2 `cd admin-web && npm run build && npm test` — build clean; all suites pass, including `ActivityCategoryToggle`, `ActivityPage`, `format`, `activity`, and `ThemeToggle`. Confirmed: `tsc --noEmit && vite build` clean, `npm test` → 27 test files, 196/196 tests passed.
+- [ ] 5.3 DEFERRED. Checked `docker ps -a` this session: a `shared-bookmark-sync-postgres` (postgres:16-alpine) container exists but is `Exited (0)`, not running; no other Postgres container is up. Matching this session's established pattern (`soft-delete-recovery` task 5.3): the live create/update/delete/retry/category-filter/toggle walkthrough against a running Postgres is left explicitly deferred rather than assumed from unit/integration coverage. Bring up `docker compose up -d`, then exercise: create/update/delete a bookmark and a folder (confirm `activity_events` rows), retry an applied mutation (confirm no duplicate row), `GET .../activity?category=administrative` vs `?category=bookmarks` (confirm disjoint kind sets), and the Activity page's All/Administrative/Bookmarks toggle end-to-end (confirm the feed and pagination reset per category).

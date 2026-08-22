@@ -44,12 +44,12 @@ const OPTIONS: { value: ColorSchemePreference; label: string; icon: () => JSX.El
  */
 export function ThemeToggle({ preference, onChange }: ThemeToggleProps) {
   return (
-    <div role="group" aria-label="Color scheme" className="ui-theme-toggle">
+    <div role="group" aria-label="Color scheme" className="ui-segmented">
       {OPTIONS.map(({ value, label, icon: Icon }) => (
         <button
           key={value}
           type="button"
-          className={`ui-theme-toggle__button${preference === value ? " ui-theme-toggle__button--active" : ""}`}
+          className={`ui-segmented__button${preference === value ? " ui-segmented__button--active" : ""}`}
           aria-pressed={preference === value}
           aria-label={label}
           onClick={() => onChange(value)}

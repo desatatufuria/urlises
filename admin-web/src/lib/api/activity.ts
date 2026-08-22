@@ -32,6 +32,12 @@ export type ActivityKind =
   | "folder.updated"
   | "folder.deleted";
 
+// ActivityCategory mirrors backend/internal/activity/service.go's Category
+// type. "all" is the default and sends no `category` query param at all --
+// this keeps the default request byte-identical to the pre-category-filter
+// request shape, for clean rollback / older-backend compatibility.
+export type ActivityCategory = "all" | "administrative" | "bookmarks";
+
 // ActivityEvent mirrors backend/internal/activity/service.go's Event struct
 // JSON tags verbatim. actorUserId/actorEmail/actorName are nullable --
 // actor_user_id is ON DELETE SET NULL, so a former member's events survive
@@ -61,11 +67,21 @@ export interface ActivityPage {
 // listOrgActivity fetches one page of an organization's activity feed,
 // newest-first. cursor is the opaque token from a prior page's nextCursor;
 // omit it (or pass "") for the first page, in which case no `cursor` query
-// param is sent at all.
-export function listOrgActivity(organizationId: string, token: string, cursor?: string, limit = 50) {
+// param is sent at all. category defaults to "all", which sends no
+// `category` query param at all (rollback guarantee -- see ActivityCategory).
+export function listOrgActivity(
+  organizationId: string,
+  token: string,
+  cursor?: string,
+  category: ActivityCategory = "all",
+  limit = 50,
+) {
   const params = new URLSearchParams();
   if (cursor) {
     params.set("cursor", cursor);
+  }
+  if (category !== "all") {
+    params.set("category", category);
   }
   params.set("limit", String(limit));
 
