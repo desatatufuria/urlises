@@ -64,8 +64,8 @@ Each unit is developed, tested, and merged into `develop` before the next unit's
 
 ## Phase 2: Activity HTTP Handler
 
-- [ ] 2.1 RED: `backend/internal/activity/handler_test.go` — `GET /organizations/{organizationId}/activity` returns 200 + `{events, nextCursor}` for an admin; rejects a non-admin; forwards `cursor`/`limit` query params to `ListByOrganization`.
-- [ ] 2.2 GREEN: `backend/internal/activity/handler.go` — `RegisterRoutes(mux, authMiddleware, service routeService)`, `routeService` interface, `r.PathValue("organizationId")`, decode `cursor`/`limit`, `httpapi.WriteJSON`/`WriteError`, `writeActivityError`.
+- [x] 2.1 RED: `backend/internal/activity/handler_test.go` — `GET /organizations/{organizationId}/activity` returns 200 + `{events, nextCursor}` for an admin; rejects a non-admin; forwards `cursor`/`limit` query params to `ListByOrganization`.
+- [x] 2.2 GREEN: `backend/internal/activity/handler.go` — `RegisterRoutes(mux, authMiddleware, service routeService)`, `routeService` interface, `r.PathValue("organizationId")`, decode `cursor`/`limit`, `httpapi.WriteJSON`/`WriteError`, `writeActivityError`.
 
 ## Phase 3: Organizations Wiring
 
