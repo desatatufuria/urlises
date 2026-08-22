@@ -38,3 +38,10 @@ export function getMe(token: string) {
 export function logout(_token: string) {
   return Promise.resolve();
 }
+
+export function deactivateSelf(token: string) {
+  return apiRequest<void>("/me/deactivate", {
+    method: "POST",
+    token,
+  });
+}
