@@ -1,0 +1,72 @@
+# Exploration: Workspace delete UX parity + soft-delete/recovery for organizations and workspaces
+
+## Current State
+
+**UI parity gap (item 1).** `admin-web/src/lib/ui/components/ConfirmByTyping.tsx` is a small, generic, presentation-only component (`expected`, `confirmLabel`, `onConfirm`, `disabled`) already reused correctly by organization delete. `admin-web/src/features/home/StateHome.tsx` uses a "danger zone" section (one org, one delete action) that opens a `ContextPanel` containing `ConfirmByTyping`, tracks `deleteError` locally, and maps a `409 ApiError` to a friendly orphan-guard message. `admin-web/src/features/workspaces/WorkspacesPage.tsx` deletes per-row, inline in a `Table`, still on native `window.confirm(...)` (line 108), with a `deletingWorkspaceId` busy flag and a page-level `notice` banner for success/error — a materially different shape (N rows, no `ContextPanel`, no per-row typed name) than the org's single danger-zone panel.
+
+**Delete implementation (item 2, backend).** Both `organizations.Service.DeleteOrganization` (service.go:669) and `workspaces.Service.Delete` (service.go:393) are hard deletes: `DELETE FROM organizations WHERE id = $1` / `DELETE FROM workspaces WHERE id = $1 AND organization_id = $2`, inside a transaction, admin-gated, with `RowsAffected()==0 → ErrNotFound`. Workspace delete records an `activity.Record` in the same transaction before commit; organization delete does not (its own `activity_events` row cascades away with it per Decision A in `openspec/changes/lifecycle-management/proposal.md`). Organization delete additionally runs `organizationDeleteWouldOrphanMember` under `FOR UPDATE` locking (`ErrWouldOrphanMember`, 409).
+
+**Cascades that a soft-delete would bypass.** `backend/migrations/000001_initial_schema.sql` and `000002_admin_backend_foundation.sql` confirm the FK graph: `organizations.id ON DELETE CASCADE` → `organization_members`, `workspaces`, `invitations`, `groups`, `activity_events`, `sync_events`; `workspaces.id ON DELETE CASCADE` → `folders`, `bookmarks`, `workspace_cursors`, `sync_events`, `workspace_user_access`, `workspace_group_access`. `invitations.invited_by_user_id` is `ON DELETE RESTRICT` (unrelated to this cascade chain but a reminder the schema already mixes cascade strategies deliberately).
+
+**Important existing precedent found:** `folders` and `bookmarks` already have a `deleted_at TIMESTAMPTZ` column (`000001_initial_schema.sql` lines 54, 66), and `workspaces.Service.GetTree` already filters `WHERE workspace_id = $1 AND deleted_at IS NULL` (service.go:597); `backend/internal/sync/postgres.go` also filters `deleted_at IS NULL` (lines 400, 417). **This is a sync tombstone, not a user-recoverable trash**: it exists so other devices can learn "this bookmark/folder was deleted" via the sync cursor protocol, has no restore UX, no grace-period concept, and appears to persist indefinitely with no purge job. The proposal phase should treat this as a different mechanism from what's being requested (org/workspace-level, time-boxed, restorable) so the two aren't conflated, even though the column name would likely be reused.
+
+**Read/list call sites that would need a `deleted_at IS NULL` predicate if org/workspace soft-delete lands** — the blast radius is smaller than "every query" because most access checks route through a handful of shared choke points:
+- `organizations/service.go`: `ListMemberships` (line 136, joins `organizations o`), `ListMembers` (line 230, via `requireOrganizationAdmin`→`loadOrganizationRole`, line 916), `requireOrganizationAdmin` itself (line 904).
+- `groups/service.go`: has its **own duplicated copy** of `requireOrganizationAdmin`/role-lookup (line 374) — not shared with `organizations/service.go`. Two call sites to patch, not one.
+- `workspaces/service.go`: `ListByOrganization` (line 163, joins `organizations o`), `GetAccessibleWorkspace`→`access.GetEffectiveWorkspaceAccess` (access/service.go:108, loads workspace metadata + grants) — this is the single choke point essentially all workspace reads (including `GetTree` and the extension sync HTTP surface) route through, per `RequireWorkspaceWriteAccess` (access/service.go:130) also depending on it.
+- `backend/internal/sync/` already filters `deleted_at IS NULL` for folders/bookmarks (existing tombstone pattern), but has no organization/workspace-scoped soft-delete filter today — it presumably relies on the workspace/access layer above it to reject requests for a deleted workspace, which is exactly the layer this change would touch.
+- Invitations and activity listings join through `organization_id` the same way `ListMemberships` does and would need the same predicate if not filtered upstream.
+
+**No scheduled-job/cron infrastructure exists.** Searched `backend/` for `cron`, `scheduler`, `Ticker`, `NewTicker`, goroutine-based background workers — zero matches. Any real purge-after-grace-period job would be **new infrastructure**, not a reuse of something existing.
+
+**Guards likely still apply.** `ErrWouldOrphanMember` (organizations/service.go) and `ErrSoleOwner` (auth/service.go, per `lifecycle-management`'s proposal Decision B) both exist and are exercised in tests. Nothing found in this pass suggests either guard becomes unnecessary under soft-delete — flagged as an open question for the proposal, not resolved here.
+
+## Affected Areas
+
+- `admin-web/src/features/workspaces/WorkspacesPage.tsx` — replace `window.confirm` (line 108) with a `ConfirmByTyping`-based flow; the org pattern is single-entity/danger-zone/`ContextPanel`, but workspace delete is per-row in a table — reusing the component is straightforward, but reusing the *layout* (danger-zone panel vs. per-row modal/panel) is a real design decision for the proposal, not just a copy-paste.
+- `admin-web/src/lib/ui/components/ConfirmByTyping.tsx` — no changes anticipated, already generic enough to reuse as-is.
+- `backend/internal/organizations/service.go` — `DeleteOrganization` (line 669) would change from `DELETE FROM organizations` to an `UPDATE ... SET deleted_at = now()`; `ListMemberships`, `ListMembers`, `requireOrganizationAdmin`/`loadOrganizationRole` need a `deleted_at IS NULL` predicate on `organizations`.
+- `backend/internal/workspaces/service.go` — `Delete` (line 393) same hard→soft change; `ListByOrganization`, `GetAccessibleWorkspace`/`GetTree` need the predicate, transitively via `access/service.go`.
+- `backend/internal/access/service.go` — `GetEffectiveWorkspaceAccess`/`loadWorkspaceMetadata` (line 108+) is the single highest-leverage choke point for workspace reachability; likely the best place to centralize the workspace-level soft-delete check.
+- `backend/internal/groups/service.go` — has a **duplicated** `requireOrganizationAdmin` (line 374) that would need the same organization soft-delete predicate independently of the `organizations` package copy.
+- `backend/internal/sync/`, `backend/internal/websocket/` — need a product decision (flagged below, not resolved) on whether a soft-deleted org/workspace stays live for sync during the grace period.
+- `backend/internal/activity/service.go` — under soft-delete `activity_events` naturally survive (no cascade fires) — a positive side effect noted below, not a required code change.
+- `backend/migrations/` — new migration(s): `deleted_at` column on `organizations` and `workspaces` (separate from the existing unrelated `folders`/`bookmarks` sync-tombstone columns), plus whatever restore/list-trash indexes are needed.
+- No existing scheduler/cron package under `backend/` — a purge mechanism is net-new infrastructure regardless of which approach is chosen.
+
+## Approaches
+
+Industry-pattern comparison, not a proposal decision — the proposal phase should pick from or synthesize these.
+
+1. **30-day grace period, self-service restore via a "recently deleted" admin view, scheduled purge job** — matches the dominant industry convention (GCP Cloud projects: 30 days, becomes unusable immediately, restorable by owners via a "Resources pending deletion" console section, auto-purged after 30 days; GitLab.com SaaS default: 30 days as of mid-2025, up from 7 days before, with a centralized Trash UI; Notion: 30-day Trash for pages, auto-purged).
+   - Pros: matches the strongest cross-industry convention; gives admins a real safety net; positive side effect of preserving `activity_events` for the whole window (and permanently, if soft-delete never truly purges FK children — see Approach 3).
+   - Cons: requires new purge infrastructure (no cron exists in this repo today); every list/read call site above needs the `deleted_at IS NULL` predicate; UX for "recently deleted" trash view is new screen(s), not just a delete-button change.
+   - Effort: High.
+
+2. **Shorter grace period (7–14 days), same restore + purge shape** — matches GitLab's pre-2025 default (7 days) and the general pattern of shorter windows for less severe or more storage-sensitive actions.
+   - Pros: less storage/compliance exposure than 30 days; still gives a meaningful undo window; same architecture as Approach 1, just a shorter constant.
+   - Cons: same engineering cost as Approach 1 (the grace-period length is a config value, not an architecture difference); a short window may not be long enough for the "someone was on vacation and didn't notice" case that 30-day windows are designed for.
+   - Effort: High (same as Approach 1 — the number is a parameter, not a different design).
+
+3. **Soft-delete flag with no scheduled purge (lazy/manual only)** — mark `deleted_at`, block access immediately, but do not build a background sweep; either purge lazily on next relevant read (e.g., during `ListMemberships`/login, sweep anything past its window) or never purge automatically at all.
+   - Pros: zero new scheduler infrastructure; smallest possible slice; can ship the "recoverable" half of the feature (soft delete + restore) without committing to a purge mechanism up front.
+   - Cons: no real precedent found among the surveyed products for indefinite soft-deleted rows — all surveyed products eventually hard-purge on a schedule; leaving rows soft-deleted forever re-introduces the compliance ambiguity `lifecycle-management`'s Decision A was trying to resolve, just inverted (data lingers instead of vanishing); "purge lazily on next read" means an org that's soft-deleted and never queried again (the common case) never actually gets purged.
+   - Effort: Medium (skips the scheduler, keeps everything else from Approach 1/2).
+
+## Recommendation
+
+The industry evidence converges strongly on **grace period + self-service restore + eventual scheduled purge** as the shape (Approaches 1/2 differ only in window length, not architecture); GCP's exact framing — immediate access block, admin-visible pending-deletion list, scheduled auto-purge — is the closest analog to this app's org/workspace hierarchy (a project ≈ this app's organization/workspace: a container of many child resources, not a single file). Approach 3's "no purge job" variant is worth carrying into the proposal explicitly as the low-effort fallback given this repo has zero existing scheduler infrastructure, but it diverges from every surveyed product's actual behavior. Final choice belongs to `sdd-propose`.
+
+## Risks
+
+- **No existing scheduler/cron infra** — whichever grace-period approach is chosen, a real purge job is new infrastructure in this backend (new goroutine ticker, an external cron hitting an admin endpoint, or a lazy sweep-on-read — all three are viable, none is currently proven out here).
+- **Duplicated authorization logic** — `requireOrganizationAdmin` exists independently in both `organizations/service.go` and `groups/service.go`; a soft-delete predicate added to one and missed in the other would silently let groups operations proceed against a "deleted" organization.
+- **Blast radius is real but bounded** — most workspace reads funnel through `access.GetEffectiveWorkspaceAccess`, so workspace-side coverage is more centralized than it first appears; organization-side coverage is less centralized (`ListMemberships`, `ListMembers`, the duplicated admin-role check) and needs explicit enumeration in the design phase.
+- **Open product question (not resolved here): sync/websocket reachability during grace period.** Should a soft-deleted org/workspace's data stop syncing to the extension immediately (matches the "becomes unusable immediately" pattern seen in GCP/GitLab), or remain live until the row is actually purged? `backend/internal/sync/` and `backend/internal/websocket/` have no org/workspace-level soft-delete awareness today — this is a genuine fork, not a detail.
+- **Open product question (not resolved here): do `ErrWouldOrphanMember` and `ErrSoleOwner` still apply, unchanged, under soft-delete?** Both guards exist and are tested today; nothing found argues for removing them, but the proposal should state this explicitly rather than carry it over silently.
+- **Positive side effect surfaced by this research, not a decision:** switching organization deletion from hard to soft delete means `activity_events` (currently `ON DELETE CASCADE` off `organizations.id`, and explicitly designed to disappear with the org per Decision A in the `lifecycle-management` proposal) would naturally survive, since nothing is actually deleted. This directly addresses the "org deletion destroys its own audit trail" risk that same proposal flagged as accepted-by-design — worth calling out explicitly when this change is proposed, since it may change the calculus on that earlier decision retroactively.
+- **UI reuse for item 1 is not purely mechanical** — the org danger-zone pattern is single-entity; workspace delete is per-row in a table with N entities. Reusing the `ConfirmByTyping` component is trivial; reusing the same panel/flow shape needs a UI decision (per-row inline confirm vs. a shared delete panel keyed by selected workspace).
+
+## Ready for Proposal
+
+Yes. Both items have enough grounding — exact files/line numbers for the UI parity change, and a schema/call-site inventory plus industry-pattern comparison for soft-delete — for `sdd-propose` to draft concrete scope, decisions, and an affected-areas table. The proposal phase should explicitly resolve (not silently default): grace-period length, purge mechanism (scheduled vs. lazy vs. none), sync/websocket behavior during grace period, and whether the orphan/sole-owner guards carry over unchanged.
