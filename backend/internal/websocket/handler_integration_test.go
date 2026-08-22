@@ -172,6 +172,70 @@ func TestTicketWebSocketUpgradePostgres(t *testing.T) {
 	})
 }
 
+// Slice 2b — RED: choke point 13 propagation for websocket connect. Once the
+// workspace's organization is soft-deleted, the GET /sync/ws upgrade request
+// is rejected with 403 through the identical
+// workspaces.Service.GetAccessibleWorkspace -> access.loadWorkspaceMetadata
+// path used by sync.PostgresStore.ReplayEvents and bookmark mutations (see
+// sync.TestReplayEventsAndBookmarkMutationRejectAfterOrganizationSoftDelete),
+// even though the workspace row itself is never touched.
+func TestWebSocketUpgradeRejectsWorkspaceInSoftDeletedOrganization(t *testing.T) {
+	ctx, pool := websocketTestPool(t)
+	authService := auth.NewService(pool, config.AuthConfig{JWTSecret: []byte("server-secret"), TokenTTL: time.Minute, ClientIDHeader: "X-Client-Id"})
+	session, err := authService.Register(ctx, auth.RegisterInput{Email: "socket-cp13@example.test", Password: "password"}, "socket-client-cp13")
+	if err != nil {
+		t.Fatal(err)
+	}
+	principal, err := authService.AuthenticateToken(ctx, session.AccessToken, "socket-client-cp13")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var organizationID string
+	if err := pool.QueryRow(ctx, `INSERT INTO organizations(name) VALUES('Sockets CP13') RETURNING id`).Scan(&organizationID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO organization_members(organization_id,user_id,role) VALUES($1,$2,'owner')`, organizationID, principal.UserID); err != nil {
+		t.Fatal(err)
+	}
+	workspaceService := workspaces.NewService(pool, nil, activity.NewService(pool))
+	workspace, err := workspaceService.Create(ctx, principal.UserID, organizationID, workspaces.CreateWorkspaceInput{Name: "Sockets CP13", Type: "shared"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	mux := http.NewServeMux()
+	RegisterRoutes(mux, authService, workspaceService, testCursors{}, NewHub())
+	server := httptest.NewServer(mux)
+	t.Cleanup(server.Close)
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http") + "/sync/ws"
+
+	// Live baseline: the upgrade succeeds before the organization is trashed.
+	ticket, err := authService.CreateWSTicket(ctx, principal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := websocket.Dialer{Subprotocols: []string{ticketProtocolPrefix + ticket.Ticket}}
+	connection, _, err := d.Dial(wsURL+"?workspaceId="+workspace.WorkspaceID, http.Header{})
+	if err != nil {
+		t.Fatalf("dial before soft delete: %v", err)
+	}
+	connection.Close()
+
+	if _, err := pool.Exec(ctx, `UPDATE organizations SET deleted_at = NOW() WHERE id = $1`, organizationID); err != nil {
+		t.Fatal(err)
+	}
+
+	ticket, err = authService.CreateWSTicket(ctx, principal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d = websocket.Dialer{Subprotocols: []string{ticketProtocolPrefix + ticket.Ticket}}
+	_, response, err := d.Dial(wsURL+"?workspaceId="+workspace.WorkspaceID, http.Header{})
+	if err == nil || response == nil || response.StatusCode != http.StatusForbidden {
+		t.Fatalf("dial after soft delete err=%v response=%v, want 403 Forbidden", err, response)
+	}
+}
+
 func responseBody(response *http.Response) string {
 	if response == nil || response.Body == nil {
 		return ""

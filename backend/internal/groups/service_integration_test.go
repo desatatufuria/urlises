@@ -93,6 +93,72 @@ func TestListMembersRejectsNonAdmins(t *testing.T) {
 	}
 }
 
+// Slice 2b — RED: choke point 10 (the duplicate requireOrganizationAdmin in
+// this package). Group admin operations reject on a soft-deleted
+// organization with ErrForbidden. Create is the representative call site;
+// Update, Delete, AddMember and RemoveMember all route through the same gate
+// function.
+func TestCreateGroupRejectsSoftDeletedOrganization(t *testing.T) {
+	t.Parallel()
+
+	ctx, pool := openGroupsTestPool(t)
+	service := NewService(pool, activity.NewService(pool))
+	adminID := insertGroupsTestUser(t, ctx, pool, "cp10-admin@example.com")
+	organizationID := insertGroupsTestOrganization(t, ctx, pool, "CP10 Org")
+	insertGroupsTestMember(t, ctx, pool, organizationID, adminID, "admin")
+	softDeleteGroupsTestOrganization(t, ctx, pool, organizationID)
+
+	_, err := service.Create(ctx, adminID, organizationID, CreateGroupInput{Name: "devops"})
+	if err != ErrForbidden {
+		t.Fatalf("err = %v, want %v", err, ErrForbidden)
+	}
+}
+
+// Slice 2b — RED: choke point 11. requireOrganizationMembership rejects
+// adding a group member whose organization is soft-deleted, even though the
+// group itself and the target user's membership row both still exist.
+func TestAddMemberRejectsSoftDeletedOrganization(t *testing.T) {
+	t.Parallel()
+
+	ctx, pool := openGroupsTestPool(t)
+	service := NewService(pool, activity.NewService(pool))
+	adminID := insertGroupsTestUser(t, ctx, pool, "cp11-admin@example.com")
+	memberID := insertGroupsTestUser(t, ctx, pool, "cp11-member@example.com")
+	organizationID := insertGroupsTestOrganization(t, ctx, pool, "CP11 Org")
+	insertGroupsTestMember(t, ctx, pool, organizationID, adminID, "admin")
+	insertGroupsTestMember(t, ctx, pool, organizationID, memberID, "member")
+	groupID := insertGroupsTestGroup(t, ctx, pool, organizationID, "devops")
+
+	// requireOrganizationAdmin (CP10) is checked before requireOrganizationMembership
+	// (CP11) inside AddMemberTx, so CP11 can only be observed once CP10 is
+	// satisfied. Soft-delete the organization only after asserting CP10
+	// would already have blocked a non-live org — here we verify CP11
+	// directly via the unexported function, package-internal, as defense in
+	// depth behind CP10.
+	softDeleteGroupsTestOrganization(t, ctx, pool, organizationID)
+
+	err := requireOrganizationMembership(ctx, pool, organizationID, memberID)
+	if err != ErrForbidden {
+		t.Fatalf("err = %v, want %v", err, ErrForbidden)
+	}
+
+	// End-to-end: AddMember (gated by CP10 first) also fails closed.
+	_, err = service.AddMember(ctx, adminID, groupID, AddGroupMemberInput{UserID: memberID})
+	if err != ErrForbidden {
+		t.Fatalf("AddMember err = %v, want %v", err, ErrForbidden)
+	}
+}
+
+// softDeleteGroupsTestOrganization stamps deleted_at directly via SQL so
+// choke-point tests can construct an already-trashed organization fixture.
+func softDeleteGroupsTestOrganization(t *testing.T, ctx context.Context, pool *pgxpool.Pool, organizationID string) {
+	t.Helper()
+
+	if _, err := pool.Exec(ctx, `UPDATE organizations SET deleted_at = NOW() WHERE id = $1`, organizationID); err != nil {
+		t.Fatalf("soft delete organization fixture: %v", err)
+	}
+}
+
 func openGroupsTestPool(t *testing.T) (context.Context, *pgxpool.Pool) {
 	t.Helper()
 	if testing.Short() {

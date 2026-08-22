@@ -15,6 +15,8 @@ export function formatActivityEvent(event: ActivityEvent): string {
   switch (event.kind) {
     case "organization.created":
       return `Created the organization "${m.organizationName ?? ""}".`;
+    case "organization.deleted":
+      return `Deleted the organization "${m.organizationName ?? ""}".`;
     case "invitation.created":
       return `Invited ${m.email ?? "someone"} as ${m.role ?? "member"}.`;
     case "invitation.resent":

@@ -160,6 +160,11 @@ func NewService(pool *pgxpool.Pool, accessService *access.Service, activityServi
 	return &Service{pool: pool, access: accessService, activity: activityService}
 }
 
+// ListByOrganization is choke point 14: AND o.deleted_at IS NULL on the JOIN
+// excludes a soft-deleted organization's workspaces, and AND w.deleted_at IS
+// NULL on the outer WHERE excludes an individually soft-deleted workspace
+// inside a live organization. The inner grants UNION branch needs nothing
+// extra — it is inner-joined on w.id and the outer WHERE already filters it.
 func (s *Service) ListByOrganization(ctx context.Context, userID, organizationID string) ([]WorkspaceAccess, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT w.id, w.name, w.type, o.id, o.name,
@@ -170,7 +175,7 @@ func (s *Service) ListByOrganization(ctx context.Context, userID, organizationID
 			END AS role,
 			ARRAY_AGG(DISTINCT grants.source ORDER BY grants.source) AS sources
 		FROM workspaces w
-		JOIN organizations o ON o.id = w.organization_id
+		JOIN organizations o ON o.id = w.organization_id AND o.deleted_at IS NULL
 		JOIN (
 			SELECT wua.workspace_id,
 				CASE wua.role
@@ -206,7 +211,7 @@ func (s *Service) ListByOrganization(ctx context.Context, userID, organizationID
 			JOIN organization_members om ON om.organization_id = w.organization_id
 			WHERE om.user_id = $1 AND om.role IN ('owner', 'admin')
 		) grants ON grants.workspace_id = w.id
-		WHERE w.organization_id = $2
+		WHERE w.organization_id = $2 AND w.deleted_at IS NULL
 		GROUP BY w.id, w.name, w.type, o.id, o.name
 		ORDER BY w.name, w.id
 	`, userID, organizationID)
@@ -651,12 +656,15 @@ func (s *Service) GetTree(ctx context.Context, userID, workspaceID string) (Tree
 	return TreeResponse{Workspace: workspace, Folders: buildFolderTree(folders, bookmarks)}, nil
 }
 
+// loadWorkspaceOrganizationID is choke point 16: AND deleted_at IS NULL
+// closes GrantUserAccess, RevokeUserAccess, GrantGroupAccess, and
+// RevokeGroupAccess against a soft-deleted workspace.
 func loadWorkspaceOrganizationID(ctx context.Context, querier dbQuerier, workspaceID string) (string, error) {
 	var organizationID string
 	err := querier.QueryRow(ctx, `
 		SELECT organization_id
 		FROM workspaces
-		WHERE id = $1
+		WHERE id = $1 AND deleted_at IS NULL
 	`, workspaceID).Scan(&organizationID)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -668,13 +676,17 @@ func loadWorkspaceOrganizationID(ctx context.Context, querier dbQuerier, workspa
 	return organizationID, nil
 }
 
+// loadWorkspaceMetadataRecord is choke point 15: AND w.deleted_at IS NULL AND
+// o.deleted_at IS NULL makes Delete's own double-delete check and
+// GetAccessSnapshot return ErrNotFound for a soft-deleted workspace or a
+// workspace inside a soft-deleted organization.
 func loadWorkspaceMetadataRecord(ctx context.Context, querier dbQuerier, workspaceID string) (workspaceMetadataRecord, error) {
 	var metadata workspaceMetadataRecord
 	err := querier.QueryRow(ctx, `
 		SELECT w.id, w.name, w.type, o.id, o.name
 		FROM workspaces w
 		JOIN organizations o ON o.id = w.organization_id
-		WHERE w.id = $1
+		WHERE w.id = $1 AND w.deleted_at IS NULL AND o.deleted_at IS NULL
 	`, workspaceID).Scan(
 		&metadata.WorkspaceID,
 		&metadata.WorkspaceName,

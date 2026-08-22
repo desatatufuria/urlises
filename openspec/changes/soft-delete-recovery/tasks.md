@@ -87,36 +87,36 @@ Each unit is developed, tested, and merged into the previous unit's branch befor
 
 ### 2b — Inaccessibility sweep (16 choke points, one named test per row)
 
-- [ ] 2.9 RED: `organizations/service_test.go` — CP1 `ListMemberships` excludes a deleted org from the org switcher.
-- [ ] 2.10 RED: `organizations/service_test.go` — CP2 `loadOrganizationRole`/`requireOrganizationAdmin` rejects on a deleted org, closing `ListMembers`, `PatchMember`, `AuthorizeInvitationTx`, `ListInvitations`, `CancelInvitation`, `ResendInvitation`, `DeleteOrganization`.
-- [ ] 2.11 RED: `organizations/service_test.go` — CP3 `loadOrganizationMember` (defense in depth behind CP2) → `ErrNotFound`.
-- [ ] 2.12 RED: `organizations/service_test.go` — CP5 `CreateInvitationTx` context rejects on a deleted org (defense in depth behind CP2).
-- [ ] 2.13 RED: `organizations/service_test.go` — CP6 `ResendInvitation` context rejects on a deleted org (defense in depth behind CP2).
-- [ ] 2.14 RED: `organizations/service_test.go` — CP7 `ValidatePendingInvitation` (required, token route, no upstream gate) blocks registering into a deleted org.
-- [ ] 2.15 RED: `organizations/service_test.go` — CP8 `loadInvitationForUpdate` (required, `AcceptInvitation` is token-based and ungated) blocks accepting into a deleted org.
-- [ ] 2.16 GREEN: `organizations/service.go` — implement CP1 + CP2 (`AND o.deleted_at IS NULL` on both JOINs).
-- [ ] 2.17 GREEN: `organizations/service.go` — implement CP3.
-- [ ] 2.18 GREEN: `organizations/service.go` — implement CP5 + CP6.
-- [ ] 2.19 GREEN: `organizations/service.go` — implement CP7 + CP8.
-- [ ] 2.20 RED: `groups/service_test.go` — CP10 `requireOrganizationAdmin` (the duplicate) rejects group admin ops on a deleted org.
-- [ ] 2.21 RED: `groups/service_test.go` — CP11 `requireOrganizationMembership` rejects group-member ops on a deleted org.
-- [ ] 2.22 GREEN: `groups/service.go` — implement CP10 (closes the exploration's named blind spot) + CP11.
-- [ ] 2.23 RED: `access/service_test.go` — CP12 `IsOrganizationAdmin` rejects on a deleted org, closing `activity.ListByOrganization` and all 8 `workspaces` org-admin gates.
-- [ ] 2.24 RED: `access/service_test.go` — CP13 `loadWorkspaceMetadata` (highest leverage) rejects `GetTree`, `GET /workspaces/{id}`, bookmark mutations, sync `ListChanges`, websocket connect.
-- [ ] 2.25 GREEN: `access/service.go` — implement CP12.
-- [ ] 2.26 GREEN: `access/service.go` — implement CP13 (`AND w.deleted_at IS NULL AND o.deleted_at IS NULL`).
-- [ ] 2.27 RED: extend sync/websocket integration tests — `sync.ListChanges`, a bookmark mutation, and websocket connect (`GetAccessibleWorkspace`) all reject immediately after the workspace's org is soft-deleted (proves CP13 propagation).
-- [ ] 2.28 RED: `workspaces/service_test.go` — CP14 `ListByOrganization` excludes a deleted org's workspaces and a soft-deleted workspace within a live org.
-- [ ] 2.29 RED: `workspaces/service_test.go` — CP15 `loadWorkspaceMetadataRecord` makes double-delete and `GetAccessSnapshot` return `ErrNotFound`.
-- [ ] 2.30 RED: `workspaces/service_test.go` — CP16 `loadWorkspaceOrganizationID` makes `GrantUserAccess`/`RevokeUserAccess`/`GrantGroupAccess`/`RevokeGroupAccess` return `ErrNotFound`.
-- [ ] 2.31 GREEN: `workspaces/service.go` — implement CP14 (`AND o.deleted_at IS NULL` on JOIN, `AND w.deleted_at IS NULL` on outer WHERE).
-- [ ] 2.32 GREEN: `workspaces/service.go` — implement CP15.
-- [ ] 2.33 GREEN: `workspaces/service.go` — implement CP16.
-- [ ] 2.34 GREEN: `organizations/handler_test.go` + `workspaces/handler_test.go` — regression: `DELETE /organizations/{id}` and `DELETE /workspaces/{id}` keep their exact existing 204/403/404 status set; only the persisted effect (soft vs. hard) differs.
-- [ ] 2.35 RED: `admin-web/src/features/activity/format.test.ts` — `formatActivityEvent` renders `organization.deleted` with representative and missing metadata.
-- [ ] 2.36 GREEN: `admin-web/src/features/activity/format.ts` — add the `"organization.deleted"` case branch.
-- [ ] 2.37 GREEN: `admin-web/src/lib/api/activity.ts` — add `"organization.deleted"` to `ActivityKind`.
-- [ ] 2.38 GREEN: `openspec/changes/lifecycle-management/specs/lifecycle-management/spec.md` — Delete Organization/Workspace requirements stop claiming deletion is permanent (superseded by this change).
+- [x] 2.9 RED: `organizations/service_test.go` — CP1 `ListMemberships` excludes a deleted org from the org switcher.
+- [x] 2.10 RED: `organizations/service_test.go` — CP2 `loadOrganizationRole`/`requireOrganizationAdmin` rejects on a deleted org, closing `ListMembers`, `PatchMember`, `AuthorizeInvitationTx`, `ListInvitations`, `CancelInvitation`, `ResendInvitation`, `DeleteOrganization`.
+- [x] 2.11 RED: `organizations/service_test.go` — CP3 `loadOrganizationMember` (defense in depth behind CP2) → `ErrNotFound`.
+- [x] 2.12 RED: `organizations/service_test.go` — CP5 `CreateInvitationTx` context rejects on a deleted org (defense in depth behind CP2).
+- [x] 2.13 RED: `organizations/service_test.go` — CP6 `ResendInvitation` context rejects on a deleted org (defense in depth behind CP2).
+- [x] 2.14 RED: `organizations/service_test.go` — CP7 `ValidatePendingInvitation` (required, token route, no upstream gate) blocks registering into a deleted org.
+- [x] 2.15 RED: `organizations/service_test.go` — CP8 `loadInvitationForUpdate` (required, `AcceptInvitation` is token-based and ungated) blocks accepting into a deleted org.
+- [x] 2.16 GREEN: `organizations/service.go` — implement CP1 + CP2 (`AND o.deleted_at IS NULL` on both JOINs).
+- [x] 2.17 GREEN: `organizations/service.go` — implement CP3.
+- [x] 2.18 GREEN: `organizations/service.go` — implement CP5 + CP6.
+- [x] 2.19 GREEN: `organizations/service.go` — implement CP7 + CP8.
+- [x] 2.20 RED: `groups/service_test.go` — CP10 `requireOrganizationAdmin` (the duplicate) rejects group admin ops on a deleted org.
+- [x] 2.21 RED: `groups/service_test.go` — CP11 `requireOrganizationMembership` rejects group-member ops on a deleted org.
+- [x] 2.22 GREEN: `groups/service.go` — implement CP10 (closes the exploration's named blind spot) + CP11.
+- [x] 2.23 RED: `access/service_test.go` — CP12 `IsOrganizationAdmin` rejects on a deleted org, closing `activity.ListByOrganization` and all 8 `workspaces` org-admin gates.
+- [x] 2.24 RED: `access/service_test.go` — CP13 `loadWorkspaceMetadata` (highest leverage) rejects `GetTree`, `GET /workspaces/{id}`, bookmark mutations, sync `ListChanges`, websocket connect.
+- [x] 2.25 GREEN: `access/service.go` — implement CP12.
+- [x] 2.26 GREEN: `access/service.go` — implement CP13 (`AND w.deleted_at IS NULL AND o.deleted_at IS NULL`).
+- [x] 2.27 RED: extend sync/websocket integration tests — `sync.ListChanges`, a bookmark mutation, and websocket connect (`GetAccessibleWorkspace`) all reject immediately after the workspace's org is soft-deleted (proves CP13 propagation).
+- [x] 2.28 RED: `workspaces/service_test.go` — CP14 `ListByOrganization` excludes a deleted org's workspaces and a soft-deleted workspace within a live org.
+- [x] 2.29 RED: `workspaces/service_test.go` — CP15 `loadWorkspaceMetadataRecord` makes double-delete and `GetAccessSnapshot` return `ErrNotFound`.
+- [x] 2.30 RED: `workspaces/service_test.go` — CP16 `loadWorkspaceOrganizationID` makes `GrantUserAccess`/`RevokeUserAccess`/`GrantGroupAccess`/`RevokeGroupAccess` return `ErrNotFound`.
+- [x] 2.31 GREEN: `workspaces/service.go` — implement CP14 (`AND o.deleted_at IS NULL` on JOIN, `AND w.deleted_at IS NULL` on outer WHERE).
+- [x] 2.32 GREEN: `workspaces/service.go` — implement CP15.
+- [x] 2.33 GREEN: `workspaces/service.go` — implement CP16.
+- [x] 2.34 GREEN: `organizations/handler_test.go` + `workspaces/handler_test.go` — regression: `DELETE /organizations/{id}` and `DELETE /workspaces/{id}` keep their exact existing 204/403/404 status set; only the persisted effect (soft vs. hard) differs.
+- [x] 2.35 RED: `admin-web/src/features/activity/format.test.ts` — `formatActivityEvent` renders `organization.deleted` with representative and missing metadata.
+- [x] 2.36 GREEN: `admin-web/src/features/activity/format.ts` — add the `"organization.deleted"` case branch.
+- [x] 2.37 GREEN: `admin-web/src/lib/api/activity.ts` — add `"organization.deleted"` to `ActivityKind`.
+- [x] 2.38 GREEN: `openspec/changes/lifecycle-management/specs/lifecycle-management/spec.md` — Delete Organization/Workspace requirements stop claiming deletion is permanent (superseded by this change).
 
 ## Phase 3: Restore + Trash (Slice 3 — recommend splitting into 3a/3b, see forecast)
 

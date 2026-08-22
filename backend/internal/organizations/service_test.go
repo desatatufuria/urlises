@@ -3,6 +3,8 @@ package organizations
 import (
 	"context"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,6 +13,7 @@ import (
 	"time"
 
 	"github.com/furia/shared-bookmark-sync/backend/internal/activity"
+	"github.com/furia/shared-bookmark-sync/backend/internal/auth"
 	"github.com/furia/shared-bookmark-sync/backend/internal/database"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -659,6 +662,255 @@ func TestDeleteOrganizationConcurrentRequestsOnlyOneCommits(t *testing.T) {
 	}
 	if deletedAt == nil {
 		t.Fatal("deleted_at = nil, want it set")
+	}
+}
+
+// Slice 2b — RED: choke point 1. A soft-deleted organization vanishes from
+// the org switcher (ListMemberships), even though the membership row itself
+// is untouched.
+func TestListMembershipsExcludesSoftDeletedOrganization(t *testing.T) {
+	t.Parallel()
+
+	ctx, pool := openOrganizationsTestPool(t, "organizations_cp_test")
+	service := NewService(pool, activity.NewService(pool))
+	ownerID := insertOrganizationsTestUser(t, ctx, pool, "cp1-owner@example.com")
+	liveOrganizationID := insertOrganizationsTestOrganization(t, ctx, pool, "CP1 Live Org")
+	deletedOrganizationID := insertOrganizationsTestOrganization(t, ctx, pool, "CP1 Deleted Org")
+	insertOrganizationsTestMember(t, ctx, pool, liveOrganizationID, ownerID, "owner")
+	insertOrganizationsTestMember(t, ctx, pool, deletedOrganizationID, ownerID, "owner")
+	softDeleteOrganizationsTestOrganization(t, ctx, pool, deletedOrganizationID)
+
+	memberships, err := service.ListMemberships(ctx, ownerID)
+	if err != nil {
+		t.Fatalf("list memberships: %v", err)
+	}
+	if len(memberships) != 1 {
+		t.Fatalf("membership count = %d, want 1 (deleted org must be excluded)", len(memberships))
+	}
+	if memberships[0].OrganizationID != liveOrganizationID {
+		t.Fatalf("membership organization id = %q, want %q", memberships[0].OrganizationID, liveOrganizationID)
+	}
+
+	// The organization_members row itself is untouched by soft delete.
+	if role := loadOrganizationsTestMemberRole(t, ctx, pool, deletedOrganizationID, ownerID); role != "owner" {
+		t.Fatalf("membership role for deleted org = %q, want owner (soft delete must not touch organization_members)", role)
+	}
+}
+
+// Slice 2b — RED: choke point 2. loadOrganizationRole/requireOrganizationAdmin
+// rejects a would-be admin on a soft-deleted organization with ErrForbidden.
+// ListMembers is the representative call site; PatchMember,
+// AuthorizeInvitationTx, ListInvitations, CancelInvitation, ResendInvitation
+// and DeleteOrganization all route through the same gate function and are
+// therefore closed by the identical fix.
+func TestListMembersRejectsSoftDeletedOrganization(t *testing.T) {
+	t.Parallel()
+
+	ctx, pool := openOrganizationsTestPool(t, "organizations_cp_test")
+	service := NewService(pool, activity.NewService(pool))
+	adminID := insertOrganizationsTestUser(t, ctx, pool, "cp2-admin@example.com")
+	organizationID := insertOrganizationsTestOrganization(t, ctx, pool, "CP2 Org")
+	insertOrganizationsTestMember(t, ctx, pool, organizationID, adminID, "admin")
+	softDeleteOrganizationsTestOrganization(t, ctx, pool, organizationID)
+
+	members, err := service.ListMembers(ctx, adminID, organizationID)
+	if err != ErrForbidden {
+		t.Fatalf("err = %v, want %v (members=%#v)", err, ErrForbidden, members)
+	}
+}
+
+// Slice 2b — RED: choke point 3. loadOrganizationMember, called directly
+// (package-internal test, defense in depth behind choke point 2), returns
+// ErrNotFound for a soft-deleted organization.
+func TestLoadOrganizationMemberRejectsSoftDeletedOrganization(t *testing.T) {
+	t.Parallel()
+
+	ctx, pool := openOrganizationsTestPool(t, "organizations_cp_test")
+	adminID := insertOrganizationsTestUser(t, ctx, pool, "cp3-admin@example.com")
+	organizationID := insertOrganizationsTestOrganization(t, ctx, pool, "CP3 Org")
+	insertOrganizationsTestMember(t, ctx, pool, organizationID, adminID, "admin")
+	softDeleteOrganizationsTestOrganization(t, ctx, pool, organizationID)
+
+	_, _, err := loadOrganizationMember(ctx, pool, organizationID, adminID)
+	if err != ErrNotFound {
+		t.Fatalf("err = %v, want %v", err, ErrNotFound)
+	}
+}
+
+// Slice 2b — RED: choke point 5. CreateInvitationTx's context lookup is
+// defense in depth behind choke point 2: requireOrganizationAdmin already
+// rejects with ErrForbidden before the context query is ever reached, so
+// this test observes CreateInvitation failing closed end-to-end.
+func TestCreateInvitationRejectsSoftDeletedOrganization(t *testing.T) {
+	t.Parallel()
+
+	ctx, pool := openOrganizationsTestPool(t, "organizations_cp_test")
+	service := NewService(pool, activity.NewService(pool))
+	adminID := insertOrganizationsTestUser(t, ctx, pool, "cp5-admin@example.com")
+	organizationID := insertOrganizationsTestOrganization(t, ctx, pool, "CP5 Org")
+	insertOrganizationsTestMember(t, ctx, pool, organizationID, adminID, "admin")
+	softDeleteOrganizationsTestOrganization(t, ctx, pool, organizationID)
+
+	_, err := service.CreateInvitation(ctx, adminID, organizationID, CreateInvitationInput{Email: "invitee@example.com", Role: "member"})
+	if err != ErrForbidden {
+		t.Fatalf("err = %v, want %v", err, ErrForbidden)
+	}
+}
+
+// Slice 2b — RED: choke point 6. ResendInvitation's context lookup is
+// defense in depth behind choke point 2, observed end-to-end: an invitation
+// created before the organization was trashed can no longer be resent.
+func TestResendInvitationRejectsSoftDeletedOrganization(t *testing.T) {
+	t.Parallel()
+
+	ctx, pool := openOrganizationsTestPool(t, "organizations_cp_test")
+	service := NewService(pool, activity.NewService(pool))
+	adminID := insertOrganizationsTestUser(t, ctx, pool, "cp6-admin@example.com")
+	organizationID := insertOrganizationsTestOrganization(t, ctx, pool, "CP6 Org")
+	insertOrganizationsTestMember(t, ctx, pool, organizationID, adminID, "admin")
+	invitationID := insertOrganizationsTestInvitation(t, ctx, pool, organizationID, "cp6-invitee@example.com", "member", "pending", adminID, "cp6-token")
+	softDeleteOrganizationsTestOrganization(t, ctx, pool, organizationID)
+
+	_, err := service.ResendInvitation(ctx, adminID, organizationID, invitationID)
+	if err != ErrForbidden {
+		t.Fatalf("err = %v, want %v", err, ErrForbidden)
+	}
+}
+
+// Slice 2b — RED: choke point 7 (REQUIRED — token route, no upstream admin
+// gate). ValidatePendingInvitation blocks self-registration through a
+// still-valid invitation token once the organization is soft-deleted.
+func TestValidatePendingInvitationRejectsSoftDeletedOrganization(t *testing.T) {
+	t.Parallel()
+
+	ctx, pool := openOrganizationsTestPool(t, "organizations_cp_test")
+	service := NewService(pool, activity.NewService(pool))
+	adminID := insertOrganizationsTestUser(t, ctx, pool, "cp7-admin@example.com")
+	organizationID := insertOrganizationsTestOrganization(t, ctx, pool, "CP7 Org")
+	insertOrganizationsTestMember(t, ctx, pool, organizationID, adminID, "admin")
+	insertOrganizationsTestInvitation(t, ctx, pool, organizationID, "cp7-invitee@example.com", "member", "pending", adminID, "cp7-token")
+	softDeleteOrganizationsTestOrganization(t, ctx, pool, organizationID)
+
+	err := service.ValidatePendingInvitation(ctx, "cp7-token", "cp7-invitee@example.com")
+	if err != ErrNotFound {
+		t.Fatalf("err = %v, want %v", err, ErrNotFound)
+	}
+}
+
+// Slice 2b — RED: choke point 8 (REQUIRED — AcceptInvitation is token-based
+// and ungated). Accepting a still-valid invitation into a soft-deleted
+// organization fails with ErrNotFound instead of silently creating a
+// membership in a trashed organization.
+func TestAcceptInvitationRejectsSoftDeletedOrganization(t *testing.T) {
+	t.Parallel()
+
+	ctx, pool := openOrganizationsTestPool(t, "organizations_cp_test")
+	service := NewService(pool, activity.NewService(pool))
+	adminID := insertOrganizationsTestUser(t, ctx, pool, "cp8-admin@example.com")
+	inviteeID := insertOrganizationsTestUser(t, ctx, pool, "cp8-invitee@example.com")
+	organizationID := insertOrganizationsTestOrganization(t, ctx, pool, "CP8 Org")
+	insertOrganizationsTestMember(t, ctx, pool, organizationID, adminID, "admin")
+	insertOrganizationsTestInvitation(t, ctx, pool, organizationID, "cp8-invitee@example.com", "member", "pending", adminID, "cp8-token")
+	softDeleteOrganizationsTestOrganization(t, ctx, pool, organizationID)
+
+	_, err := service.AcceptInvitation(ctx, inviteeID, "cp8-token")
+	if err != ErrNotFound {
+		t.Fatalf("err = %v, want %v", err, ErrNotFound)
+	}
+
+	var memberCount int
+	if err := pool.QueryRow(ctx, `SELECT COUNT(*) FROM organization_members WHERE organization_id = $1 AND user_id = $2`, organizationID, inviteeID).Scan(&memberCount); err != nil {
+		t.Fatalf("count organization members: %v", err)
+	}
+	if memberCount != 0 {
+		t.Fatalf("member count = %d, want 0 (must not join a soft-deleted organization)", memberCount)
+	}
+}
+
+// softDeleteOrganizationsTestOrganization stamps deleted_at directly via SQL
+// (bypassing DeleteOrganization's admin gate and orphan probe) so choke-point
+// tests can construct an already-trashed organization fixture regardless of
+// membership shape.
+func softDeleteOrganizationsTestOrganization(t *testing.T, ctx context.Context, pool *pgxpool.Pool, organizationID string) {
+	t.Helper()
+
+	if _, err := pool.Exec(ctx, `UPDATE organizations SET deleted_at = NOW() WHERE id = $1`, organizationID); err != nil {
+		t.Fatalf("soft delete organization fixture: %v", err)
+	}
+}
+
+// Task 2.34 — regression: DELETE /organizations/{organizationId} keeps its
+// exact existing 204/403/404 status set after the soft-delete conversion
+// (unit 2a) and the choke-point sweep (unit 2b) — only the persisted effect
+// changed (soft vs. hard), never the HTTP contract. Wired against the real
+// Service and a real database (unlike TestDeleteOrganizationRouteEnvelopeAuthAndErrors
+// in handler_test.go, which is stub-driven and cannot observe the persisted
+// effect at all).
+func TestDeleteOrganizationRouteHTTPContractUnchangedBySoftDeleteConversion(t *testing.T) {
+	t.Parallel()
+
+	ctx, pool := openOrganizationsTestPool(t, "organizations_delete_http_contract")
+	service := NewService(pool, activity.NewService(pool))
+	ownerID := insertOrganizationsTestUser(t, ctx, pool, "http-contract-owner@example.com")
+	memberID := insertOrganizationsTestUser(t, ctx, pool, "http-contract-member@example.com")
+	organizationID := insertOrganizationsTestOrganization(t, ctx, pool, "HTTP Contract Org")
+	insertOrganizationsTestMember(t, ctx, pool, organizationID, ownerID, "owner")
+	insertOrganizationsTestMember(t, ctx, pool, organizationID, memberID, "member")
+
+	currentUserID := memberID
+	dynamicPrincipal := func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			next.ServeHTTP(w, r.WithContext(auth.ContextWithPrincipal(r.Context(), auth.Principal{UserID: currentUserID})))
+		})
+	}
+	mux := http.NewServeMux()
+	RegisterRoutes(mux, dynamicPrincipal, service, nil)
+
+	// A non-admin member gets 403, and the row stays live.
+	recorder := httptest.NewRecorder()
+	mux.ServeHTTP(recorder, httptest.NewRequest(http.MethodDelete, "/organizations/"+organizationID, nil))
+	if recorder.Code != http.StatusForbidden {
+		t.Fatalf("non-admin delete status = %d, want 403", recorder.Code)
+	}
+	var deletedAt *time.Time
+	if err := pool.QueryRow(ctx, `SELECT deleted_at FROM organizations WHERE id = $1`, organizationID).Scan(&deletedAt); err != nil {
+		t.Fatalf("query organization: %v", err)
+	}
+	if deletedAt != nil {
+		t.Fatal("deleted_at set after a forbidden delete attempt, want nil")
+	}
+
+	// The owner gets 204, and the row survives soft-deleted (the persisted
+	// effect that changed — never the status code).
+	currentUserID = ownerID
+	recorder = httptest.NewRecorder()
+	mux.ServeHTTP(recorder, httptest.NewRequest(http.MethodDelete, "/organizations/"+organizationID, nil))
+	if recorder.Code != http.StatusNoContent {
+		t.Fatalf("owner delete status = %d, want 204", recorder.Code)
+	}
+	if recorder.Body.Len() != 0 {
+		t.Fatalf("owner delete body = %q, want empty", recorder.Body.String())
+	}
+	if err := pool.QueryRow(ctx, `SELECT deleted_at FROM organizations WHERE id = $1`, organizationID).Scan(&deletedAt); err != nil {
+		t.Fatalf("query organization: %v", err)
+	}
+	if deletedAt == nil {
+		t.Fatal("deleted_at = nil after a successful delete, want it set (soft delete, row survives)")
+	}
+	var organizationCount int
+	if err := pool.QueryRow(ctx, `SELECT COUNT(*) FROM organizations WHERE id = $1`, organizationID).Scan(&organizationCount); err != nil {
+		t.Fatalf("count organizations: %v", err)
+	}
+	if organizationCount != 1 {
+		t.Fatalf("organization count = %d, want 1 (soft delete must not remove the row)", organizationCount)
+	}
+
+	// A second delete on the now-trashed organization gets 404, not a silent
+	// no-op 204.
+	recorder = httptest.NewRecorder()
+	mux.ServeHTTP(recorder, httptest.NewRequest(http.MethodDelete, "/organizations/"+organizationID, nil))
+	if recorder.Code != http.StatusNotFound {
+		t.Fatalf("second delete status = %d, want 404", recorder.Code)
 	}
 }
 
