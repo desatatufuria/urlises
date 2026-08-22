@@ -185,65 +185,52 @@ export function AccessPage() {
                       />
                     ) : null}
 
-                    <div className="ui-inline-grid">
-                      <section className="ui-card ui-card--subtle ui-section-stack">
-                        <AccessGrantForm
-                          title="Grant direct user access"
-                          subjectLabel="Organization member"
-                          emptyLabel="All organization members already have a direct grant"
-                          options={availableUsers}
-                          submitting={grantUserMutation.isPending}
-                          onSubmit={async ({ subjectId, role }) => {
-                            setNotice(null);
-                            try {
-                              await grantUserMutation.mutateAsync({ userId: subjectId, role });
-                              const member = membersQuery.data?.find((entry) => entry.userId === subjectId);
-                              setNotice({
-                                tone: "neutral",
-                                title: "Direct grant saved",
-                                description: `${member?.email ?? "The selected member"} now has ${role} access to ${selectedWorkspace.workspaceName}.`,
-                              });
-                            } catch (error) {
-                              setNotice({
-                                tone: "danger",
-                                title: "Direct grant failed",
-                                description: error instanceof Error ? error.message : "The selected user grant could not be saved.",
-                              });
-                              throw error;
-                            }
-                          }}
-                        />
-                      </section>
-
-                      <section className="ui-card ui-card--subtle ui-section-stack">
-                        <AccessGrantForm
-                          title="Grant group access"
-                          subjectLabel="Group"
-                          emptyLabel="All groups already have a workspace grant"
-                          options={availableGroups}
-                          submitting={grantGroupMutation.isPending}
-                          onSubmit={async ({ subjectId, role }) => {
-                            setNotice(null);
-                            try {
-                              await grantGroupMutation.mutateAsync({ groupId: subjectId, role });
-                              const group = groupsQuery.data?.find((entry) => entry.groupId === subjectId);
-                              setNotice({
-                                tone: "neutral",
-                                title: "Group grant saved",
-                                description: `${group?.name ?? "The selected group"} now has ${role} access to ${selectedWorkspace.workspaceName}.`,
-                              });
-                            } catch (error) {
-                              setNotice({
-                                tone: "danger",
-                                title: "Group grant failed",
-                                description: error instanceof Error ? error.message : "The selected group grant could not be saved.",
-                              });
-                              throw error;
-                            }
-                          }}
-                        />
-                      </section>
-                    </div>
+                    <section className="ui-card ui-card--subtle ui-section-stack">
+                      <AccessGrantForm
+                        userOptions={availableUsers}
+                        groupOptions={availableGroups}
+                        submittingUser={grantUserMutation.isPending}
+                        submittingGroup={grantGroupMutation.isPending}
+                        onSubmitUser={async ({ subjectId, role }) => {
+                          setNotice(null);
+                          try {
+                            await grantUserMutation.mutateAsync({ userId: subjectId, role });
+                            const member = membersQuery.data?.find((entry) => entry.userId === subjectId);
+                            setNotice({
+                              tone: "neutral",
+                              title: "Direct grant saved",
+                              description: `${member?.email ?? "The selected member"} now has ${role} access to ${selectedWorkspace.workspaceName}.`,
+                            });
+                          } catch (error) {
+                            setNotice({
+                              tone: "danger",
+                              title: "Direct grant failed",
+                              description: error instanceof Error ? error.message : "The selected user grant could not be saved.",
+                            });
+                            throw error;
+                          }
+                        }}
+                        onSubmitGroup={async ({ subjectId, role }) => {
+                          setNotice(null);
+                          try {
+                            await grantGroupMutation.mutateAsync({ groupId: subjectId, role });
+                            const group = groupsQuery.data?.find((entry) => entry.groupId === subjectId);
+                            setNotice({
+                              tone: "neutral",
+                              title: "Group grant saved",
+                              description: `${group?.name ?? "The selected group"} now has ${role} access to ${selectedWorkspace.workspaceName}.`,
+                            });
+                          } catch (error) {
+                            setNotice({
+                              tone: "danger",
+                              title: "Group grant failed",
+                              description: error instanceof Error ? error.message : "The selected group grant could not be saved.",
+                            });
+                            throw error;
+                          }
+                        }}
+                      />
+                    </section>
 
                     <section className="ui-section-stack">
                       <header className="ui-section-header">

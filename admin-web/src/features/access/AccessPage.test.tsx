@@ -155,11 +155,145 @@ describe("access page", () => {
 
     await userEvent.selectOptions(screen.getByLabelText(/^organization member$/i), "user-2");
     await userEvent.selectOptions(screen.getByLabelText(/^organization member role$/i), "editor");
-    const saveGrantButtons = screen.getAllByRole("button", { name: /^save grant$/i });
-    await userEvent.click(saveGrantButtons.find((button) => !button.hasAttribute("disabled"))!);
+    await userEvent.click(screen.getByRole("button", { name: /^grant access$/i }));
 
     expect(await screen.findByText(/direct grant saved/i)).toBeInTheDocument();
     await waitFor(() => expect(screen.getAllByText("editor@example.com").length).toBeGreaterThan(0));
+  });
+
+  it("adds a new group grant via the group toggle", async () => {
+    const accessSnapshot = {
+      workspace: {
+        workspaceId: "workspace-1",
+        workspaceName: "Launch Room",
+        workspaceType: "shared",
+        organizationId: "org-1",
+        organizationName: "Acme",
+        role: "admin",
+      },
+      userGrants: [] as Array<{ userId: string; email: string; role: string }>,
+      groupGrants: [] as Array<{ groupId: string; groupName: string; role: string }>,
+      effectiveAccess: [{ userId: "user-1", email: "owner@example.com", role: "admin", sources: ["direct"] }],
+    };
+
+    fetchMock.mockImplementation((input, init) => {
+      const url = String(input);
+      const method = init?.method ?? "GET";
+
+      if (url.endsWith("/organizations/org-1/workspaces")) {
+        return jsonResponse({
+          workspaces: [
+            {
+              workspaceId: "workspace-1",
+              workspaceName: "Launch Room",
+              workspaceType: "shared",
+              organizationId: "org-1",
+              organizationName: "Acme",
+              role: "admin",
+              sources: ["direct"],
+            },
+          ],
+        });
+      }
+
+      if (url.endsWith("/organizations/org-1/members")) {
+        return jsonResponse({
+          members: [{ userId: "user-1", email: "owner@example.com", name: "Owner", role: "owner" }],
+        });
+      }
+
+      if (url.endsWith("/organizations/org-1/groups")) {
+        return jsonResponse({ groups: [{ id: "group-1", organizationId: "org-1", name: "Operators" }] });
+      }
+
+      if (url.endsWith("/workspaces/workspace-1/access") && method === "GET") {
+        return jsonResponse(accessSnapshot);
+      }
+
+      if (url.endsWith("/workspaces/workspace-1/groups/group-1/access") && method === "PUT") {
+        accessSnapshot.groupGrants = [{ groupId: "group-1", groupName: "Operators", role: "editor" }];
+        accessSnapshot.effectiveAccess = [
+          { userId: "user-1", email: "owner@example.com", role: "admin", sources: ["direct"] },
+        ];
+        return jsonResponse({ workspaceId: "workspace-1", groupId: "group-1", role: "editor" });
+      }
+
+      return jsonResponse({ error: "not found" }, 404);
+    });
+
+    renderAppRoute("/access?panel=access&workspace=workspace-1");
+
+    expect(await screen.findByText(/creator-only access/i)).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: /^group$/i }));
+    expect(await screen.findByLabelText(/^group$/i)).toBeInTheDocument();
+
+    await userEvent.selectOptions(screen.getByLabelText(/^group$/i), "group-1");
+    await userEvent.selectOptions(screen.getByLabelText(/^group role$/i), "editor");
+    await userEvent.click(screen.getByRole("button", { name: /^grant access$/i }));
+
+    expect(await screen.findByText(/group grant saved/i)).toBeInTheDocument();
+  });
+
+  it("shows an empty state instead of a dropdown when nothing is left to grant", async () => {
+    fetchMock.mockImplementation((input) => {
+      const url = String(input);
+
+      if (url.endsWith("/organizations/org-1/workspaces")) {
+        return jsonResponse({
+          workspaces: [
+            {
+              workspaceId: "workspace-1",
+              workspaceName: "Launch Room",
+              workspaceType: "shared",
+              organizationId: "org-1",
+              organizationName: "Acme",
+              role: "admin",
+              sources: ["direct"],
+            },
+          ],
+        });
+      }
+
+      if (url.endsWith("/organizations/org-1/members")) {
+        return jsonResponse({
+          members: [{ userId: "user-2", email: "editor@example.com", name: "Editor", role: "member" }],
+        });
+      }
+
+      if (url.endsWith("/organizations/org-1/groups")) {
+        return jsonResponse({ groups: [] });
+      }
+
+      if (url.endsWith("/workspaces/workspace-1/access")) {
+        return jsonResponse({
+          workspace: {
+            workspaceId: "workspace-1",
+            workspaceName: "Launch Room",
+            workspaceType: "shared",
+            organizationId: "org-1",
+            organizationName: "Acme",
+            role: "admin",
+          },
+          userGrants: [{ userId: "user-2", email: "editor@example.com", role: "viewer" }],
+          groupGrants: [],
+          effectiveAccess: [{ userId: "user-2", email: "editor@example.com", role: "viewer", sources: ["direct"] }],
+        });
+      }
+
+      return jsonResponse({ error: "not found" }, 404);
+    });
+
+    renderAppRoute("/access?panel=access&workspace=workspace-1");
+
+    expect(await screen.findByText(/everyone already has a direct grant/i)).toBeInTheDocument();
+    expect(screen.queryByLabelText(/^organization member$/i)).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^grant access$/i })).toBeDisabled();
+
+    await userEvent.click(screen.getByRole("button", { name: /^group$/i }));
+    expect(await screen.findByText(/every group already has a grant/i)).toBeInTheDocument();
+    expect(screen.queryByLabelText(/^group$/i)).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^grant access$/i })).toBeDisabled();
   });
 
   it("updates and revokes direct and group grants", async () => {
