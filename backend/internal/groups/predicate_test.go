@@ -7,10 +7,12 @@ import (
 )
 
 // TestChokePointPredicatesPresentInSource is a pure, DB-free characterization
-// test proving design.md's choke points 10 and 11 (the duplicated org-admin
-// check and the group-membership EXISTS check) actually landed as literal
-// SQL text in this package's service.go. It has no external dependency and
-// always executes, giving a real RED -> GREEN proof independent of
+// test proving design.md's choke point 11 (the group-membership EXISTS
+// check) still lands as literal SQL text in this package's service.go, and
+// that choke point 10 (the formerly-duplicated org-admin check) now
+// delegates to access.RequireOrganizationAdmin instead of carrying its own
+// copy of the JOIN. It has no external dependency and always executes,
+// giving a real RED -> GREEN proof independent of
 // GROUPS_TEST_DATABASE_URL/DATABASE_URL availability.
 func TestChokePointPredicatesPresentInSource(t *testing.T) {
 	source, err := os.ReadFile("service.go")
@@ -20,13 +22,16 @@ func TestChokePointPredicatesPresentInSource(t *testing.T) {
 	text := string(source)
 
 	joinPredicate := "JOIN organizations o ON o.id = om.organization_id AND o.deleted_at IS NULL"
-	if count := strings.Count(text, joinPredicate); count != 2 {
-		t.Fatalf("CP10/CP11: expected %q exactly 2 times (requireOrganizationAdmin, requireOrganizationMembership), got %d", joinPredicate, count)
+	if count := strings.Count(text, joinPredicate); count != 1 {
+		t.Fatalf("CP11: expected %q exactly 1 time (requireOrganizationMembership; requireOrganizationAdmin's own copy was consolidated into access.RequireOrganizationAdmin), got %d", joinPredicate, count)
 	}
 
 	adminBody := chokePointFunctionBody(t, text, "func requireOrganizationAdmin(")
-	if !strings.Contains(adminBody, joinPredicate) {
-		t.Fatal("CP10: requireOrganizationAdmin's body does not contain the org-liveness JOIN")
+	if !strings.Contains(adminBody, "access.RequireOrganizationAdmin(") {
+		t.Fatal("CP10: requireOrganizationAdmin no longer delegates to access.RequireOrganizationAdmin")
+	}
+	if strings.Contains(adminBody, joinPredicate) {
+		t.Fatal("CP10: requireOrganizationAdmin regained its own copy of the org-liveness JOIN")
 	}
 
 	membershipBody := chokePointFunctionBody(t, text, "func requireOrganizationMembership(")

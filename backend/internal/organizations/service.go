@@ -1100,13 +1100,16 @@ func (s *Service) ListDeletedOrganizations(ctx context.Context, requesterUserID 
 	return deleted, nil
 }
 
+// requireOrganizationAdmin delegates to access.RequireOrganizationAdmin (the
+// single canonical org-admin gate) and maps its ErrForbidden back onto this
+// package's own sentinel, so every existing caller here keeps seeing
+// organizations.ErrForbidden unchanged.
 func requireOrganizationAdmin(ctx context.Context, querier dbQuerier, userID, organizationID string) error {
-	role, err := loadOrganizationRole(ctx, querier, organizationID, userID)
-	if err != nil {
+	if err := access.RequireOrganizationAdmin(ctx, querier, userID, organizationID); err != nil {
+		if errors.Is(err, access.ErrForbidden) {
+			return ErrForbidden
+		}
 		return err
-	}
-	if role != access.OrganizationRoleOwner && role != access.OrganizationRoleAdmin {
-		return ErrForbidden
 	}
 
 	return nil
