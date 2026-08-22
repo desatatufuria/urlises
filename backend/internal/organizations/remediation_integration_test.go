@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/furia/shared-bookmark-sync/backend/internal/activity"
 	"github.com/furia/shared-bookmark-sync/backend/internal/database"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -91,6 +92,9 @@ func TestMigrationFrom000002ReconcilesLegacyPendingInvitations(t *testing.T) {
 		"000007_ws_tickets.sql",
 		"000008_sync_patch_idempotency.sql",
 		"000009_user_ui_theme.sql",
+		"000010_secrets.sql",
+		"000011_secrets_sent_to_email.sql",
+		"000012_activity_events.sql",
 	})
 	migrateDirectory(t, ctx, pool, productionMigrationsDirectory(t))
 	assertRecordedMigrations(t, ctx, pool, []string{
@@ -103,6 +107,9 @@ func TestMigrationFrom000002ReconcilesLegacyPendingInvitations(t *testing.T) {
 		"000007_ws_tickets.sql",
 		"000008_sync_patch_idempotency.sql",
 		"000009_user_ui_theme.sql",
+		"000010_secrets.sql",
+		"000011_secrets_sent_to_email.sql",
+		"000012_activity_events.sql",
 	})
 }
 
@@ -144,6 +151,9 @@ func TestRecorded000003FixForwardExpiresPendingInvitation(t *testing.T) {
 		"000007_ws_tickets.sql",
 		"000008_sync_patch_idempotency.sql",
 		"000009_user_ui_theme.sql",
+		"000010_secrets.sql",
+		"000011_secrets_sent_to_email.sql",
+		"000012_activity_events.sql",
 	})
 	var appliedAfter0003, appliedAfter0004 time.Time
 	if err := pool.QueryRow(ctx, `SELECT applied_at FROM schema_migrations WHERE filename = '000003_admin_remediation.sql'`).Scan(&appliedAfter0003); err != nil {
@@ -166,7 +176,7 @@ func TestInvitationSafetyScenarios(t *testing.T) {
 	t.Parallel()
 
 	ctx, pool := openOrganizationsTestPool(t, "organizations_remediation_invites")
-	service := NewService(pool)
+	service := NewService(pool, activity.NewService(pool))
 	adminID := insertOrganizationsTestUser(t, ctx, pool, "admin@example.com")
 	memberID := insertOrganizationsTestUser(t, ctx, pool, "member@example.com")
 	organizationID := insertOrganizationsTestOrganization(t, ctx, pool, "Invitation Safety Org")
@@ -218,7 +228,7 @@ func TestOwnerOnlyPromotionAndConcurrentOwnerTransitions(t *testing.T) {
 	t.Parallel()
 
 	ctx, pool := openOrganizationsTestPool(t, "organizations_remediation_owners")
-	service := NewService(pool)
+	service := NewService(pool, activity.NewService(pool))
 	ownerOneID := insertOrganizationsTestUser(t, ctx, pool, "owner-one@example.com")
 	ownerTwoID := insertOrganizationsTestUser(t, ctx, pool, "owner-two@example.com")
 	adminID := insertOrganizationsTestUser(t, ctx, pool, "admin@example.com")

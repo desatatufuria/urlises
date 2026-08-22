@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/furia/shared-bookmark-sync/backend/internal/access"
+	"github.com/furia/shared-bookmark-sync/backend/internal/activity"
 	"github.com/furia/shared-bookmark-sync/backend/internal/auth"
 	"github.com/furia/shared-bookmark-sync/backend/internal/bookmarks"
 	"github.com/furia/shared-bookmark-sync/backend/internal/config"
@@ -96,7 +97,8 @@ func main() {
 
 	mux := http.NewServeMux()
 	accessService := access.NewService(pool)
-	organizationsService := organizations.NewService(pool)
+	activityService := activity.NewService(pool)
+	organizationsService := organizations.NewService(pool, activityService)
 	authService := auth.NewService(pool, cfg.Auth,
 		auth.WithRegistrationLock(cfg.App.OpenRegistrationEnabled, invitationValidatorAdapter{service: organizationsService}))
 	smtpMailer := mailer.NewSMTP(cfg.Mail)
@@ -150,6 +152,7 @@ func main() {
 	})
 
 	auth.RegisterRoutes(mux, authService, invitationAccepterAdapter{service: organizationsService})
+	activity.RegisterRoutes(mux, authService.Middleware, activityService)
 	organizations.RegisterRoutes(mux, authService.Middleware, organizationsService, invitationNotifier, idempotencyExecutor)
 	groups.RegisterRoutes(mux, authService.Middleware, groupsService, idempotencyExecutor)
 	workspaces.RegisterRoutes(mux, authService.Middleware, workspacesService, idempotencyExecutor)

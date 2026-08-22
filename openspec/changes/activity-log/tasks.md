@@ -69,14 +69,14 @@ Each unit is developed, tested, and merged into `develop` before the next unit's
 
 ## Phase 3: Organizations Wiring
 
-- [ ] 3.1 `backend/internal/organizations/service.go` — add `activity *activity.Service` field; `NewService(pool, activityService *activity.Service)` new trailing param.
-- [ ] 3.2 RED: `backend/internal/organizations/service_test.go` — `CreateOrganizationTx` commit persists `KindOrganizationCreated` scoped to the new org.
-- [ ] 3.3 GREEN: insert `activity.Record(...)` in `CreateOrganizationTx` before `tx.Commit()`.
-- [ ] 3.4 RED: same file — `CreateInvitationTx`/`ResendInvitation`/`AcceptInvitation` commits persist `KindInvitationCreated`/`Resent`/`Accepted` with the metadata from the design's call-site table.
-- [ ] 3.5 GREEN: insert the three `Record` calls before each function's `tx.Commit()`.
-- [ ] 3.6 RED: same file — `PatchMember` role-change branch persists `KindOrganizationMemberRoleChanged` (member role change scenario); remove branch persists `KindOrganizationMemberRemoved`.
-- [ ] 3.7 GREEN: insert the two `Record` calls, one per `PatchMember` branch, before their respective `tx.Commit()` calls.
-- [ ] 3.8 `backend/cmd/api/main.go` — construct `activityService := activity.NewService(pool)` after `accessService`, before `organizationsService`; thread into `organizations.NewService(pool, activityService)`; register `activity.RegisterRoutes(mux, authService.Middleware, activityService)`.
+- [x] 3.1 `backend/internal/organizations/service.go` — add `activity *activity.Service` field; `NewService(pool, activityService *activity.Service)` new trailing param.
+- [x] 3.2 RED: `backend/internal/organizations/service_test.go` — `CreateOrganizationTx` commit persists `KindOrganizationCreated` scoped to the new org.
+- [x] 3.3 GREEN: insert `activity.Record(...)` in `CreateOrganizationTx` before `tx.Commit()`.
+- [x] 3.4 RED: same file — `CreateInvitationTx`/`ResendInvitation`/`AcceptInvitation` commits persist `KindInvitationCreated`/`Resent`/`Accepted` with the metadata from the design's call-site table.
+- [x] 3.5 GREEN: insert the three `Record` calls before each function's `tx.Commit()`.
+- [x] 3.6 RED: same file — `PatchMember` role-change branch persists `KindOrganizationMemberRoleChanged` (member role change scenario); remove branch persists `KindOrganizationMemberRemoved`.
+- [x] 3.7 GREEN: insert the two `Record` calls, one per `PatchMember` branch, before their respective `tx.Commit()` calls.
+- [x] 3.8 `backend/cmd/api/main.go` — construct `activityService := activity.NewService(pool)` after `accessService`, before `organizationsService`; thread into `organizations.NewService(pool, activityService)`; register `activity.RegisterRoutes(mux, authService.Middleware, activityService)`.
 
 ## Phase 4: Workspaces Wiring
 

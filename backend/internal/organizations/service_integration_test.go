@@ -4,13 +4,15 @@ import (
 	"context"
 	"testing"
 	"time"
+
+	"github.com/furia/shared-bookmark-sync/backend/internal/activity"
 )
 
 func TestListInvitationsReturnsPendingInvitationsForAdminsOnly(t *testing.T) {
 	t.Parallel()
 
 	ctx, pool := openOrganizationsTestPool(t, "organizations_invites_test")
-	service := NewService(pool)
+	service := NewService(pool, activity.NewService(pool))
 	adminID := insertOrganizationsTestUser(t, ctx, pool, "admin@example.com")
 	inviteeID := insertOrganizationsTestUser(t, ctx, pool, "invitee@example.com")
 	organizationID := insertOrganizationsTestOrganization(t, ctx, pool, "Invite Org")
@@ -57,7 +59,7 @@ func TestListInvitationsRejectsNonAdmins(t *testing.T) {
 	t.Parallel()
 
 	ctx, pool := openOrganizationsTestPool(t, "organizations_invites_test")
-	service := NewService(pool)
+	service := NewService(pool, activity.NewService(pool))
 	adminID := insertOrganizationsTestUser(t, ctx, pool, "admin@example.com")
 	memberID := insertOrganizationsTestUser(t, ctx, pool, "member@example.com")
 	organizationID := insertOrganizationsTestOrganization(t, ctx, pool, "Invite Org")
@@ -84,7 +86,7 @@ func TestAcceptInvitationActivatesMembershipAndRejectsReuse(t *testing.T) {
 	t.Parallel()
 
 	ctx, pool := openOrganizationsTestPool(t, "organizations_invites_test")
-	service := NewService(pool)
+	service := NewService(pool, activity.NewService(pool))
 	inviterID := insertOrganizationsTestUser(t, ctx, pool, "admin@example.com")
 	inviteeID := insertOrganizationsTestUser(t, ctx, pool, "invitee@example.com")
 	organizationID := insertOrganizationsTestOrganization(t, ctx, pool, "Invite Org")
@@ -127,7 +129,7 @@ func TestAcceptInvitationRejectsExpiredInvite(t *testing.T) {
 	t.Parallel()
 
 	ctx, pool := openOrganizationsTestPool(t, "organizations_invites_test")
-	service := NewService(pool)
+	service := NewService(pool, activity.NewService(pool))
 	inviterID := insertOrganizationsTestUser(t, ctx, pool, "admin@example.com")
 	inviteeID := insertOrganizationsTestUser(t, ctx, pool, "invitee@example.com")
 	organizationID := insertOrganizationsTestOrganization(t, ctx, pool, "Invite Org")
@@ -176,7 +178,7 @@ func TestResendInvitationRefreshesExpiryButKeepsToken(t *testing.T) {
 	t.Parallel()
 
 	ctx, pool := openOrganizationsTestPool(t, "organizations_resend_test")
-	service := NewService(pool)
+	service := NewService(pool, activity.NewService(pool))
 	inviterID := insertOrganizationsTestUser(t, ctx, pool, "inviter@example.com")
 	resenderID := insertOrganizationsTestUser(t, ctx, pool, "resender@example.com")
 	organizationID := insertOrganizationsTestOrganization(t, ctx, pool, "Resend Org")
@@ -225,7 +227,7 @@ func TestResendInvitationRejectsNonPending(t *testing.T) {
 	t.Parallel()
 
 	ctx, pool := openOrganizationsTestPool(t, "organizations_resend_test")
-	service := NewService(pool)
+	service := NewService(pool, activity.NewService(pool))
 	inviterID := insertOrganizationsTestUser(t, ctx, pool, "inviter2@example.com")
 	inviteeID := insertOrganizationsTestUser(t, ctx, pool, "invitee2@example.com")
 	organizationID := insertOrganizationsTestOrganization(t, ctx, pool, "Resend Org 2")
@@ -252,7 +254,7 @@ func TestResendInvitationRejectsNonAdmin(t *testing.T) {
 	t.Parallel()
 
 	ctx, pool := openOrganizationsTestPool(t, "organizations_resend_test")
-	service := NewService(pool)
+	service := NewService(pool, activity.NewService(pool))
 	inviterID := insertOrganizationsTestUser(t, ctx, pool, "inviter3@example.com")
 	memberID := insertOrganizationsTestUser(t, ctx, pool, "member3@example.com")
 	organizationID := insertOrganizationsTestOrganization(t, ctx, pool, "Resend Org 3")
@@ -278,7 +280,7 @@ func TestResendInvitationNotFoundForWrongOrganization(t *testing.T) {
 	t.Parallel()
 
 	ctx, pool := openOrganizationsTestPool(t, "organizations_resend_test")
-	service := NewService(pool)
+	service := NewService(pool, activity.NewService(pool))
 	inviterID := insertOrganizationsTestUser(t, ctx, pool, "inviter4@example.com")
 	organizationID := insertOrganizationsTestOrganization(t, ctx, pool, "Resend Org 4")
 	otherOrganizationID := insertOrganizationsTestOrganization(t, ctx, pool, "Resend Org 4 Other")
@@ -298,6 +300,83 @@ func TestResendInvitationNotFoundForWrongOrganization(t *testing.T) {
 	}
 }
 
+// Phase 3: Organizations Wiring — RED: CreateInvitationTx (invoked via
+// CreateInvitation's begin/commit wrapper) records a KindInvitationCreated
+// event.
+func TestCreateInvitationRecordsActivityEvent(t *testing.T) {
+	t.Parallel()
+
+	ctx, pool := openOrganizationsTestPool(t, "organizations_activity_invite_test")
+	service := NewService(pool, activity.NewService(pool))
+	adminID := insertOrganizationsTestUser(t, ctx, pool, "activity-admin@example.com")
+	organizationID := insertOrganizationsTestOrganization(t, ctx, pool, "Activity Invite Org")
+	insertOrganizationsTestMember(t, ctx, pool, organizationID, adminID, "admin")
+
+	created, err := service.CreateInvitation(ctx, adminID, organizationID, CreateInvitationInput{
+		Email: "invitee-activity@example.com",
+		Role:  "member",
+	})
+	if err != nil {
+		t.Fatalf("create invitation: %v", err)
+	}
+
+	assertOrganizationsTestActivityEvent(t, ctx, pool, organizationID, adminID, activity.KindInvitationCreated, "invitation", created.Invitation.ID)
+}
+
+// Phase 3: Organizations Wiring — RED: ResendInvitation records a
+// KindInvitationResent event.
+func TestResendInvitationRecordsActivityEvent(t *testing.T) {
+	t.Parallel()
+
+	ctx, pool := openOrganizationsTestPool(t, "organizations_activity_resend_test")
+	service := NewService(pool, activity.NewService(pool))
+	adminID := insertOrganizationsTestUser(t, ctx, pool, "resend-activity-admin@example.com")
+	organizationID := insertOrganizationsTestOrganization(t, ctx, pool, "Activity Resend Org")
+	insertOrganizationsTestMember(t, ctx, pool, organizationID, adminID, "admin")
+
+	created, err := service.CreateInvitation(ctx, adminID, organizationID, CreateInvitationInput{
+		Email: "resend-activity-invitee@example.com",
+		Role:  "member",
+	})
+	if err != nil {
+		t.Fatalf("create invitation: %v", err)
+	}
+
+	if _, err := service.ResendInvitation(ctx, adminID, organizationID, created.Invitation.ID); err != nil {
+		t.Fatalf("resend invitation: %v", err)
+	}
+
+	assertOrganizationsTestActivityEvent(t, ctx, pool, organizationID, adminID, activity.KindInvitationResent, "invitation", created.Invitation.ID)
+}
+
+// Phase 3: Organizations Wiring — RED: AcceptInvitation records a
+// KindInvitationAccepted event whose actor is the accepting user, not the
+// original inviter.
+func TestAcceptInvitationRecordsActivityEvent(t *testing.T) {
+	t.Parallel()
+
+	ctx, pool := openOrganizationsTestPool(t, "organizations_activity_accept_test")
+	service := NewService(pool, activity.NewService(pool))
+	inviterID := insertOrganizationsTestUser(t, ctx, pool, "accept-activity-inviter@example.com")
+	inviteeID := insertOrganizationsTestUser(t, ctx, pool, "accept-activity-invitee@example.com")
+	organizationID := insertOrganizationsTestOrganization(t, ctx, pool, "Activity Accept Org")
+	insertOrganizationsTestMember(t, ctx, pool, organizationID, inviterID, "admin")
+
+	created, err := service.CreateInvitation(ctx, inviterID, organizationID, CreateInvitationInput{
+		Email: "accept-activity-invitee@example.com",
+		Role:  "member",
+	})
+	if err != nil {
+		t.Fatalf("create invitation: %v", err)
+	}
+
+	if _, err := service.AcceptInvitation(ctx, inviteeID, created.Invitation.Token); err != nil {
+		t.Fatalf("accept invitation: %v", err)
+	}
+
+	assertOrganizationsTestActivityEvent(t, ctx, pool, organizationID, inviteeID, activity.KindInvitationAccepted, "invitation", created.Invitation.ID)
+}
+
 // Registration Lock — RED: ValidatePendingInvitation is a read-only check
 // used by open-registration gating. It must mirror AcceptInvitation's
 // validation rules without mutating the invitation or requiring an
@@ -306,7 +385,7 @@ func TestValidatePendingInvitationAcceptsMatchingPendingToken(t *testing.T) {
 	t.Parallel()
 
 	ctx, pool := openOrganizationsTestPool(t, "organizations_validate_invite_test")
-	service := NewService(pool)
+	service := NewService(pool, activity.NewService(pool))
 	inviterID := insertOrganizationsTestUser(t, ctx, pool, "admin@example.com")
 	organizationID := insertOrganizationsTestOrganization(t, ctx, pool, "Validate Invite Org")
 	insertOrganizationsTestMember(t, ctx, pool, organizationID, inviterID, "admin")
@@ -336,7 +415,7 @@ func TestValidatePendingInvitationRejectsUnknownToken(t *testing.T) {
 	t.Parallel()
 
 	_, pool := openOrganizationsTestPool(t, "organizations_validate_invite_test")
-	service := NewService(pool)
+	service := NewService(pool, activity.NewService(pool))
 
 	if err := service.ValidatePendingInvitation(context.Background(), "not-a-real-token", "someone@example.com"); err != ErrNotFound {
 		t.Fatalf("err = %v, want %v", err, ErrNotFound)
@@ -347,7 +426,7 @@ func TestValidatePendingInvitationRejectsEmailMismatch(t *testing.T) {
 	t.Parallel()
 
 	ctx, pool := openOrganizationsTestPool(t, "organizations_validate_invite_test")
-	service := NewService(pool)
+	service := NewService(pool, activity.NewService(pool))
 	inviterID := insertOrganizationsTestUser(t, ctx, pool, "admin2@example.com")
 	organizationID := insertOrganizationsTestOrganization(t, ctx, pool, "Validate Invite Org Mismatch")
 	insertOrganizationsTestMember(t, ctx, pool, organizationID, inviterID, "admin")
@@ -369,7 +448,7 @@ func TestValidatePendingInvitationRejectsExpiredOrAlreadyAccepted(t *testing.T) 
 	t.Parallel()
 
 	ctx, pool := openOrganizationsTestPool(t, "organizations_validate_invite_test")
-	service := NewService(pool)
+	service := NewService(pool, activity.NewService(pool))
 	inviterID := insertOrganizationsTestUser(t, ctx, pool, "admin3@example.com")
 	inviteeID := insertOrganizationsTestUser(t, ctx, pool, "invitee3b@example.com")
 	organizationID := insertOrganizationsTestOrganization(t, ctx, pool, "Validate Invite Org Expired")
