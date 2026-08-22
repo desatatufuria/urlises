@@ -1,23 +1,21 @@
 :root { color-scheme: light; font-family: Inter, "Helvetica Neue", Arial, sans-serif; background: #f7f4ee; color: #25231f; --ui-paper: #fffdfa; --ui-canvas: #f7f4ee; --ui-ink: #25231f; --ui-muted: #706b62; --ui-rule: #d9d3c8; --ui-accent: #345a4d; --ui-accent-soft: #e5eee8; --ui-danger: #9d3f34; --ui-danger-soft: #f8e8e4; }
-@media (prefers-color-scheme: dark) {
-  :root {
-    color-scheme: dark;
-    --ui-paper: #191b1f;
-    --ui-canvas: #101215;
-    --ui-ink: #eef0f2;
-    --ui-muted: #8f959c;
-    --ui-rule: #2b2e33;
-    --ui-accent: #6e8ca3;
-    --ui-accent-soft: rgba(110, 140, 163, 0.16);
-    --ui-danger: #d97a7a;
-    --ui-danger-soft: rgba(217, 122, 122, 0.16);
-  }
-  .ui-button-primary { color: #12181d; }
-  .ui-button-primary:hover { background: #83a0b5; color: #12181d; }
-  .ui-button:hover { background: #21242a; }
-  .ui-badge--accent { border-color: rgba(110, 140, 163, 0.4); }
-  .ui-badge--danger { border-color: rgba(217, 122, 122, 0.4); }
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --ui-paper: #191b1f;
+  --ui-canvas: #101215;
+  --ui-ink: #eef0f2;
+  --ui-muted: #8f959c;
+  --ui-rule: #2b2e33;
+  --ui-accent: #6e8ca3;
+  --ui-accent-soft: rgba(110, 140, 163, 0.16);
+  --ui-danger: #d97a7a;
+  --ui-danger-soft: rgba(217, 122, 122, 0.16);
 }
+:root[data-theme="dark"] .ui-button-primary { color: #12181d; }
+:root[data-theme="dark"] .ui-button-primary:hover { background: #83a0b5; color: #12181d; }
+:root[data-theme="dark"] .ui-button:hover { background: #21242a; }
+:root[data-theme="dark"] .ui-badge--accent { border-color: rgba(110, 140, 163, 0.4); }
+:root[data-theme="dark"] .ui-badge--danger { border-color: rgba(217, 122, 122, 0.4); }
 * { box-sizing: border-box; }
 html, body, #root { min-height: 100%; }
 body { margin: 0; background: var(--ui-canvas); color: var(--ui-ink); }

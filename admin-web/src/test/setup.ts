@@ -8,3 +8,21 @@ if (!globalThis.crypto.subtle) {
   Object.defineProperty(globalThis.crypto, "subtle", { value: webcrypto.subtle });
 }
 
+// jsdom does not implement window.matchMedia. Provide a minimal stub so
+// color-scheme detection (system light/dark) doesn't crash in tests; it
+// always reports "no match" and supports the addEventListener/removeEventListener
+// pair useColorScheme relies on to react to live OS theme changes.
+if (!window.matchMedia) {
+  window.matchMedia = (query: string): MediaQueryList =>
+    ({
+      matches: false,
+      media: query,
+      onchange: null,
+      addListener: () => {},
+      removeListener: () => {},
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      dispatchEvent: () => false,
+    }) as MediaQueryList;
+}
+

@@ -6,7 +6,13 @@ import { AuthProvider } from "./app/providers/AuthProvider";
 import { OrganizationProvider } from "./app/providers/OrganizationProvider";
 import { createAppRouter } from "./app/router";
 import { ErrorBoundary, installGlobalFailureReporting } from "./app/observability";
+import { applyStoredColorScheme } from "./lib/ui/useColorScheme";
 import "./lib/ui/tokens.css";
+
+// Apply the stored/system color scheme before the first paint so anonymous
+// screens (e.g. LoginPage, which has no theme toggle) never flash the wrong
+// theme while AdminLayout's interactive useColorScheme() hasn't mounted yet.
+applyStoredColorScheme();
 
 const queryClient = new QueryClient({
   defaultOptions: {

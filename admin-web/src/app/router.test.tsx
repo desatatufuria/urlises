@@ -27,6 +27,7 @@ describe("admin router", () => {
     vi.unstubAllGlobals();
     fetchMock.mockReset();
     window.localStorage.clear();
+    delete document.documentElement.dataset.theme;
   });
 
   it("redirects anonymous users to login", async () => {
@@ -204,6 +205,21 @@ describe("admin router", () => {
     expect(router.state.location.pathname).toBe("/members");
     expect(router.state.location.search).toBe("?panel=invite");
     expect(await screen.findByRole("dialog", { name: /invite person/i })).toBeInTheDocument();
+  });
+
+  it("switches the applied theme when the color scheme select changes", async () => {
+    const user = userEvent.setup();
+    renderAppRoute("/", defaultAdminSnapshot);
+    const select = await screen.findByRole("combobox", { name: "Color scheme" });
+    expect(select).toHaveDisplayValue("System");
+
+    await user.selectOptions(select, "Dark");
+    expect(document.documentElement.dataset.theme).toBe("dark");
+    expect(window.localStorage.getItem("urlises-color-scheme")).toBe("dark");
+
+    await user.selectOptions(select, "Light");
+    expect(document.documentElement.dataset.theme).toBeUndefined();
+    expect(window.localStorage.getItem("urlises-color-scheme")).toBe("light");
   });
 
   it("blocks authenticated non-admin users", async () => {
