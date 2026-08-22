@@ -53,14 +53,14 @@ Each unit is developed, tested, and merged into `develop` before the next unit's
 
 ## Phase 1: Foundation — Migration & Activity Service
 
-- [ ] 1.1 Create `backend/migrations/000012_activity_events.sql` — `activity_events` table (`id`, `organization_id` FK CASCADE, `actor_user_id` FK SET NULL, `kind`, `target_type`, `target_id`, `metadata JSONB`, `created_at`) + `idx_activity_events_org_created_id` + `idx_activity_events_actor_user_id`, per design DDL.
-- [ ] 1.2 RED: `backend/internal/activity/service_test.go` — `Record` inside a committed tx persists a row with correct columns (Atomic In-Transaction Recording: committed scenario).
-- [ ] 1.3 RED: same file — `Record` inside a tx that later rolls back leaves no orphan row (rollback scenario); `metadata` round-trips through `JSONB` unmodified.
-- [ ] 1.4 GREEN: `backend/internal/activity/service.go` — `Service{pool}`, `NewService(pool)`, `type Kind string` + 16 typed constants, `Record(ctx, tx, orgID, actorUserID, kind, targetType, targetID, metadata) error`.
-- [ ] 1.5 RED: `backend/internal/activity/cursor_test.go` — `encodeCursor`/`decodeCursor` round-trip; a malformed cursor returns a clear error, not a panic.
-- [ ] 1.6 GREEN: `backend/internal/activity/cursor.go` — `encodeCursor(createdAt, id) string`, `decodeCursor(cursor) (createdAt, id, error)`, base64(url-safe) of `"<RFC3339Nano>|<id>"`.
-- [ ] 1.7 RED: `backend/internal/activity/service_test.go` — `ListByOrganization` rejects a non-admin caller (non-admin denied scenario); admin sees rows (admin allowed scenario); first page capped/ordered `created_at DESC, id DESC` (first-page scenario); cursor advances without duplicates/gaps across same-`created_at` ties (cursor-advance scenario); `limit` clamps to `[1,100]`.
-- [ ] 1.8 GREEN: `backend/internal/activity/service.go` — `ListByOrganization(ctx, requesterUserID, organizationID, cursor, limit) (events, nextCursor, error)`: `access.RequireOrganizationAdmin`, `WHERE organization_id = $1 [AND (created_at, id) < ($2,$3)] ORDER BY created_at DESC, id DESC LIMIT $N+1`, trim + encode `nextCursor`.
+- [x] 1.1 Create `backend/migrations/000012_activity_events.sql` — `activity_events` table (`id`, `organization_id` FK CASCADE, `actor_user_id` FK SET NULL, `kind`, `target_type`, `target_id`, `metadata JSONB`, `created_at`) + `idx_activity_events_org_created_id` + `idx_activity_events_actor_user_id`, per design DDL.
+- [x] 1.2 RED: `backend/internal/activity/service_test.go` — `Record` inside a committed tx persists a row with correct columns (Atomic In-Transaction Recording: committed scenario).
+- [x] 1.3 RED: same file — `Record` inside a tx that later rolls back leaves no orphan row (rollback scenario); `metadata` round-trips through `JSONB` unmodified.
+- [x] 1.4 GREEN: `backend/internal/activity/service.go` — `Service{pool}`, `NewService(pool)`, `type Kind string` + 16 typed constants, `Record(ctx, tx, orgID, actorUserID, kind, targetType, targetID, metadata) error`.
+- [x] 1.5 RED: `backend/internal/activity/cursor_test.go` — `encodeCursor`/`decodeCursor` round-trip; a malformed cursor returns a clear error, not a panic.
+- [x] 1.6 GREEN: `backend/internal/activity/cursor.go` — `encodeCursor(createdAt, id) string`, `decodeCursor(cursor) (createdAt, id, error)`, base64(url-safe) of `"<RFC3339Nano>|<id>"`.
+- [x] 1.7 RED: `backend/internal/activity/service_test.go` — `ListByOrganization` rejects a non-admin caller (non-admin denied scenario); admin sees rows (admin allowed scenario); first page capped/ordered `created_at DESC, id DESC` (first-page scenario); cursor advances without duplicates/gaps across same-`created_at` ties (cursor-advance scenario); `limit` clamps to `[1,100]`.
+- [x] 1.8 GREEN: `backend/internal/activity/service.go` — `ListByOrganization(ctx, requesterUserID, organizationID, cursor, limit) (events, nextCursor, error)`: `access.RequireOrganizationAdmin`, `WHERE organization_id = $1 [AND (created_at, id) < ($2,$3)] ORDER BY created_at DESC, id DESC LIMIT $N+1`, trim + encode `nextCursor`.
 
 ## Phase 2: Activity HTTP Handler
 
