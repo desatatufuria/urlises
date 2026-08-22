@@ -111,6 +111,6 @@ Each unit is developed, tested, and merged into `develop` before the next unit's
 
 ## Phase 7: Verification
 
-- [ ] 7.1 `cd backend && go build ./... && go vet ./... && go test ./internal/activity ./internal/organizations ./internal/workspaces ./internal/groups ./internal/secrethide`
-- [ ] 7.2 `cd admin-web && npm run build && npm test`
-- [ ] 7.3 Manual: `docker compose up`; as an org admin, create an org, invite/accept, change a member role, create a workspace, grant/revoke access, rename/delete a group; confirm each appears in `/activity` newest-first with a readable sentence and no `secrethide` events present.
+- [x] 7.1 `cd backend && go build ./... && go vet ./... && go test ./internal/activity ./internal/organizations ./internal/workspaces ./internal/groups ./internal/secrethide`
+- [x] 7.2 `cd admin-web && npm run build && npm test`
+- [ ] 7.3 Manual: `docker compose up`; as an org admin, create an org, invite/accept, change a member role, create a workspace, grant/revoke access, rename/delete a group; confirm each appears in `/activity` newest-first with a readable sentence and no `secrethide` events present. **Deferred**: no local Postgres available this session (dev container down, port stuck); per explicit instruction this feature is validated against production instead of locally.
