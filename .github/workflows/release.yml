@@ -97,26 +97,6 @@ jobs:
           name: extension-zip
           path: extension/release/*.zip
 
-  admin-web-artifact:
-    needs: checks
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          cache: npm
-          cache-dependency-path: admin-web/package-lock.json
-      - working-directory: admin-web
-        run: npm ci
-      - working-directory: admin-web
-        run: npm run build
-      - run: tar -czf admin-web-dist.tar.gz -C admin-web/dist .
-      - uses: actions/upload-artifact@v4
-        with:
-          name: admin-web-dist
-          path: admin-web-dist.tar.gz
-
   deploy-dev:
     needs: [backend-image, admin-web-image]
     # Only real tag pushes trigger a deploy -- a workflow_dispatch off a
@@ -164,7 +144,7 @@ jobs:
           docker compose -f docker-compose.registry.yml up -d
 
   github-release:
-    needs: [backend-image, admin-web-image, extension-artifact, admin-web-artifact]
+    needs: [backend-image, admin-web-image, extension-artifact]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -174,14 +154,8 @@ jobs:
         with:
           name: extension-zip
           path: dist/extension
-      - uses: actions/download-artifact@v4
-        with:
-          name: admin-web-dist
-          path: dist/admin-web
       - uses: softprops/action-gh-release@v2
         with:
-          files: |
-            dist/extension/*.zip
-            dist/admin-web/admin-web-dist.tar.gz
+          files: dist/extension/*.zip
           generate_release_notes: true
           prerelease: ${{ contains(github.ref_name, '-') }}
