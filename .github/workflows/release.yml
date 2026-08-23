@@ -90,12 +90,83 @@ jobs:
           cache-dependency-path: extension/package-lock.json
       - working-directory: extension
         run: npm ci
+      - name: Bump manifest version for stable releases
+        # RC tags keep whatever version is already committed -- Chrome's
+        # manifest "version" field only accepts up to four dot-separated
+        # integers, no hyphens/pre-release suffixes, so v0.1.0-rc.5 could
+        # never be written there anyway. Only stable tags (which also gate
+        # chrome-webstore-publish below) get the bump.
+        if: github.ref_type == 'tag' && !contains(github.ref_name, '-')
+        working-directory: extension
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          node -e "
+            const fs = require('fs');
+            const manifest = JSON.parse(fs.readFileSync('manifest.json', 'utf8'));
+            manifest.version = '$VERSION';
+            fs.writeFileSync('manifest.json', JSON.stringify(manifest, null, 2) + '\n');
+          "
       - working-directory: extension
         run: npm run package
       - uses: actions/upload-artifact@v4
         with:
           name: extension-zip
           path: extension/release/*.zip
+
+  chrome-webstore-publish:
+    needs: extension-artifact
+    if: github.ref_type == 'tag' && !contains(github.ref_name, '-')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: extension-zip
+          path: dist/extension
+      - name: Refresh Chrome Web Store access token
+        id: chrome_token
+        run: |
+          RESPONSE=$(curl -s -X POST https://oauth2.googleapis.com/token \
+            -d client_id="${{ secrets.CHROME_CLIENT_ID }}" \
+            -d client_secret="${{ secrets.CHROME_CLIENT_SECRET }}" \
+            -d refresh_token="${{ secrets.CHROME_REFRESH_TOKEN }}" \
+            -d grant_type="refresh_token")
+          ACCESS_TOKEN=$(echo "$RESPONSE" | jq -r '.access_token // empty')
+          if [ -z "$ACCESS_TOKEN" ]; then
+            echo "::error::Failed to refresh Chrome Web Store access token: $RESPONSE"
+            exit 1
+          fi
+          echo "::add-mask::$ACCESS_TOKEN"
+          echo "access_token=$ACCESS_TOKEN" >> "$GITHUB_OUTPUT"
+      - name: Upload new package
+        # Verified live against the real Chrome Web Store API this session:
+        # v1.1 needs no publisherId, and a successful upload reports
+        # uploadState "SUCCESS" (a version collision reports "FAILURE" with
+        # an itemError array -- confirmed against onammmeahdgeobkinhnipcnkbpfojjci).
+        run: |
+          ZIP_PATH=$(ls dist/extension/*.zip | head -n1)
+          RESPONSE=$(curl -s -X PUT \
+            -H "Authorization: Bearer ${{ steps.chrome_token.outputs.access_token }}" \
+            -H "x-goog-api-version: 2" \
+            -T "$ZIP_PATH" \
+            "https://www.googleapis.com/upload/chromewebstore/v1.1/items/${{ secrets.CHROME_EXTENSION_ID }}")
+          echo "$RESPONSE"
+          STATE=$(echo "$RESPONSE" | jq -r '.uploadState // empty')
+          if [ "$STATE" != "SUCCESS" ]; then
+            echo "::error::Chrome Web Store upload failed: $RESPONSE"
+            exit 1
+          fi
+      - name: Publish
+        run: |
+          HTTP_CODE=$(curl -s -o /tmp/publish_response.json -w '%{http_code}' -X POST \
+            -H "Authorization: Bearer ${{ steps.chrome_token.outputs.access_token }}" \
+            -H "x-goog-api-version: 2" \
+            -H "Content-Length: 0" \
+            "https://www.googleapis.com/chromewebstore/v1.1/items/${{ secrets.CHROME_EXTENSION_ID }}/publish")
+          cat /tmp/publish_response.json
+          if [ "$HTTP_CODE" -lt 200 ] || [ "$HTTP_CODE" -ge 300 ]; then
+            echo "::error::Chrome Web Store publish failed (HTTP $HTTP_CODE)"
+            exit 1
+          fi
 
   deploy-dev:
     needs: [backend-image, admin-web-image]
