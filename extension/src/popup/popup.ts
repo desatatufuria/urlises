@@ -12,6 +12,7 @@ const CREATE_SECRET_WINDOW_HEIGHT = 500;
 const signedOut = document.querySelector<HTMLElement>("#signed-out")!;
 const signedIn = document.querySelector<HTMLElement>("#signed-in")!;
 const errorNode = document.querySelector<HTMLElement>("#error")!;
+const extensionVersion = document.querySelector<HTMLElement>("#extension-version")!;
 const sessionSummary = document.querySelector<HTMLElement>("#session-summary")!;
 const statusDetail = document.querySelector<HTMLElement>("#status-detail")!;
 const statusIndicators = document.querySelector<HTMLElement>("#status-indicators")!;
@@ -31,6 +32,8 @@ const openCreateSecretButton = document.querySelector<HTMLButtonElement>("#open-
 
 let lastAcknowledgedRevision = 0;
 let lastAcknowledgedSecretReadRevision = 0;
+
+extensionVersion.textContent = `v${chrome.runtime.getManifest().version}`;
 
 document.querySelector<HTMLFormElement>("#login-form")!.addEventListener("submit", (event) => {
   event.preventDefault();
