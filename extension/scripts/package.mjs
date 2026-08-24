@@ -29,8 +29,12 @@ const releaseAllowlist = [
   "dist/background/service-worker.js",
   "dist/create-secret/content-limit.js",
   "dist/create-secret/create-secret.js",
+  "dist/create-secret/recipient-filter.js",
   "dist/options/options.js",
+  "dist/options/secret-history.js",
+  "dist/popup/advanced-toggle.js",
   "dist/popup/popup.js",
+  "dist/popup/status-detail.js",
   "dist/shared/api.js",
   "dist/shared/crypto.js",
   "dist/shared/diagnostics.js",
@@ -44,6 +48,7 @@ const releaseAllowlist = [
   "dist/shared/types.js",
   "dist/shared/ui/status.js",
   "dist/shared/websocket.js",
+  "dist/shared/window-geometry.js",
   "icons/icon-128.png",
   "icons/icon-16.png",
   "icons/icon-32.png",
@@ -258,12 +263,12 @@ function getForbiddenReason(relativePath) {
   if (packageMetadata.has(basename)) return "package metadata";
   if (forbiddenExtensions.some((extension) => basename.endsWith(extension))) return "forbidden source, source-map, or private-key extension";
   if (/(^|[.-])(test|spec)\.[^.]+$/i.test(basename)) return "test file";
-  // "create-secret" is this extension's zero-knowledge secret-sharing
-  // feature name (extension/src/create-secret/), not credential material --
-  // excluded here so the allowlisted create-secret.js/.html don't trip the
-  // heuristic below.
-  const isCreateSecretFile = /^create-secret\.[a-z0-9]+$/.test(basename);
-  if (!isCreateSecretFile && /(^|[-_.])(secret|secrets|credential|credentials|private-key)([-_.]|$)/i.test(basename)) return "potential secret";
+  // "secret" appears in some of this extension's own filenames as part of
+  // its zero-knowledge secret-sharing feature name (create-secret.*,
+  // secret-history.*), not credential material -- excluded here so the
+  // allowlisted files don't trip the heuristic below.
+  const knownSafeSecretBasenames = new Set(["create-secret.js", "create-secret.html", "secret-history.js"]);
+  if (!knownSafeSecretBasenames.has(basename) && /(^|[-_.])(secret|secrets|credential|credentials|private-key)([-_.]|$)/i.test(basename)) return "potential secret";
   if (basename === "thumbs.db" || basename === "desktop.ini") return "operating-system metadata";
   return null;
 }
