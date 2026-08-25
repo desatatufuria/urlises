@@ -1117,6 +1117,236 @@ test("Retry keeps an unproven receipt paused and Rebuild is the only destructive
   assert.equal(projection.convergenceJournal?.phase, "live");
 });
 
+// --- Slice A (ADR-404): resync-shaped pauses get a rebuild disposition, never an inline resync ---
+
+test("every automatic resync trigger pauses with a rebuild disposition and touches no backend tree", async () => {
+  const treeHandler = {
+    match: (url) => url.endsWith("/workspaces/workspace-1/tree"),
+    respond: () => jsonResponse({
+      workspace: { workspaceId: "workspace-1", workspaceName: "Workspace", workspaceType: "shared", organizationId: "org-1", organizationName: "Org", role: "editor" },
+      folders: [],
+    }),
+  };
+  const deleteFolderRejected = {
+    match: (url) => url.endsWith("/folders/backend-1"),
+    respond: () => errorResponse(404, "not found"),
+  };
+
+  const cases = [
+    {
+      label: "viewer-create",
+      seed: async () => {
+        bookmarkNodes.set("workspace-node", createBookmarkNode({ id: "workspace-node", parentId: "1", title: "Workspace", index: 0 }));
+        rebuildBookmarkChildren();
+        await setState({ ...createRuntimeState(), projectionsByWorkspaceId: { "workspace-1": createProjection({
+          workspace: { workspaceId: "workspace-1", workspaceName: "Workspace", workspaceType: "shared", organizationId: "org-1", organizationName: "Org", role: "viewer" },
+          workspaceChromeId: "workspace-node",
+        }) } });
+      },
+      act: async () => {
+        const created = await new Promise((resolve) => chrome.bookmarks.create({ parentId: "workspace-node", title: "New", url: "https://example.com/new", index: 0 }, resolve));
+        await handleBookmarkCreated(created.id, created);
+      },
+    },
+    {
+      label: "create-outside-canonical",
+      seed: async () => {
+        bookmarkNodes.set("workspace-node", createBookmarkNode({ id: "workspace-node", parentId: "1", title: "Workspace", index: 0 }));
+        rebuildBookmarkChildren();
+        await setState({ ...createRuntimeState(), projectionsByWorkspaceId: { "workspace-1": createEditorProjection({
+          workspaceChromeId: "workspace-node",
+        }) } });
+      },
+      // A bookmark reported with no parentId, whose own chrome id happens to equal the workspace's
+      // synthetic root: resolveContext resolves it via node.id (the `?? node.id` fallback), but the
+      // later canonical-parent lookup uses node.parentId (the `?? ""` fallback) — the two diverge,
+      // so this is neither a relocation-eligible root-level create nor a mapped canonical create.
+      act: async () => {
+        await handleBookmarkCreated("workspace-node", { id: "workspace-node", parentId: undefined, title: "Odd", url: "https://example.com/odd", index: 0 });
+      },
+    },
+    {
+      label: "viewer-change",
+      seed: async () => {
+        await setState({ ...createRuntimeState(), projectionsByWorkspaceId: { "workspace-1": createProjection({
+          workspace: { workspaceId: "workspace-1", workspaceName: "Workspace", workspaceType: "shared", organizationId: "org-1", organizationName: "Org", role: "viewer" },
+          workspaceChromeId: "workspace-node",
+          chromeIdByBackendId: { "backend-1": "bookmark-node" },
+          backendIdByChromeId: { "bookmark-node": "backend-1" },
+          entityTypeByBackendId: { "backend-1": "bookmark" },
+        }) } });
+      },
+      act: async () => {
+        await handleBookmarkChanged("bookmark-node", { title: "Changed" });
+      },
+    },
+    {
+      label: "viewer-move",
+      seed: async () => {
+        await setState({ ...createRuntimeState(), projectionsByWorkspaceId: { "workspace-1": createProjection({
+          workspace: { workspaceId: "workspace-1", workspaceName: "Workspace", workspaceType: "shared", organizationId: "org-1", organizationName: "Org", role: "viewer" },
+          workspaceChromeId: "workspace-node",
+          chromeIdByBackendId: { "backend-1": "bookmark-node" },
+          backendIdByChromeId: { "bookmark-node": "backend-1" },
+          entityTypeByBackendId: { "backend-1": "bookmark" },
+        }) } });
+      },
+      act: async () => {
+        await handleBookmarkMoved("bookmark-node", { parentId: "workspace-node", oldParentId: "workspace-node", index: 0, oldIndex: 0 });
+      },
+    },
+    {
+      label: "root-removed-no-context",
+      seed: async () => {
+        await setState({ ...createRuntimeState(), projectionsByWorkspaceId: { "workspace-1": createProjection({
+          workspace: { workspaceId: "workspace-1", workspaceName: "Workspace", workspaceType: "shared", organizationId: "org-1", organizationName: "Org", role: "editor" },
+          rootChromeId: "root-node",
+          workspaceChromeId: "workspace-node",
+        }) } });
+      },
+      act: async () => {
+        await handleBookmarkRemoved("root-node", { parentId: "1", index: 0 });
+      },
+    },
+    {
+      label: "root-removed-no-backend-id",
+      seed: async () => {
+        await setState({ ...createRuntimeState(), projectionsByWorkspaceId: { "workspace-1": createProjection({
+          workspace: { workspaceId: "workspace-1", workspaceName: "Workspace", workspaceType: "shared", organizationId: "org-1", organizationName: "Org", role: "editor" },
+          workspaceChromeId: "workspace-node",
+        }) } });
+      },
+      act: async () => {
+        await handleBookmarkRemoved("workspace-node", { parentId: "organization-node", index: 0 });
+      },
+    },
+    {
+      label: "viewer-exclusion",
+      seed: async () => {
+        await setState({ ...createRuntimeState(), projectionsByWorkspaceId: { "workspace-1": createProjection({
+          workspace: { workspaceId: "workspace-1", workspaceName: "Workspace", workspaceType: "shared", organizationId: "org-1", organizationName: "Org", role: "viewer" },
+          workspaceChromeId: "workspace-node",
+          chromeIdByBackendId: { "backend-1": "folder-node" },
+          backendIdByChromeId: { "folder-node": "backend-1" },
+          entityTypeByBackendId: { "backend-1": "folder" },
+        }) } });
+      },
+      act: async () => {
+        await handleBookmarkRemoved("folder-node", { parentId: "workspace-node", index: 0 });
+      },
+    },
+    {
+      label: "rejected-mutation",
+      seed: async () => {
+        await setState({ ...createRuntimeState(), projectionsByWorkspaceId: { "workspace-1": createEditorProjection({
+          workspaceChromeId: "workspace-node",
+          chromeIdByBackendId: { "backend-1": "folder-node" },
+          backendIdByChromeId: { "folder-node": "backend-1" },
+          entityTypeByBackendId: { "backend-1": "folder" },
+        }) } });
+      },
+      extraHandlers: [deleteFolderRejected],
+      act: async () => {
+        await handleBookmarkRemoved("folder-node", { parentId: "workspace-node", index: 0 });
+      },
+    },
+  ];
+
+  for (const { label, seed, act, extraHandlers } of cases) {
+    await resetRuntime();
+    await seed();
+    fetchHandlers = [...(extraHandlers ?? []), treeHandler];
+    await act();
+    const projection = (await getState()).projectionsByWorkspaceId["workspace-1"];
+    assert.equal(projection.convergenceJournal?.phase, "paused", `${label}: expected paused`);
+    assert.equal(projection.convergenceJournal?.pauseReason, "ambiguous-predecessor", `${label}: expected ambiguous-predecessor`);
+    assert.equal(projection.convergenceJournal?.repairDisposition, "rebuild", `${label}: expected rebuild disposition`);
+    assert.equal(fetchLog.filter((url) => url.endsWith("/tree")).length, 0, `${label}: expected zero tree fetches`);
+    const diagnostics = (await getState()).diagnostics.map((entry) => entry.message);
+    assert.ok(diagnostics.some((entry) => entry.includes("resync required")), `${label}: expected a "resync required" repair diagnostic`);
+  }
+});
+
+test("a replay gap that requires resync is dispositioned rebuild, not retry", async () => {
+  await setState(createRuntimeState({ lastCursor: 5 }));
+  fetchHandlers = [
+    {
+      match: (url) => url.includes("/sync/events?workspaceId=workspace-1&afterCursor=5"),
+      respond: () => jsonResponse({ currentCursor: 8, events: [], resyncRequired: true }),
+    },
+    {
+      match: (url) => url.endsWith("/workspaces/workspace-1/tree"),
+      respond: () => jsonResponse({
+        workspace: {
+          workspaceId: "workspace-1",
+          workspaceName: "Workspace",
+          workspaceType: "shared",
+          organizationId: "org-1",
+          organizationName: "Org",
+          role: "viewer",
+        },
+        folders: [],
+      }),
+    },
+    {
+      match: (url) => url.includes("/sync/events?workspaceId=workspace-1&afterCursor=0"),
+      respond: () => jsonResponse({ currentCursor: 8, events: [] }),
+    },
+  ];
+
+  await projectionTestHooks.replayWorkspaceDelta("workspace-1", 5, "resume after socket ack");
+
+  // Keeps the pre-existing "replay gap pauses the workspace without destructive resync" contract
+  // true (zero /tree fetches) while additionally pinning the disposition this slice adds.
+  assert.equal(fetchLog.filter((url) => url.includes("afterCursor=5")).length, 1);
+  assert.equal(fetchLog.filter((url) => url.endsWith("/workspaces/workspace-1/tree")).length, 0);
+  const projection = (await getState()).projectionsByWorkspaceId["workspace-1"];
+  assert.equal(projection.lastCursor, 5);
+  assert.equal(projection.convergenceJournal?.pauseReason, "ambiguous-predecessor");
+  assert.equal(projection.convergenceJournal?.repairDisposition, "rebuild");
+});
+
+test("the Retry path is a no-op for a resync-shaped pause, and Rebuild is not", async () => {
+  await setState(createRuntimeState({ lastCursor: 5 }));
+  fetchHandlers = [
+    {
+      match: (url) => url.includes("/sync/events?workspaceId=workspace-1&afterCursor=5"),
+      respond: () => jsonResponse({ currentCursor: 8, events: [], resyncRequired: true }),
+    },
+    {
+      match: (url) => url.endsWith("/workspaces/workspace-1/tree"),
+      respond: () => jsonResponse({
+        workspace: {
+          workspaceId: "workspace-1",
+          workspaceName: "Workspace",
+          workspaceType: "shared",
+          organizationId: "org-1",
+          organizationName: "Org",
+          role: "viewer",
+        },
+        folders: [],
+      }),
+    },
+    {
+      match: (url) => url.includes("/sync/events?workspaceId=workspace-1&afterCursor=0"),
+      respond: () => jsonResponse({ currentCursor: 8, events: [] }),
+    },
+  ];
+  await projectionTestHooks.replayWorkspaceDelta("workspace-1", 5, "resume after socket ack");
+  let projection = (await getState()).projectionsByWorkspaceId["workspace-1"];
+  assert.equal(projection.convergenceJournal?.repairDisposition, "rebuild");
+
+  const fetchCountBeforeRetry = fetchLog.length;
+  await retryWorkspace("workspace-1");
+  projection = (await getState()).projectionsByWorkspaceId["workspace-1"];
+  assert.equal(projection.convergenceJournal?.phase, "paused", "Retry must be a no-op on a rebuild-shaped pause");
+  assert.equal(fetchLog.filter((url) => url.includes("/sync/events")).length, fetchLog.slice(0, fetchCountBeforeRetry).filter((url) => url.includes("/sync/events")).length, "Retry must not issue a new /sync/events fetch");
+
+  await rebuildWorkspace("workspace-1");
+  projection = (await getState()).projectionsByWorkspaceId["workspace-1"];
+  assert.equal(projection.convergenceJournal?.phase, "live", "Rebuild clears a rebuild-shaped pause");
+});
+
 test("rebuildWorkspace creates the local-only folder and does not duplicate it on repeated rebuilds", async () => {
   const workspace = { workspaceId: "workspace-1", workspaceName: "Workspace", workspaceType: "shared", organizationId: "org-1", organizationName: "Org", role: "editor" };
   fetchHandlers = [
@@ -2501,6 +2731,10 @@ test("connectWorkspace falls back from subtree recovery to workspace resync befo
   assert.ok(diagnostics.some((entry) => entry.includes("action=recover-subtree") && entry.includes("entityId=bookmark-remote")));
   assert.equal(projection.health, "degraded");
   assert.equal(projection.convergenceJournal?.pauseReason, "ambiguous-predecessor");
+  // T-A3 (ADR-404): the subtree-recovery-to-workspace fallback must disposition rebuild too, so
+  // the popup offers Rebuild — the only action that can actually close a resync-shaped gap —
+  // instead of a Retry that is guaranteed to fail (design §6.3).
+  assert.equal(projection.convergenceJournal?.repairDisposition, "rebuild");
 });
 
 test("connectWorkspace validates the expected parent path before folder delete continues", async () => {

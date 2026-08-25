@@ -37,21 +37,21 @@ Base/tracker: `feature/extension-auto-repair-on-pause` (off `develop`). Each uni
 ## Phase A: Slice A — resync-shaped pauses get a rebuild disposition (ADR-404; branch `.../slice-a-resync-disposition` off step-0)
 
 RED:
-- [ ] A.1 T-A1: table-driven over the 8 call sites (:567,:578,:624,:647,:674,:682,:699,:945) — `phase==="paused"`, `pauseReason==="ambiguous-predecessor"`, `repairDisposition==="rebuild"`, zero `/tree` fetches, `repair:` diagnostic.
-- [ ] A.2 T-A2: `recoverWorkspace(...,"resync")` (:2007) dispositions rebuild; keeps `:1056`'s zero-`/tree` assertion.
-- [ ] A.3 T-A3: `recoverSubtreeThenWorkspace` fallback (:2213) dispositions rebuild.
-- [ ] A.4 T-A4: Retry is a no-op after a resync-shaped pause (no `/sync/events` fetch); Rebuild clears it.
+- [x] A.1 T-A1: table-driven over the 8 call sites (:567,:578,:624,:647,:674,:682,:699,:945) — `phase==="paused"`, `pauseReason==="ambiguous-predecessor"`, `repairDisposition==="rebuild"`, zero `/tree` fetches, `repair:` diagnostic. RED confirmed (all 8 cases failed on `repairDisposition` before GREEN).
+- [x] A.2 T-A2: `recoverWorkspace(...,"resync")` (:2007) dispositions rebuild; keeps `:1056`'s zero-`/tree` assertion. Implemented as a new test (`a replay gap that requires resync is dispositioned rebuild, not retry`) reusing the `:1056` fixture shape so the original test stays byte-for-byte unchanged (A.10).
+- [x] A.3 T-A3: `recoverSubtreeThenWorkspace` fallback (:2213) dispositions rebuild. Implemented by extending the existing `connectWorkspace falls back from subtree recovery to workspace resync before degrading` test in place (same call site/scenario) with one added `repairDisposition === "rebuild"` assertion.
+- [x] A.4 T-A4: Retry is a no-op after a resync-shaped pause (no `/sync/events` fetch); Rebuild clears it. RED confirmed.
 
 GREEN:
-- [ ] A.5 `pauseWorkspace` gains `options: { repair?: "retry"|"rebuild" }` (projection.ts:2010).
-- [ ] A.6 `resyncWorkspace` (:927-930) passes `{ repair: "rebuild" }`; log → `resync required: …`.
-- [ ] A.7 `recoverWorkspace` resync fallback (:2007) passes `{ repair: "rebuild" }`.
-- [ ] A.8 `recoverSubtreeThenWorkspace` fallback (:2213) passes `{ repair: "rebuild" }`.
-- [ ] A.9 Confirm T-A1-T-A4 green.
+- [x] A.5 `pauseWorkspace` gains `options: { repair?: "retry"|"rebuild" }` (projection.ts:2010).
+- [x] A.6 `resyncWorkspace` (:927-930) passes `{ repair: "rebuild" }`; log → `resync required: …`.
+- [x] A.7 `recoverWorkspace` resync fallback (:2007) passes `{ repair: "rebuild" }`.
+- [x] A.8 `recoverSubtreeThenWorkspace` fallback (:2213) passes `{ repair: "rebuild" }`.
+- [x] A.9 Confirm T-A1-T-A4 green. Confirmed: full suite 231/231 green.
 
 Regression guard (D6/C8, explicit — not incidental):
-- [ ] A.10 Run and confirm UNCHANGED pass of the three named zero-`/tree` tests: `tests/projection-behavior.test.mjs:1056`, `:1092`, `:2260` (T-A5) — Slice A never calls `doResyncWorkspace` inline.
-- [ ] A.11 Gate: `npm run test:projection` + `npm run typecheck` green. Commit Slice A alone.
+- [x] A.10 Run and confirm UNCHANGED pass of the three named zero-`/tree` tests: `tests/projection-behavior.test.mjs:1056`, `:1092`, `:2260` (T-A5) — Slice A never calls `doResyncWorkspace` inline. Confirmed passing unchanged; `git diff` against step0 contains zero occurrences of `doResyncWorkspace` and zero diff in `enterRecovery`.
+- [x] A.11 Gate: `npm run test:projection` + `npm run typecheck` green. Commit Slice A alone. Result: 231/231 pass, typecheck clean. Production diff: 22 lines (projection.ts).
 
 ## Phase B: Slice B — `captureLocalUpdateOrMove`'s 2 direct pauses degrade visibly (ADR-405; branch `.../slice-b-visible-local-pauses` off slice-a)
 

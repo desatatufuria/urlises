@@ -942,9 +942,15 @@ export async function runCoalescedWorkspaceTask(
   await lock.active;
 }
 
+// These eight call sites all mean "the local tree no longer matches canonical state". Replaying
+// from lastCursor can never close that gap — only rematerialization can — so the pause must say
+// "rebuild". That is what lets the bounded auto-repair layer spend an attempt on the action that
+// can actually work, and what stops the popup offering a Retry that is guaranteed to fail.
+// Rematerialization still never runs inline here: it only ever happens through the counted,
+// claimed, capped layer added in Slice C (spec.md: Isolation, Repair, and Diagnostics).
 async function resyncWorkspace(workspaceId: string, reason: string): Promise<void> {
-  await pauseWorkspace(workspaceId, (await getState()).projectionsByWorkspaceId[workspaceId]?.lastCursor ?? 0, "ambiguous-predecessor");
-  await log(`repair:${workspaceId}`, `automatic resync disabled: ${reason}`, "warn");
+  await pauseWorkspace(workspaceId, (await getState()).projectionsByWorkspaceId[workspaceId]?.lastCursor ?? 0, "ambiguous-predecessor", { repair: "rebuild" });
+  await log(`repair:${workspaceId}`, `resync required: ${reason}`, "warn");
 }
 
 async function logRejectedMutation(
@@ -2022,13 +2028,19 @@ async function recoverWorkspace(
     return;
   }
 
-  await pauseWorkspace(workspaceId, (await getState()).projectionsByWorkspaceId[workspaceId]?.lastCursor ?? 0, "ambiguous-predecessor");
+  await pauseWorkspace(workspaceId, (await getState()).projectionsByWorkspaceId[workspaceId]?.lastCursor ?? 0, "ambiguous-predecessor", { repair: "rebuild" });
 }
 
-async function pauseWorkspace(workspaceId: string, cursor: number, reason: Parameters<typeof gateRemoteEffect>[2]): Promise<void> {
+async function pauseWorkspace(
+  workspaceId: string,
+  cursor: number,
+  reason: Parameters<typeof gateRemoteEffect>[2],
+  options: { repair?: "retry" | "rebuild" } = {},
+): Promise<void> {
   let disposition: "retry" | "rebuild" = "retry";
   await updateProjectionState(workspaceId, (projection) => {
     projection.convergenceJournal = gateRemoteEffect(projection.convergenceJournal ?? emptyJournal(), cursor, reason);
+    if (options.repair) projection.convergenceJournal.repairDisposition = options.repair;
     if (projection.convergenceJournal.receipts?.some((receipt) => receipt.status === "pending")) projection.convergenceJournal.repairDisposition = "rebuild";
     disposition = projection.convergenceJournal.repairDisposition ?? "retry";
     projection.status = "error";
@@ -2228,7 +2240,7 @@ async function recoverSubtreeThenWorkspace(
     parentBackendId: scope.parentBackendId,
   }, "warn");
 
-  await pauseWorkspace(scope.workspaceId, (await getState()).projectionsByWorkspaceId[scope.workspaceId]?.lastCursor ?? 0, "ambiguous-predecessor");
+  await pauseWorkspace(scope.workspaceId, (await getState()).projectionsByWorkspaceId[scope.workspaceId]?.lastCursor ?? 0, "ambiguous-predecessor", { repair: "rebuild" });
 }
 
 async function attemptSubtreeRecovery(
