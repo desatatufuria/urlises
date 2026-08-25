@@ -338,3 +338,52 @@ test("T-R3 retryJournal leaves localIntents untouched (deliberate asymmetry with
   assert.deepEqual(retried.localIntents, journal.localIntents);
   assert.equal(retried.localIntents.length, 1);
 });
+
+// --- extension-create-ownership-url-normalization: ADR-102 sameUrl becomes public API ---
+
+test("T-U7 sameUrl is exported and undefined-safe in both directions, symmetric on the incident pair", () => {
+  assert.equal(convergence.sameUrl(undefined, undefined), true);
+  assert.equal(convergence.sameUrl("https://x/", undefined), false);
+  assert.equal(convergence.sameUrl(undefined, "https://x/"), false);
+  assert.equal(convergence.sameUrl("https://pruebs/", "https://pruebs"), true);
+  assert.equal(convergence.sameUrl("https://pruebs", "https://pruebs/"), true);
+  assert.equal(convergence.sameUrl("https://a/", "https://b/"), false);
+});
+
+// --- extension-create-ownership-url-normalization: ADR-103 rebuildJournal drops non-done operations ---
+
+test("T-R4 rebuildJournal keeps only done operations (the incident, unit level)", () => {
+  const stuck = { id: "11:workspace-a:create", kind: "create", backendId: "backend-11", fingerprint: "f", status: "started", ownership: { workspaceId: "workspace-a", type: "bookmark", parentChromeId: "parent", title: "Remote", url: "https://pruebs", index: 0 } };
+  const doneOp = { id: "5:workspace-a:create", kind: "create", backendId: "backend-5", fingerprint: "f2", status: "done" };
+  const journal = { ...convergence.emptyJournal(), operations: [stuck, doneOp] };
+  const rebuilt = convergence.rebuildJournal(journal);
+  assert.deepEqual(rebuilt.operations, [doneOp]);
+  assert.equal(rebuilt.phase, "replay");
+  assert.equal(rebuilt.pauseReason, undefined);
+  assert.equal(rebuilt.failedCursor, undefined);
+});
+
+test("T-R5 rebuildJournal keeps all operations, in order, when every operation is already done", () => {
+  const operations = [
+    { id: "1:workspace-a:create", kind: "create", backendId: "backend-1", fingerprint: "f1", status: "done" },
+    { id: "2:workspace-a:create", kind: "create", backendId: "backend-2", fingerprint: "f2", status: "done" },
+  ];
+  const journal = { ...convergence.emptyJournal(), operations };
+  const rebuilt = convergence.rebuildJournal(journal);
+  assert.deepEqual(rebuilt.operations, operations);
+});
+
+test("T-R6 retryJournal leaves a started operation untouched (deliberate asymmetry with rebuildJournal)", () => {
+  const started = { id: "11:workspace-a:create", kind: "create", backendId: "backend-11", fingerprint: "f", status: "started", ownership: { workspaceId: "workspace-a", type: "bookmark", parentChromeId: "parent", title: "Remote", url: "https://pruebs", index: 0 } };
+  const journal = convergence.gateRemoteEffect({ ...convergence.emptyJournal(), operations: [started] }, 11, "ambiguous-operation");
+  const retried = convergence.retryJournal(journal);
+  assert.deepEqual(retried.operations, [started]);
+});
+
+test("T-R7 normalizeJournal(rebuildJournal(stuckJournal)) is not paused with ambiguous-operation", () => {
+  const stuck = { id: "11:workspace-a:create", kind: "create", backendId: "backend-11", fingerprint: "f", status: "started", ownership: { workspaceId: "workspace-a", type: "bookmark", parentChromeId: "parent", title: "Remote", url: "https://pruebs", index: 0 } };
+  const stuckJournal = { ...convergence.emptyJournal(), phase: "paused", pauseReason: "ambiguous-operation", operations: [stuck] };
+  const rebuilt = convergence.normalizeJournal(convergence.rebuildJournal(stuckJournal));
+  assert.notEqual(rebuilt.phase, "paused");
+  assert.notEqual(rebuilt.pauseReason, "ambiguous-operation");
+});

@@ -320,3 +320,98 @@ test("unmatched B local create leaves A ownership untouched and emits one B muta
   assert.deepEqual((await storage.getState()).projectionsByWorkspaceId[workspaceA.workspaceId].convergenceJournal, seededJournal);
   harness.teardown();
 });
+
+// --- extension-create-ownership-url-normalization: ADR-101/102/103 ---
+
+test("T-P1 bare-origin remote create converges without pause (the incident regression)", async () => {
+  const current = workspace(fresh("workspace"));
+  const parentId = fresh("parent");
+  const parentChromeId = fresh("parent-chrome");
+  const { harness, projection, storage } = await runtime({ mode: "held", workspaces: [{ workspace: current, parentId, parentChromeId }] });
+  const payload = { id: fresh("backend"), workspaceId: current.workspaceId, folderId: parentId, title: "Pruebs", url: "https://pruebs", position: 0 };
+  const apply = projection.projectionTestHooks.applyRemoteEnvelope(current.workspaceId, remoteEvent(current, "bookmark.created", payload));
+  const created = await waitForHeldCreate(harness, parentChromeId);
+  const originalGet = harness.chrome.bookmarks.get;
+  harness.chrome.bookmarks.get = (id, callback) => originalGet(id, (nodes) => callback(nodes.map((node) => node.id === created.id ? { ...node, url: "https://pruebs/" } : node)));
+  harness.mutators.settle();
+  await apply;
+  const journal = (await storage.getState()).projectionsByWorkspaceId[current.workspaceId].convergenceJournal;
+  const mutations = harness.fetch.mutationCount();
+  harness.teardown();
+  assert.equal(journal?.operations[0]?.status, "done", "RED: bare-origin create must complete ownership despite Chrome's trailing-slash normalization");
+  assert.notEqual(journal?.phase, "paused");
+  assert.equal(journal?.pauseReason, undefined);
+  assert.equal(mutations, 0, "no phantom backend mutation");
+});
+
+test("T-P2 folder create with undefined url still verifies, and a byte-identical bookmark url still converges", async () => {
+  const folderWorkspace = workspace(fresh("workspace"));
+  const bookmarkWorkspace = workspace(fresh("workspace"));
+  const parentId = fresh("parent");
+  const parentChromeId = fresh("parent-chrome");
+  const { harness, projection, storage } = await runtime({ workspaces: [
+    { workspace: folderWorkspace },
+    { workspace: bookmarkWorkspace, parentId, parentChromeId },
+  ] });
+  const folderPayload = { id: fresh("backend"), workspaceId: folderWorkspace.workspaceId, name: "Remote folder", position: 0 };
+  await projection.projectionTestHooks.applyRemoteEnvelope(folderWorkspace.workspaceId, remoteEvent(folderWorkspace, "folder.created", folderPayload));
+  const bookmarkPayload = { id: fresh("backend"), workspaceId: bookmarkWorkspace.workspaceId, folderId: parentId, title: "Remote bookmark", url: "https://remote.test", position: 0 };
+  await projection.projectionTestHooks.applyRemoteEnvelope(bookmarkWorkspace.workspaceId, remoteEvent(bookmarkWorkspace, "bookmark.created", bookmarkPayload));
+  await flushMicrotasks();
+  const state = await storage.getState();
+  const folderJournal = state.projectionsByWorkspaceId[folderWorkspace.workspaceId].convergenceJournal;
+  const bookmarkJournal = state.projectionsByWorkspaceId[bookmarkWorkspace.workspaceId].convergenceJournal;
+  harness.teardown();
+  assert.equal(folderJournal?.operations[0]?.status, "done", "folder create with url:undefined on both sides must verify");
+  assert.notEqual(folderJournal?.phase, "paused");
+  assert.equal(bookmarkJournal?.operations[0]?.status, "done", "byte-identical url bookmark create must verify");
+  assert.notEqual(bookmarkJournal?.phase, "paused");
+});
+
+for (const mismatch of [
+  { label: "title", override: (node) => ({ ...node, title: "Wrong Title" }) },
+  { label: "parentId", override: (node) => ({ ...node, parentId: "wrong-parent" }) },
+  { label: "index", override: (node) => ({ ...node, index: 99 }) },
+  { label: "genuinely different url", override: (node) => ({ ...node, url: "https://other.test/" }) },
+]) {
+  test(`T-P3 genuine ${mismatch.label} mismatch still pauses with ambiguous-operation`, async () => {
+    const current = workspace(fresh("workspace"));
+    const parentId = fresh("parent");
+    const parentChromeId = fresh("parent-chrome");
+    const { harness, projection, storage } = await runtime({ mode: "held", workspaces: [{ workspace: current, parentId, parentChromeId }] });
+    const payload = { id: fresh("backend"), workspaceId: current.workspaceId, folderId: parentId, title: "Correct Title", url: "https://pruebs", position: 0 };
+    const apply = projection.projectionTestHooks.applyRemoteEnvelope(current.workspaceId, remoteEvent(current, "bookmark.created", payload));
+    const created = await waitForHeldCreate(harness, parentChromeId);
+    const originalGet = harness.chrome.bookmarks.get;
+    harness.chrome.bookmarks.get = (id, callback) => originalGet(id, (nodes) => callback(nodes.map((node) => node.id === created.id ? mismatch.override(node) : node)));
+    harness.mutators.settle();
+    await apply;
+    const journal = (await storage.getState()).projectionsByWorkspaceId[current.workspaceId].convergenceJournal;
+    harness.teardown();
+    assert.equal(journal?.operations[0]?.status, "started", `RED: genuine ${mismatch.label} mismatch must not reach done`);
+    assert.equal(journal?.phase, "paused");
+    assert.equal(journal?.pauseReason, "ambiguous-operation");
+  });
+}
+
+test("T-P4 rebuild through storage.updateState clears a stuck started create operation and does not re-pause on the next read", async () => {
+  const current = workspace(fresh("workspace"));
+  const { harness, storage } = await runtime({ workspaces: [{ workspace: current }] });
+  const stuckOperation = { id: "11:backend-workspace:create", kind: "create", backendId: fresh("backend"), fingerprint: "f", status: "started", ownership: { workspaceId: current.workspaceId, type: "bookmark", parentChromeId: `workspace:${current.workspaceId}`, title: "Pruebs", url: "https://pruebs", index: 0 } };
+  await storage.updateState((state) => {
+    state.projectionsByWorkspaceId[current.workspaceId].convergenceJournal = {
+      version: 1, phase: "paused", pauseReason: "ambiguous-operation", operations: [stuckOperation], localIntents: [], attempts: 0,
+    };
+    return state;
+  });
+  const convergence = await import(`../dist/background/convergence.js?${fresh("convergence")}`);
+  await storage.updateState((state) => {
+    state.projectionsByWorkspaceId[current.workspaceId].convergenceJournal = convergence.rebuildJournal(state.projectionsByWorkspaceId[current.workspaceId].convergenceJournal);
+    return state;
+  });
+  const journal = (await storage.getState()).projectionsByWorkspaceId[current.workspaceId].convergenceJournal;
+  harness.teardown();
+  assert.notEqual(journal?.phase, "paused", "RED: rebuild must clear the stuck started operation so the next read does not re-pause");
+  assert.equal(journal?.pauseReason, undefined);
+  assert.equal(journal?.operations.some((op) => op.status === "started"), false);
+});

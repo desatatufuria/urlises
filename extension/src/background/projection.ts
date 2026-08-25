@@ -73,7 +73,7 @@ import {
 } from "./chrome-bookmarks.js";
 import { connectWorkspaceSocket } from "../shared/websocket.js";
 import type { BookmarkChangeInfo, BookmarkMoveInfo, BookmarkRemoveInfo } from "./bookmark-listeners.js";
-import { canPersistReceipt, captureLocalIntent, createRemoteReceipt, emptyJournal, gateRemoteEffect, normalizedReceipts, rebuildJournal, reduceRemoteCallback, retryJournal, type RepairGate } from "./convergence.js";
+import { canPersistReceipt, captureLocalIntent, createRemoteReceipt, emptyJournal, gateRemoteEffect, normalizedReceipts, rebuildJournal, reduceRemoteCallback, retryJournal, sameUrl, type RepairGate } from "./convergence.js";
 
 const socketClosers = new Map<string, () => void>();
 const socketTokens = new Map<string, symbol>();
@@ -1765,7 +1765,7 @@ async function finishRemoteCreate(workspaceId: string, id: string, chromeId: str
   await updateProjectionState(workspaceId, (projection) => {
     const journal = projection.convergenceJournal, operation = journal?.operations.find((item) => item.id === id), ownership = operation?.ownership;
     if (!journal || !operation || !ownership) return;
-    if (!node || node.parentId !== ownership.parentChromeId || node.index !== ownership.index || node.title !== ownership.title || node.url !== ownership.url) { journal.phase = "paused"; journal.pauseReason = "ambiguous-operation"; return; }
+    if (!node || node.parentId !== ownership.parentChromeId || node.index !== ownership.index || node.title !== ownership.title || !sameUrl(node.url, ownership.url)) { journal.phase = "paused"; journal.pauseReason = "ambiguous-operation"; return; }
     operation.chromeId = chromeId; operation.status = "done";
     if (journal.pauseReason === "ambiguous-operation") { journal.phase = "live"; journal.pauseReason = undefined; }
     const done = journal.operations.filter((item) => item.ownership && item.status === "done");

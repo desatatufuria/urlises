@@ -111,7 +111,8 @@ export function retryJournal(journal: ConvergenceJournal): ConvergenceJournal {
 export function rebuildJournal(journal: ConvergenceJournal): ConvergenceJournal {
   const receipts = normalizedReceipts((journal.receipts ?? []).filter((receipt) => receipt.status === "consumed"));
   const localIntents = (journal.localIntents ?? []).filter((intent) => intent.status === "acked");
-  return { ...journal, phase: "replay", receipts, localIntents, repairDisposition: "rebuild", pauseReason: undefined, failedCursor: undefined };
+  const operations = (journal.operations ?? []).filter((operation) => operation.status === "done");
+  return { ...journal, phase: "replay", receipts, localIntents, operations, repairDisposition: "rebuild", pauseReason: undefined, failedCursor: undefined };
 }
 
 export function checkpoint(journal: ConvergenceJournal, epoch: number): ConvergenceJournal {
@@ -131,7 +132,7 @@ export function canonicalUrlForComparison(raw: string): string {
     return raw;
   }
 }
-function sameUrl(left: string | undefined, right: string | undefined): boolean {
+export function sameUrl(left: string | undefined, right: string | undefined): boolean {
   if (left === right) return true;
   if (left === undefined || right === undefined) return false;
   return canonicalUrlForComparison(left) === canonicalUrlForComparison(right);
