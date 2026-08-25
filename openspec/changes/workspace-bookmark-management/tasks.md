@@ -154,42 +154,42 @@ Each unit is developed, tested, and merged into the previous unit's branch befor
 
 ## Phase D1: Netscape Bookmarks Parser
 
-- [ ] D1.1 RED: `admin-web/src/lib/bookmarks/parseNetscapeBookmarks.test.ts` (new) — a real Chrome export fixture parses into a node tree whose nesting matches the source file. *(Spec: "Valid Netscape export parses into a matching node tree")*
-- [ ] D1.2 RED: same — nested `<DL>` **inside** `<DT>` and nested `<DL>` **as a sibling of** `<DT>` both parse identically (both shapes are real per the HTML5 tree-construction note in design.md).
-- [ ] D1.3 RED: same — 3-level nesting; `<DD>`/`<H1>`/`<META>`/`PERSONAL_TOOLBAR_FOLDER`/`ADD_DATE`/`ICON` are ignored; empty title falls back to the URL.
-- [ ] D1.4 RED: same — `javascript:`, `place:`, `data:`, `chrome://`, and missing `href` all land in `skipped` with the correct `reason`, never in `roots`/`nodeCount`. *(Threat Matrix: XSS via bookmark href)*
-- [ ] D1.5 RED: same — non-bookmark HTML (no `<dl>`) throws `BookmarkParseError`; a `<dl>` with zero nodes throws. *(Spec: "Malformed file is rejected before any create call")*
-- [ ] D1.6 RED: same — a fixture containing `<script>` and an `onerror`-bearing `<img>` never executes and inserts no node into the live document (`DOMParser` output is never attached to `document`). *(Threat Matrix: Untrusted HTML parsing)*
-- [ ] D1.7 GREEN: `admin-web/src/lib/bookmarks/parseNetscapeBookmarks.ts` (new) — `parseList`/`:scope > dt` direct-child scoping, `h3`⇒folder / `a`⇒bookmark, `isImportableUrl` scheme filter, monotonic `n0, n1, …` keys.
+- [x] D1.1 RED: `admin-web/src/lib/bookmarks/parseNetscapeBookmarks.test.ts` (new) — a real Chrome export fixture parses into a node tree whose nesting matches the source file. *(Spec: "Valid Netscape export parses into a matching node tree")*
+- [x] D1.2 RED: same — nested `<DL>` **inside** `<DT>` and nested `<DL>` **as a sibling of** `<DT>` both parse identically (both shapes are real per the HTML5 tree-construction note in design.md).
+- [x] D1.3 RED: same — 3-level nesting; `<DD>`/`<H1>`/`<META>`/`PERSONAL_TOOLBAR_FOLDER`/`ADD_DATE`/`ICON` are ignored; empty title falls back to the URL.
+- [x] D1.4 RED: same — `javascript:`, `place:`, `data:`, `chrome://`, and missing `href` all land in `skipped` with the correct `reason`, never in `roots`/`nodeCount`. *(Threat Matrix: XSS via bookmark href)*
+- [x] D1.5 RED: same — non-bookmark HTML (no `<dl>`) throws `BookmarkParseError`; a `<dl>` with zero nodes throws. *(Spec: "Malformed file is rejected before any create call")*
+- [x] D1.6 RED: same — a fixture containing `<script>` and an `onerror`-bearing `<img>` never executes and inserts no node into the live document (`DOMParser` output is never attached to `document`). *(Threat Matrix: Untrusted HTML parsing)*
+- [x] D1.7 GREEN: `admin-web/src/lib/bookmarks/parseNetscapeBookmarks.ts` (new) — `parseList`/`:scope > dt` direct-child scoping, `h3`⇒folder / `a`⇒bookmark, `isImportableUrl` scheme filter, monotonic `n0, n1, …` keys.
 
 ## Phase D2: Import Plan
 
-- [ ] D2.1 RED: `admin-web/src/lib/bookmarks/importPlan.test.ts` (new) — `toImportPlan` emits strict pre-order: every item's `parentKey` appears earlier in the array than the item itself.
-- [ ] D2.2 GREEN: `admin-web/src/lib/bookmarks/importPlan.ts` (new) — `ImportItem`, `toImportPlan` (pre-order DFS).
-- [ ] D2.3 RED: same — a 500-node plan is allowed; a 501-node plan is refused and issues **zero** `fetch` calls (assert on mocked call count, not a flag). *(Spec: "Import at exactly 500 nodes proceeds" / "Import over 500 nodes is refused up front")*
-- [ ] D2.4 RED: same — a mid-run failure at node K preserves nodes created before K, continues attempting independent subsequent nodes, and records K's children with `cause: "missing-parent"` **without issuing a request** for them. *(Spec: "Mid-import failure preserves prior successes" / "Children of a failed parent are listed as failed, not attempted")*
-- [ ] D2.5 RED: same — retry re-attempts only `failures`-keyed items in original pre-order, `createdIds` retained so an already-created folder is never duplicated, a now-succeeding item leaves the failure list, a re-failing item stays with a possibly-updated reason. *(Spec: "Retry re-attempts only the failed set" / "Repeated retry failure keeps the item listed")*
-- [ ] D2.6 GREEN: `importPlan.ts` — `ImportFailure`, `ImportRunState`, retry mechanics (`retryFailed()` filters the *original* plan by `failures`, never re-runs the whole plan).
+- [x] D2.1 RED: `admin-web/src/lib/bookmarks/importPlan.test.ts` (new) — `toImportPlan` emits strict pre-order: every item's `parentKey` appears earlier in the array than the item itself.
+- [x] D2.2 GREEN: `admin-web/src/lib/bookmarks/importPlan.ts` (new) — `ImportItem`, `toImportPlan` (pre-order DFS).
+- [x] D2.3 RED: same — a 500-node plan is allowed; a 501-node plan is refused and issues **zero** `fetch` calls (assert on mocked call count, not a flag). *(Spec: "Import at exactly 500 nodes proceeds" / "Import over 500 nodes is refused up front")*
+- [x] D2.4 RED: same — a mid-run failure at node K preserves nodes created before K, continues attempting independent subsequent nodes, and records K's children with `cause: "missing-parent"` **without issuing a request** for them. *(Spec: "Mid-import failure preserves prior successes" / "Children of a failed parent are listed as failed, not attempted")*
+- [x] D2.5 RED: same — retry re-attempts only `failures`-keyed items in original pre-order, `createdIds` retained so an already-created folder is never duplicated, a now-succeeding item leaves the failure list, a re-failing item stays with a possibly-updated reason. *(Spec: "Retry re-attempts only the failed set" / "Repeated retry failure keeps the item listed")*
+- [x] D2.6 GREEN: `importPlan.ts` — `ImportFailure`, `ImportRunState`, retry mechanics (`retryFailed()` filters the *original* plan by `failures`, never re-runs the whole plan).
 
 ## Phase D3: Import UI
 
-- [ ] D3.1 GREEN: `admin-web/src/features/bookmarks/useImportRunner.ts` (new) — reducer + sequential run loop (one in-flight `POST` at a time, parent-before-child, no `position` sent per Decision 15), `retryFailed`; event ids from `keyFor({nodeKey})` (Decision 14).
-- [ ] D3.2 RED: `BookmarksPage.test.tsx` (extend) — a file whose parsed plan exceeds 500 nodes shows a refusal naming the bulk import endpoint, before any `fetch` call. *(Spec: "Import over 500 nodes is refused up front")*
-- [ ] D3.3 RED: same — destination is the workspace root **and** the file has top-level bookmarks ⇒ import is blocked pre-flight with the exact copy from design.md, zero calls issued. *(Deviation 1 / Decision 17 — root-level bookmarks in an import file)*
-- [ ] D3.4 RED: same — the import preview renders parsed-but-not-yet-created URLs as **text**, never as an anchor, even for a fixture containing a crafted `<script>`/`onerror` entry. *(Threat Matrix: XSS via bookmark href, component level; Decision 20)*
-- [ ] D3.5 RED: same — closing the import panel (`?panel=` cleared) mid-run does **not** abort it; reopening shows the same in-progress state. *(Decision 19 — `useImportRunner()` ownership)*
-- [ ] D3.6 GREEN: `admin-web/src/features/bookmarks/ImportPanel.tsx` (new) — file input, destination picker (workspace root or any existing folder), the two pre-flight checks (D3.2/D3.3), preview, failure list, "Retry failed items" action.
-- [ ] D3.7 GREEN: `admin-web/src/features/bookmarks/ImportProgressBanner.tsx` (new) — `completed`/`total`, failure count, link back to the import panel.
-- [ ] D3.8 GREEN: `BookmarksPage.tsx` (extend) — mount `useImportRunner()` at page level, "Import file" button, render `ImportProgressBanner` whenever a run is active or has failures.
-- [ ] D3.9 RED: same — a successful import with no failures produces a tree, refetched from the server, matching the source file's nesting exactly. *(Spec: "Final tree structure matches the source file")*
-- [ ] D3.10 RED: same — progress advances as each sequential create call resolves. *(Spec: "Progress advances as each item resolves")*
+- [x] D3.1 GREEN: `admin-web/src/features/bookmarks/useImportRunner.ts` (new) — reducer + sequential run loop (one in-flight `POST` at a time, parent-before-child, no `position` sent per Decision 15), `retryFailed`; event ids from `keyFor({nodeKey})` (Decision 14).
+- [x] D3.2 RED: `BookmarksPage.test.tsx` (extend) — a file whose parsed plan exceeds 500 nodes shows a refusal naming the bulk import endpoint, before any `fetch` call. *(Spec: "Import over 500 nodes is refused up front")*
+- [x] D3.3 RED: same — destination is the workspace root **and** the file has top-level bookmarks ⇒ import is blocked pre-flight with the exact copy from design.md, zero calls issued. *(Deviation 1 / Decision 17 — root-level bookmarks in an import file)*
+- [x] D3.4 RED: same — the import preview renders parsed-but-not-yet-created URLs as **text**, never as an anchor, even for a fixture containing a crafted `<script>`/`onerror` entry. *(Threat Matrix: XSS via bookmark href, component level; Decision 20)*
+- [x] D3.5 RED: same — closing the import panel (`?panel=` cleared) mid-run does **not** abort it; reopening shows the same in-progress state. *(Decision 19 — `useImportRunner()` ownership)*
+- [x] D3.6 GREEN: `admin-web/src/features/bookmarks/ImportPanel.tsx` (new) — file input, destination picker (workspace root or any existing folder), the two pre-flight checks (D3.2/D3.3), preview, failure list, "Retry failed items" action.
+- [x] D3.7 GREEN: `admin-web/src/features/bookmarks/ImportProgressBanner.tsx` (new) — `completed`/`total`, failure count, link back to the import panel.
+- [x] D3.8 GREEN: `BookmarksPage.tsx` (extend) — mount `useImportRunner()` at page level, "Import file" button, render `ImportProgressBanner` whenever a run is active or has failures.
+- [x] D3.9 RED: same — a successful import with no failures produces a tree, refetched from the server, matching the source file's nesting exactly. *(Spec: "Final tree structure matches the source file")*
+- [x] D3.10 RED: same — progress advances as each sequential create call resolves. *(Spec: "Progress advances as each item resolves")*
 
 ## Phase 5: Verification
 
-- [ ] 5.1 `cd admin-web && npm run build && npm test` — full suite green. Every test above is `vitest`+`jsdom`, has no Postgres dependency, and is expected to **actually pass** in this sandbox (no skip expectation applies to this change).
-- [ ] 5.2 `git diff --stat backend/` from the tracker branch — confirm empty. *(Success Criterion: "Zero backend files changed")*
-- [ ] 5.3 Confirm every mutation in `bookmarks.ts`/`mutations.ts` passes `syncEventId` and none pass `idempotencyKey` (grep-level check across `features/bookmarks/**`). *(Success Criterion: "Every admin-web bookmark mutation sends a deliberate X-Sync-Event-Id")*
-- [ ] 5.4 **MANUAL VERIFICATION CHECKLIST — real browser, end to end** (combines C2.10 with the full feature, against a real dev backend):
+- [x] 5.1 `cd admin-web && npm run build && npm test` — full suite green. Every test above is `vitest`+`jsdom`, has no Postgres dependency, and is expected to **actually pass** in this sandbox (no skip expectation applies to this change). **Result (Unit D apply session): `npm run build` succeeded (`tsc --noEmit` clean + `vite build` produced `dist/`); `npm test` = 31 test files passed, 257/257 tests passed, 0 failed, 0 skipped.**
+- [x] 5.2 `git diff --stat backend/` from the tracker branch — confirm empty. *(Success Criterion: "Zero backend files changed")* **Result: `git diff --stat -- backend/` and `git status --short backend/` both empty — zero backend files touched across Units A–D.**
+- [x] 5.3 Confirm every mutation in `bookmarks.ts`/`mutations.ts` passes `syncEventId` and none pass `idempotencyKey` (grep-level check across `features/bookmarks/**`). *(Success Criterion: "Every admin-web bookmark mutation sends a deliberate X-Sync-Event-Id")* **Result: `grep -rn "idempotencyKey" src/features/bookmarks/ src/lib/api/bookmarks.ts src/lib/bookmarks/` → zero matches. Every one of the 6 `lib/api/bookmarks.ts` functions requires `syncEventId` as a positional argument; every call site in `mutations.ts` (7 hooks) and `useImportRunner.ts` (2 create paths) supplies it via `retry.keyFor(...)`.**
+- [ ] 5.4 **MANUAL VERIFICATION CHECKLIST — real browser, end to end** (combines C2.10 with the full feature, against a real dev backend). **Not executable in this sandbox: no live backend/browser is available here (same constraint as Unit C's C2.10). Everything below this box is left explicitly unchecked, pending a human running it against `npm run dev` + a real backend before this change is considered fully verified:**
   - [ ] Rename, URL edit, and delete each reflect in a connected extension without a manual extension refresh.
   - [ ] A folder delete confirmation states the cascade and the live blast radius before applying.
   - [ ] Importing a real browser export under 500 nodes produces a matching tree; an induced mid-import failure shows exactly which items failed and offers a working retry.

@@ -582,3 +582,214 @@ describe("bookmarks page — keyboard-driven move (Alt+Arrow)", () => {
     await waitFor(() => expect(treeCalls).toBe(2));
   });
 });
+
+// Import (design.md Phase D3). Netscape-format bookmarks.html fixtures are
+// built inline; the parser and import-run mechanics themselves are covered
+// exhaustively by parseNetscapeBookmarks.test.ts / importPlan.test.ts —
+// these tests exercise only the UI wiring: pre-flight refusals, the
+// preview's text-only URL rendering, progress, and the run surviving a
+// panel close/reopen (Decision 19).
+describe("bookmarks page — import", () => {
+  const fetchMock = vi.fn<typeof fetch>();
+
+  beforeEach(() => {
+    vi.stubGlobal("fetch", fetchMock);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    fetchMock.mockReset();
+    vi.restoreAllMocks();
+  });
+
+  const emptyTree = {
+    workspace: {
+      workspaceId: "workspace-1",
+      workspaceName: "Launch Room",
+      workspaceType: "shared",
+      organizationId: "org-1",
+      organizationName: "Acme",
+      role: "editor",
+      sources: ["direct"],
+    },
+    folders: [],
+  };
+
+  function buildLargeBookmarksHtml(count: number) {
+    const items = Array.from({ length: count }, (_, index) => `<DT><A HREF="https://example.com/${index}">Bookmark ${index}</A>`).join("\n");
+    return `<DL><p>${items}</DL>`;
+  }
+
+  async function openImportPanelWithFile(html: string, fileName = "bookmarks.html") {
+    renderAppRoute("/bookmarks?workspace=workspace-1");
+    await screen.findByText(/no bookmarks yet/i);
+    await userEvent.click(screen.getByRole("button", { name: /^import file$/i }));
+    const fileInput = await screen.findByLabelText(/bookmarks file/i);
+    const file = new File([html], fileName, { type: "text/html" });
+    await userEvent.upload(fileInput, file);
+  }
+
+  it("refuses a file whose parsed plan exceeds 500 nodes, naming the bulk import endpoint, before any create call", async () => {
+    const postCalls: string[] = [];
+    fetchMock.mockImplementation((input, init) => {
+      const url = String(input);
+      if (url.endsWith("/workspaces/workspace-1/tree")) return jsonResponse(emptyTree);
+      if (init?.method === "POST") {
+        postCalls.push(url);
+        return jsonResponse({}, 201);
+      }
+      return jsonResponse({ error: "not found" }, 404);
+    });
+
+    await openImportPanelWithFile(buildLargeBookmarksHtml(501));
+
+    expect(await screen.findByText(/bulk import endpoint/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^start import$/i })).toBeDisabled();
+    expect(postCalls).toHaveLength(0);
+  });
+
+  it("blocks import pre-flight when the destination is the workspace root and the file has top-level bookmarks", async () => {
+    const postCalls: string[] = [];
+    fetchMock.mockImplementation((input, init) => {
+      const url = String(input);
+      if (url.endsWith("/workspaces/workspace-1/tree")) return jsonResponse(emptyTree);
+      if (init?.method === "POST") {
+        postCalls.push(url);
+        return jsonResponse({}, 201);
+      }
+      return jsonResponse({ error: "not found" }, 404);
+    });
+
+    const html = `<DL><p><DT><A HREF="https://example.com/root-bm">Root Bookmark</A></DL>`;
+    await openImportPanelWithFile(html);
+
+    expect(await screen.findByText(/a bookmark cannot live at the workspace root/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^start import$/i })).toBeDisabled();
+    expect(postCalls).toHaveLength(0);
+  });
+
+  it("renders the import preview's URLs as plain text, never as an anchor, even for a crafted script-like title", async () => {
+    fetchMock.mockImplementation((input) => {
+      const url = String(input);
+      if (url.endsWith("/workspaces/workspace-1/tree")) return jsonResponse(emptyTree);
+      return jsonResponse({ error: "not found" }, 404);
+    });
+
+    const html = `<DL><p><DT><H3>Folder</H3><DL><p><DT><A HREF="https://example.com/crafted">Crafted&lt;script&gt;evil()&lt;/script&gt;</A></DL></DL>`;
+    await openImportPanelWithFile(html);
+
+    const preview = await screen.findByRole("list", { name: /import preview/i });
+    expect(within(preview).getByText(/Crafted<script>evil\(\)<\/script>/)).toBeInTheDocument();
+    expect(within(preview).queryByRole("link")).not.toBeInTheDocument();
+    expect(document.querySelector("script")).toBeNull();
+  });
+
+  it("does not abort an in-flight import when the panel is closed, and shows the same progress on reopen", async () => {
+    let resolveCreate: (() => void) | undefined;
+    fetchMock.mockImplementation((input, init) => {
+      const url = String(input);
+      if (url.endsWith("/workspaces/workspace-1/tree")) return jsonResponse(emptyTree);
+      if (url.endsWith("/workspaces/workspace-1/folders") && init?.method === "POST") {
+        return new Promise<Response>((resolve) => {
+          resolveCreate = () =>
+            resolve(new Response(JSON.stringify({ id: "server-folder", workspaceId: "workspace-1", name: "Folder", position: 0, createdAt: "", updatedAt: "" }), { status: 201, headers: { "Content-Type": "application/json" } }));
+        });
+      }
+      return jsonResponse({ error: "not found" }, 404);
+    });
+
+    const html = `<DL><p><DT><H3>Folder</H3><DL><p></DL></DL>`;
+    await openImportPanelWithFile(html);
+    await userEvent.click(screen.getByRole("button", { name: /^start import$/i }));
+
+    await screen.findByRole("button", { name: /^importing…$/i });
+
+    await userEvent.click(screen.getByRole("button", { name: /close panel/i }));
+    expect(screen.queryByRole("button", { name: /^start import$/i })).not.toBeInTheDocument();
+    // The page-level progress banner survives the panel's unmount.
+    expect(screen.getByText(/importing… 0 of 1/i)).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: /view import/i }));
+    expect(screen.getByRole("button", { name: /^importing…$/i })).toBeInTheDocument();
+
+    resolveCreate?.();
+    await screen.findByText(/imported 1 of 1 items/i);
+  });
+
+  it("a successful import with no failures produces a tree, refetched, matching the source file's nesting", async () => {
+    let treeCalls = 0;
+    const postCalls: Array<{ url: string; init?: RequestInit }> = [];
+    const afterImportTree = {
+      ...emptyTree,
+      folders: [
+        {
+          id: "server-folder",
+          name: "Folder",
+          position: 0,
+          folders: [],
+          bookmarks: [{ id: "server-bookmark", folderId: "server-folder", title: "One", url: "https://example.com/one", position: 0 }],
+        },
+      ],
+    };
+
+    fetchMock.mockImplementation((input, init) => {
+      const url = String(input);
+      if (url.endsWith("/workspaces/workspace-1/tree")) {
+        treeCalls += 1;
+        return jsonResponse(treeCalls === 1 ? emptyTree : afterImportTree);
+      }
+      if (url.endsWith("/workspaces/workspace-1/folders") && init?.method === "POST") {
+        postCalls.push({ url, init });
+        return jsonResponse({ id: "server-folder", workspaceId: "workspace-1", name: "Folder", position: 0, createdAt: "", updatedAt: "" }, 201);
+      }
+      if (url.endsWith("/workspaces/workspace-1/bookmarks") && init?.method === "POST") {
+        postCalls.push({ url, init });
+        return jsonResponse({ id: "server-bookmark", workspaceId: "workspace-1", folderId: "server-folder", title: "One", url: "https://example.com/one", position: 0, createdAt: "", updatedAt: "" }, 201);
+      }
+      return jsonResponse({ error: "not found" }, 404);
+    });
+
+    const html = `<DL><p><DT><H3>Folder</H3><DL><p><DT><A HREF="https://example.com/one">One</A></DL></DL>`;
+    await openImportPanelWithFile(html);
+    await userEvent.click(screen.getByRole("button", { name: /^start import$/i }));
+
+    await screen.findByText(/imported 2 of 2 items/i);
+    expect(postCalls).toHaveLength(2);
+    expect(bodyOf(postCalls[0].init)).toEqual({ parentId: null, name: "Folder" });
+    expect(bodyOf(postCalls[1].init)).toEqual({ folderId: "server-folder", title: "One", url: "https://example.com/one" });
+
+    await userEvent.click(screen.getByRole("button", { name: /close panel/i }));
+    await screen.findByText("Folder");
+    expect(screen.getByText("One")).toBeInTheDocument();
+  });
+
+  it("advances progress as each sequential create call resolves", async () => {
+    const controls: Record<string, () => void> = {};
+
+    fetchMock.mockImplementation((input, init) => {
+      const url = String(input);
+      if (url.endsWith("/workspaces/workspace-1/tree")) return jsonResponse(emptyTree);
+      if (url.endsWith("/workspaces/workspace-1/folders") && init?.method === "POST") {
+        const body = bodyOf(init);
+        const name = body.name as string;
+        return new Promise<Response>((resolve) => {
+          controls[name] = () =>
+            resolve(new Response(JSON.stringify({ id: `server-${name}`, workspaceId: "workspace-1", name, position: 0, createdAt: "", updatedAt: "" }), { status: 201, headers: { "Content-Type": "application/json" } }));
+        });
+      }
+      return jsonResponse({ error: "not found" }, 404);
+    });
+
+    const html = `<DL><p><DT><H3>Folder A</H3><DL><p></DL><DT><H3>Folder B</H3><DL><p></DL></DL>`;
+    await openImportPanelWithFile(html);
+    await userEvent.click(screen.getByRole("button", { name: /^start import$/i }));
+
+    await screen.findByText(/importing… 0 of 2/i);
+
+    controls["Folder A"]?.();
+    await screen.findByText(/importing… 1 of 2/i);
+
+    controls["Folder B"]?.();
+    await screen.findByText(/imported 2 of 2 items/i);
+  });
+});

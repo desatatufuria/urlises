@@ -10,6 +10,8 @@ import { DataState } from "../../lib/ui/components/DataState";
 import { BookmarkForm } from "./BookmarkForm";
 import { BookmarkTree } from "./BookmarkTree";
 import { FolderForm } from "./FolderForm";
+import { ImportPanel } from "./ImportPanel";
+import { ImportProgressBanner } from "./ImportProgressBanner";
 import type { MovePlan } from "../../lib/bookmarks/treeModel";
 import {
   useCreateBookmarkMutation,
@@ -22,6 +24,7 @@ import {
 } from "./mutations";
 import { useWorkspaceTree } from "./queries";
 import type { TreeActions } from "./TreeRow";
+import { useImportRunner } from "./useImportRunner";
 
 function findFolder(folders: FolderNode[], id: string): FolderNode | null {
   for (const folder of folders) {
@@ -70,6 +73,7 @@ export function BookmarksPage() {
   const updateBookmarkMutation = useUpdateBookmarkMutation(token, workspaceId ?? undefined);
   const deleteBookmarkMutation = useDeleteBookmarkMutation(token, workspaceId ?? undefined);
   const moveNodeMutation = useMoveNodeMutation(token, workspaceId ?? undefined);
+  const importRunner = useImportRunner(token, workspaceId ?? undefined);
 
   const panel = searchParams.get("panel");
   const nodeId = searchParams.get("node");
@@ -240,11 +244,18 @@ export function BookmarksPage() {
                 New folder
               </button>
             ) : null}
+            {!readOnly ? (
+              <button className="ui-button ui-button-secondary" type="button" onClick={() => openPanel({ panel: "bookmark-import" })}>
+                Import file
+              </button>
+            ) : null}
           </div>
         </div>
       </header>
 
       {notice ? <DataState compact tone={notice.tone} title={notice.title} description={notice.description} /> : null}
+
+      {!readOnly ? <ImportProgressBanner runner={importRunner} onOpenPanel={() => openPanel({ panel: "bookmark-import" })} /> : null}
 
       <BookmarkTree folders={folders} workspaceName={tree.workspace.workspaceName} actions={actions} onMove={handleMove} />
 
@@ -384,6 +395,12 @@ export function BookmarksPage() {
               Delete bookmark
             </button>
           </div>
+        </ContextPanel>
+      ) : null}
+
+      {panel === "bookmark-import" ? (
+        <ContextPanel title="Import bookmarks" onClose={closePanel}>
+          <ImportPanel runner={importRunner} folders={folders} />
         </ContextPanel>
       ) : null}
     </section>
