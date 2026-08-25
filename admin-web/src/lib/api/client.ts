@@ -1,5 +1,6 @@
 const CLIENT_ID_STORAGE_KEY = "admin-web/client-id";
 const CLIENT_ID_HEADER = "X-Client-Id";
+const SYNC_EVENT_ID_HEADER = "X-Sync-Event-Id";
 
 export class ApiError extends Error {
   status: number;
@@ -71,6 +72,11 @@ type RequestOptions = Omit<RequestInit, "body"> & {
   clientId?: string;
   body?: unknown;
   idempotencyKey?: string;
+  /** X-Sync-Event-Id — the ONLY idempotency header the bookmark/sync routes
+   *  read (sync/headers.go:14). PATCH /folders|/bookmarks 400 without it;
+   *  POST/DELETE silently mint a random one and lose retry protection.
+   *  Deliberately distinct from idempotencyKey: never set both. */
+  syncEventId?: string;
 };
 
 export async function apiRequest<T>(path: string, options: RequestOptions = {}): Promise<T> {
@@ -91,6 +97,7 @@ export async function apiRequest<T>(path: string, options: RequestOptions = {}):
 		headers.set("Content-Type", "application/json");
 	}
 	if (options.idempotencyKey) headers.set("Idempotency-Key", options.idempotencyKey);
+	if (options.syncEventId) headers.set(SYNC_EVENT_ID_HEADER, options.syncEventId);
 
   const response = await fetch(`${resolveBaseUrl()}${path}`, {
     ...options,

@@ -104,6 +104,9 @@ export function WorkspacesPage() {
                     <Link className="ui-button ui-button-secondary" to={`/access?workspace=${workspace.workspaceId}`}>
                       Manage access
                     </Link>
+                    <Link className="ui-button ui-button-secondary" to={`/bookmarks?workspace=${workspace.workspaceId}`}>
+                      Bookmarks
+                    </Link>
                     <button
                       className="ui-button ui-button-secondary"
                       type="button"
