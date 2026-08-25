@@ -26,9 +26,15 @@ export function normalizeJournal(value: Partial<ConvergenceJournal> | undefined)
 }
 
 export function createRemoteReceipt(input: RemoteReceiptInput): RemoteReceipt { return { ...input, version: 1, expectedSignatures: [shapeSignature(input.before), shapeSignature(input.expectedAfter)], status: "pending" }; }
-export function reduceRemoteCallback(journal: ConvergenceJournal, callback: RemoteCallback): { journal: ConvergenceJournal; disposition: "consumed" | "intent" } {
-  const receipts = journal.receipts ?? [], match = receipts.find((receipt) => receipt.status === "pending" && exactIdentity(receipt, callback));
-  if (match && callbackMatches(match, callback)) return { disposition: "consumed", journal: { ...journal, receipts: receipts.map((receipt) => receipt === match ? { ...receipt, status: "consumed" } : receipt) } };
+export function reduceRemoteCallback(
+  journal: ConvergenceJournal,
+  callback: RemoteCallback,
+): { journal: ConvergenceJournal; disposition: "consumed" | "rejected" | "intent"; cursor?: number } {
+  const receipts = journal.receipts ?? [],
+    match = receipts.find((receipt) => receipt.status === "pending" && exactIdentity(receipt, callback));
+  if (match && callbackMatches(match, callback))
+    return { disposition: "consumed", journal: { ...journal, receipts: receipts.map((receipt) => receipt === match ? { ...receipt, status: "consumed" } : receipt) } };
+  if (match) return { disposition: "rejected", journal: { ...journal, receipts }, cursor: match.cursor };
   return { disposition: "intent", journal: captureLocalIntent({ ...journal, receipts }, callback) };
 }
 
@@ -104,7 +110,8 @@ export function retryJournal(journal: ConvergenceJournal): ConvergenceJournal {
 }
 export function rebuildJournal(journal: ConvergenceJournal): ConvergenceJournal {
   const receipts = normalizedReceipts((journal.receipts ?? []).filter((receipt) => receipt.status === "consumed"));
-  return { ...journal, phase: "replay", receipts, repairDisposition: "rebuild", pauseReason: undefined, failedCursor: undefined };
+  const localIntents = (journal.localIntents ?? []).filter((intent) => intent.status === "acked");
+  return { ...journal, phase: "replay", receipts, localIntents, repairDisposition: "rebuild", pauseReason: undefined, failedCursor: undefined };
 }
 
 export function checkpoint(journal: ConvergenceJournal, epoch: number): ConvergenceJournal {
@@ -117,8 +124,32 @@ function operation(epoch: number, node: DesiredNode, kind: "create" | "adopt" | 
   return { id: `${epoch}:${node.backendId}:${kind}:${fingerprint}`, kind, backendId: node.backendId, chromeId, fingerprint, status: "planned" };
 }
 function shapeSignature(shape: ReceiptNodeShape): string { return JSON.stringify([shape.parentId ?? null, shape.index ?? null, shape.title, shape.url ?? null]); }
+export function canonicalUrlForComparison(raw: string): string {
+  try {
+    return new URL(raw).href;
+  } catch {
+    return raw;
+  }
+}
+function sameUrl(left: string | undefined, right: string | undefined): boolean {
+  if (left === right) return true;
+  if (left === undefined || right === undefined) return false;
+  return canonicalUrlForComparison(left) === canonicalUrlForComparison(right);
+}
+function sameShape(actual: ReceiptNodeShape, expected: ReceiptNodeShape): boolean {
+  return (actual.parentId ?? null) === (expected.parentId ?? null)
+    && (actual.index ?? null) === (expected.index ?? null)
+    && actual.title === expected.title          // C2: strict equality, never normalized
+    && sameUrl(actual.url, expected.url);
+}
 function exactIdentity(receipt: RemoteReceipt, callback: RemoteCallback): boolean { return receipt.workspaceId === callback.workspaceId && receipt.backendId === callback.backendId && receipt.chromeId === callback.chromeId && receipt.type === callback.type; }
-function callbackMatches(receipt: RemoteReceipt, callback: RemoteCallback): boolean { return validReceipt(receipt) && shapeSignature(callback.node) === receipt.expectedSignatures[1] && (callback.kind === "changed" ? receipt.move === undefined : receipt.move !== undefined && callback.move !== undefined && sameMove(receipt.move, callback.move)); }
+function callbackMatches(receipt: RemoteReceipt, callback: RemoteCallback): boolean {
+  return validReceipt(receipt)
+    && sameShape(callback.node, receipt.expectedAfter)
+    && (callback.kind === "changed"
+      ? receipt.move === undefined
+      : receipt.move !== undefined && callback.move !== undefined && sameMove(receipt.move, callback.move));
+}
 function sameMove(left: NonNullable<RemoteReceipt["move"]>, right: NonNullable<RemoteReceipt["move"]>): boolean { return left.oldParentId === right.oldParentId && left.oldIndex === right.oldIndex && left.parentId === right.parentId && left.index === right.index; }
 function validReceipt(receipt: RemoteReceipt): boolean { return receipt.version === 1 && (receipt.status === "pending" || receipt.status === "consumed") && receipt.expectedSignatures?.[0] === shapeSignature(receipt.before) && receipt.expectedSignatures?.[1] === shapeSignature(receipt.expectedAfter); }
 function pruneReceipts(receipts: RemoteReceipt[]): RemoteReceipt[] { const consumed = receipts.filter((receipt) => receipt.status === "consumed"); return receipts.filter((receipt) => receipt.status !== "consumed" || !consumed.slice(0, -20).includes(receipt)); }

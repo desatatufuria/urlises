@@ -1052,7 +1052,7 @@ test("replay gap pauses the workspace without destructive resync", async () => {
   assert.equal(projection.convergenceJournal?.pauseReason, "ambiguous-predecessor");
 });
 
-test("Retry keeps an unproven receipt paused and Rebuild is the only destructive workspace action", async () => {
+test("Retry keeps an unproven receipt paused and Rebuild is the only destructive workspace action, dropping stale queued local intents", async () => {
   const journal = { version: 1, phase: "paused", pauseReason: "final-verification-failed", failedCursor: 6, repairDisposition: "retry", operations: [], attempts: 0, receipts: [{ version: 1, workspaceId: "workspace-1", backendId: "bookmark-1", chromeId: "bookmark-node", type: "bookmark", before: { title: "Before" }, expectedAfter: { title: "After" }, expectedSignatures: ["bad"], eventId: "evt-6", cursor: 6, status: "pending" }], localIntents: [{ eventId: "local-1", kind: "changed", status: "queued", payload: { workspaceId: "workspace-1", backendId: "bookmark-1", chromeId: "bookmark-node", type: "bookmark", kind: "changed", node: { id: "bookmark-node", title: "Local" } } }] };
   await setState({ ...createRuntimeState({ lastCursor: 5 }), projectionsByWorkspaceId: { "workspace-1": createProjection({ lastCursor: 5, convergenceJournal: journal }) } });
   await retryWorkspace("workspace-1");
@@ -1065,7 +1065,10 @@ test("Retry keeps an unproven receipt paused and Rebuild is the only destructive
   await rebuildWorkspace("workspace-1");
   projection = (await getState()).projectionsByWorkspaceId["workspace-1"];
   assert.equal(fetchLog.filter((url) => url.endsWith("/tree")).length, 1);
-  assert.equal(projection.convergenceJournal?.localIntents.length, 1);
+  // ADR-005: the pre-rebuild "queued" (not "acked") local intent must not survive Rebuild — its
+  // Chrome node is destroyed by rebuild regardless, and keeping the record would re-pause the
+  // freshly-rebuilt workspace on the next drainLocalIntentsNow (the exact production incident).
+  assert.equal(projection.convergenceJournal?.localIntents.length, 0);
   assert.equal(projection.convergenceJournal?.phase, "live");
 });
 
