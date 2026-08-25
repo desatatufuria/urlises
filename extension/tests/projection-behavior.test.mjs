@@ -8,6 +8,7 @@ const storageData = new Map();
 const bookmarkNodes = new Map();
 let nextBookmarkId = 100;
 let enforceStrictIndices = false;
+let asyncBookmarkCallbacks = false;
 let storageSetFailure;
 
 function cloneNode(node) {
@@ -128,17 +129,24 @@ globalThis.chrome = {
       callback([cloneNode(bookmarkNodes.get("0"))]);
     },
     create(details, callback) {
-      const parent = bookmarkNodes.get(details.parentId);
-      if (enforceStrictIndices && typeof details.index === "number" && details.index > (parent?.children?.length ?? 0)) {
-        globalThis.chrome.runtime.lastError = { message: "Index out of bounds." };
-        callback(undefined);
-        globalThis.chrome.runtime.lastError = null;
+      const run = () => {
+        const parent = bookmarkNodes.get(details.parentId);
+        if (enforceStrictIndices && typeof details.index === "number" && details.index > (parent?.children?.length ?? 0)) {
+          globalThis.chrome.runtime.lastError = { message: "Index out of bounds." };
+          callback(undefined);
+          globalThis.chrome.runtime.lastError = null;
+          return;
+        }
+        const id = String(nextBookmarkId++);
+        bookmarkNodes.set(id, createBookmarkNode({ id, ...details }));
+        rebuildBookmarkChildren();
+        callback(cloneNode(bookmarkNodes.get(id)));
+      };
+      if (asyncBookmarkCallbacks) {
+        setTimeout(run, 0);
         return;
       }
-      const id = String(nextBookmarkId++);
-      bookmarkNodes.set(id, createBookmarkNode({ id, ...details }));
-      rebuildBookmarkChildren();
-      callback(cloneNode(bookmarkNodes.get(id)));
+      run();
     },
     update(id, changes, callback) {
       const node = bookmarkNodes.get(id);
@@ -271,7 +279,7 @@ import {
 import { createRemoteReceipt } from "../dist/background/convergence.js";
 import { getState, setState } from "../dist/shared/storage.js";
 import { connectWorkspaceSocket } from "../dist/shared/websocket.js";
-import { LOCAL_ONLY_FOLDER_TITLE } from "../dist/shared/runtime.js";
+import { LOCAL_ONLY_FOLDER_TITLE, ROOT_FOLDER_TITLE } from "../dist/shared/runtime.js";
 
 const fetchLog = [];
 let fetchHandlers = [];
@@ -419,6 +427,7 @@ async function resetRuntime() {
   fetchHandlers = [];
   pendingTicketResponse = undefined;
   enforceStrictIndices = false;
+  asyncBookmarkCallbacks = false;
   storageSetFailure = undefined;
   globalThis.chrome.runtime.lastError = null;
   projectionTestHooks.resetRuntimeState();
@@ -1124,6 +1133,169 @@ test("rebuildWorkspace creates the local-only folder and does not duplicate it o
   localOnlyChildren = (bookmarkNodes.get(workspaceChromeId)?.children ?? []).filter((node) => node.title === LOCAL_ONLY_FOLDER_TITLE);
   assert.equal(localOnlyChildren.length, 1, "a repeated rebuild must not duplicate the local-only folder");
   assert.equal(projection.localOnlyChromeId, localOnlyChildren[0].id);
+});
+
+test("concurrent rebuilds of one workspace produce a single managed folder with a stable chrome id", async () => {
+  asyncBookmarkCallbacks = true;
+  const workspace = { workspaceId: "workspace-1", workspaceName: "Workspace", workspaceType: "shared", organizationId: "org-1", organizationName: "Org", role: "editor" };
+  fetchHandlers = [
+    { match: (url) => url.endsWith("/workspaces/workspace-1/tree"), respond: () => jsonResponse({ workspace, folders: [] }) },
+    { match: (url) => url.includes("afterCursor=0"), respond: () => jsonResponse({ currentCursor: 0, events: [] }) },
+  ];
+  await setState({ ...createRuntimeState(), projectionsByWorkspaceId: { "workspace-1": createEditorProjection() } });
+
+  const a = rebuildWorkspace("workspace-1");
+  const b = rebuildWorkspace("workspace-1");
+  await Promise.all([a, b]);
+
+  // Global counts (not scoped to whichever org/workspace the race happened to leave referenced
+  // in projection state): a concurrent same-workspace burst must not leave any orphaned duplicate
+  // organization or workspace folder anywhere in the tree.
+  const allNodes = [...bookmarkNodes.values()];
+  const organizationFolders = allNodes.filter((node) => !node.url && node.title === "Org");
+  assert.equal(organizationFolders.length, 1, "RED: a concurrent rebuild burst must not create a duplicate organization folder");
+  const workspaceFolders = allNodes.filter((node) => !node.url && node.title === "Workspace");
+  assert.equal(workspaceFolders.length, 1, "RED: a concurrent rebuild burst must not create a duplicate managed workspace folder");
+
+  let projection = (await getState()).projectionsByWorkspaceId["workspace-1"];
+  const workspaceChromeId = projection.workspaceChromeId;
+  assert.equal(workspaceChromeId, workspaceFolders[0].id, "RED: workspaceChromeId must reference the single surviving managed folder, not an orphaned duplicate");
+
+  // Stability: a follow-up rebuild of the now-established workspace must resolve to the SAME
+  // chrome id rather than drifting to a different duplicate left behind by the burst.
+  fetchHandlers = [
+    { match: (url) => url.endsWith("/workspaces/workspace-1/tree"), respond: () => jsonResponse({ workspace, folders: [] }) },
+    { match: (url) => url.includes("afterCursor=0"), respond: () => jsonResponse({ currentCursor: 0, events: [] }) },
+  ];
+  await rebuildWorkspace("workspace-1");
+  projection = (await getState()).projectionsByWorkspaceId["workspace-1"];
+  assert.equal(projection.workspaceChromeId, workspaceChromeId, "RED: the workspace's chrome id must remain stable across and after a concurrent rebuild burst");
+
+  const localOnlyChildren = (bookmarkNodes.get(workspaceChromeId)?.children ?? []).filter((node) => !node.url && node.title === LOCAL_ONLY_FOLDER_TITLE);
+  assert.equal(localOnlyChildren.length, 1, "exactly one local-only folder must survive the concurrent burst");
+  assert.equal(projection.localOnlyChromeId, localOnlyChildren[0].id);
+
+  // C5: a clean, non-churning concurrent rebuild burst must never fire the ADR-304 diagnostic —
+  // that log is reserved for a persisted local-only id that fails to resolve under the current
+  // workspace folder, which does not happen once the burst converges correctly.
+  const finalState = await getState();
+  assert.equal(finalState.diagnostics.some((entry) => entry.level === "warn"), false, "a clean concurrent rebuild burst must not log a warn diagnostic");
+});
+
+test("concurrent rebuilds of two workspaces in one organization share one root and one organization folder", async () => {
+  asyncBookmarkCallbacks = true;
+  const workspaceA = { workspaceId: "workspace-1", workspaceName: "Workspace A", workspaceType: "shared", organizationId: "org-1", organizationName: "Org", role: "editor" };
+  const workspaceB = { workspaceId: "workspace-2", workspaceName: "Workspace B", workspaceType: "shared", organizationId: "org-1", organizationName: "Org", role: "editor" };
+  fetchHandlers = [
+    { match: (url) => url.endsWith("/workspaces/workspace-1/tree"), respond: () => jsonResponse({ workspace: workspaceA, folders: [] }) },
+    { match: (url) => url.endsWith("/workspaces/workspace-2/tree"), respond: () => jsonResponse({ workspace: workspaceB, folders: [] }) },
+    { match: (url) => url.includes("afterCursor=0"), respond: () => jsonResponse({ currentCursor: 0, events: [] }) },
+  ];
+  await setState({
+    ...createRuntimeState(),
+    selectedWorkspaceIds: ["workspace-1", "workspace-2"],
+    projectionsByWorkspaceId: {
+      "workspace-1": createProjection({ workspace: workspaceA }),
+      "workspace-2": createProjection({ workspace: workspaceB }),
+    },
+  });
+
+  const a = rebuildWorkspace("workspace-1");
+  const b = rebuildWorkspace("workspace-2");
+  await Promise.all([a, b]);
+
+  rebuildBookmarkChildren();
+  const container = bookmarkNodes.get("1");
+  const rootFolders = (container?.children ?? []).filter((node) => !node.url && node.title === ROOT_FOLDER_TITLE);
+  assert.equal(rootFolders.length, 1, "RED: a cross-workspace concurrent rebuild burst must not create a duplicate shared root folder");
+  const rootFolder = rootFolders[0];
+
+  const organizationFolders = (rootFolder.children ?? []).filter((node) => !node.url && node.title === "Org");
+  assert.equal(organizationFolders.length, 1, "RED: a cross-workspace concurrent rebuild burst must not create a duplicate organization folder");
+  const organizationFolder = organizationFolders[0];
+
+  const workspaceFolders = (organizationFolder.children ?? []).filter((node) => !node.url);
+  assert.equal(workspaceFolders.length, 2, "exactly one folder per workspace must exist under the shared organization folder");
+  assert.notEqual(workspaceFolders[0].id, workspaceFolders[1].id, "the two workspaces must not collapse onto the same folder");
+
+  const state = await getState();
+  const projectionA = state.projectionsByWorkspaceId["workspace-1"];
+  const projectionB = state.projectionsByWorkspaceId["workspace-2"];
+  assert.equal(projectionA.rootChromeId, rootFolder.id, "RED: workspace-1 must reference the single shared root folder");
+  assert.equal(projectionB.rootChromeId, rootFolder.id, "RED: workspace-2 must reference the single shared root folder");
+  assert.equal(projectionA.organizationChromeId, organizationFolder.id, "RED: workspace-1 must reference the single shared organization folder");
+  assert.equal(projectionB.organizationChromeId, organizationFolder.id, "RED: workspace-2 must reference the single shared organization folder");
+});
+
+test("an unrecognizable local-only folder is logged before its identity is replaced", async () => {
+  bookmarkNodes.set("root-node", createBookmarkNode({ id: "root-node", parentId: "1", title: ROOT_FOLDER_TITLE, index: 0 }));
+  bookmarkNodes.set("org-node", createBookmarkNode({ id: "org-node", parentId: "root-node", title: "Org", index: 0 }));
+  bookmarkNodes.set("workspace-node", createBookmarkNode({ id: "workspace-node", parentId: "org-node", title: "Workspace", index: 0 }));
+  bookmarkNodes.set("local-only-node", createBookmarkNode({ id: "local-only-node", parentId: "workspace-node", title: LOCAL_ONLY_FOLDER_TITLE, index: 0 }));
+  rebuildBookmarkChildren();
+
+  const workspace = { workspaceId: "workspace-1", workspaceName: "Workspace", workspaceType: "shared", organizationId: "org-1", organizationName: "Org", role: "editor" };
+  await setState({
+    ...createRuntimeState(),
+    projectionsByWorkspaceId: {
+      "workspace-1": createEditorProjection({
+        workspaceChromeId: "workspace-node",
+        localOnlyChromeId: "stale-local-only-id",
+        rootChromeId: "root-node",
+        organizationChromeId: "org-node",
+      }),
+    },
+  });
+  fetchHandlers = [
+    { match: (url) => url.endsWith("/workspaces/workspace-1/tree"), respond: () => jsonResponse({ workspace, folders: [] }) },
+    { match: (url) => url.includes("afterCursor=0"), respond: () => jsonResponse({ currentCursor: 0, events: [] }) },
+  ];
+
+  await rebuildWorkspace("workspace-1");
+
+  const state = await getState();
+  const projection = state.projectionsByWorkspaceId["workspace-1"];
+  const warnEntry = state.diagnostics.find((entry) => entry.level === "warn");
+  assert.notEqual(warnEntry, undefined, "RED: an unresolvable persisted local-only id must be logged before recreation");
+  assert.match(warnEntry.message, /stale-local-only-id/, "the diagnostic must identify the unresolvable persisted id");
+  assert.match(warnEntry.message, /reused title match/, "the diagnostic must state whether it reused a title match or created a folder");
+
+  assert.equal(projection.localOnlyChromeId, "local-only-node", "RED: the pre-existing local-only folder must be reused by title, not recreated");
+  const localOnlyChildren = (bookmarkNodes.get("workspace-node")?.children ?? []).filter((node) => !node.url && node.title === LOCAL_ONLY_FOLDER_TITLE);
+  assert.equal(localOnlyChildren.length, 1, "no duplicate local-only folder must be created");
+});
+
+test("a concurrent rebuild burst never orphans the local-only folder's contents", async () => {
+  asyncBookmarkCallbacks = true;
+  const workspace = { workspaceId: "workspace-1", workspaceName: "Workspace", workspaceType: "shared", organizationId: "org-1", organizationName: "Org", role: "editor" };
+  fetchHandlers = [
+    { match: (url) => url.endsWith("/workspaces/workspace-1/tree"), respond: () => jsonResponse({ workspace, folders: [] }) },
+    { match: (url) => url.includes("afterCursor=0"), respond: () => jsonResponse({ currentCursor: 0, events: [] }) },
+  ];
+  await setState({ ...createRuntimeState(), projectionsByWorkspaceId: { "workspace-1": createEditorProjection() } });
+
+  // First bootstrap is itself a concurrent burst: pre-fix, this can create duplicate
+  // organization/workspace/local-only folders, with the "winning" projection referencing only
+  // one branch. Seed a bookmark into whichever local-only folder is currently referenced.
+  const a = rebuildWorkspace("workspace-1");
+  const b = rebuildWorkspace("workspace-1");
+  await Promise.all([a, b]);
+  const afterBurst = (await getState()).projectionsByWorkspaceId["workspace-1"];
+  const seeded = await new Promise((resolve) => chrome.bookmarks.create({ parentId: afterBurst.localOnlyChromeId, title: "My note", url: "https://example.com/note", index: 0 }, resolve));
+
+  // A follow-up rebuild is enough, pre-fix, to make ensureFolderByTitle "snap" to a
+  // different pre-existing duplicate branch than the one just seeded, silently orphaning the
+  // seeded content under a folder no longer referenced by projection state — the exact
+  // "Personal (not synced) freshly empty" field symptom.
+  fetchHandlers = [
+    { match: (url) => url.endsWith("/workspaces/workspace-1/tree"), respond: () => jsonResponse({ workspace, folders: [] }) },
+    { match: (url) => url.includes("afterCursor=0"), respond: () => jsonResponse({ currentCursor: 0, events: [] }) },
+  ];
+  await rebuildWorkspace("workspace-1");
+
+  const projection = (await getState()).projectionsByWorkspaceId["workspace-1"];
+  assert.equal(bookmarkNodes.has(seeded.id), true, "RED: a concurrent rebuild burst must not delete content inside the local-only folder");
+  assert.equal(bookmarkNodes.get(seeded.id).parentId, projection.localOnlyChromeId, "RED: the seeded bookmark must remain reachable under the projection's local-only folder, not silently orphaned under an abandoned duplicate");
 });
 
 test("creating a bookmark directly at the workspace root relocates it into the local-only folder instead of syncing or resyncing", async () => {

@@ -141,6 +141,7 @@ type WorkspaceResyncLock = {
 };
 
 const workspaceLocks = new Map<string, WorkspaceResyncLock>();
+const rebuildLocks = new Map<string, WorkspaceResyncLock>();
 
 export async function initializeBackground(): Promise<void> {
   setSessionPauseHandler(closeAllSockets);
@@ -401,7 +402,11 @@ export async function retryWorkspace(workspaceId: string): Promise<UiState> {
 export async function rebuildWorkspace(workspaceId: string): Promise<UiState> {
   await updateProjectionState(workspaceId, (current) => { current.convergenceJournal = rebuildJournal(current.convergenceJournal ?? emptyJournal()); });
   volatileRepairGates.delete(workspaceId);
-  if (await doResyncWorkspace(workspaceId, "explicit rebuild", "recovering")) await connectWorkspace(workspaceId);
+  let resynced = false;
+  await runCoalescedWorkspaceTask(rebuildLocks, workspaceId, "explicit rebuild", async (reason) => {
+    resynced = await doResyncWorkspace(workspaceId, reason, "recovering");
+  });
+  if (resynced) await connectWorkspace(workspaceId);
   return getUiState();
 }
 
@@ -1093,11 +1098,13 @@ async function doResyncWorkspace(workspaceId: string, reason: string, targetHeal
 async function ensureLocalOnlyFolder(workspaceId: string, workspaceChromeId: string): Promise<string> {
   const projection = (await getState()).projectionsByWorkspaceId[workspaceId];
   const existingId = projection?.localOnlyChromeId;
+  let unresolved: "missing" | "reparented" | undefined;
   if (existingId) {
     const existingNode = await getNode(existingId);
     if (existingNode && existingNode.parentId === workspaceChromeId) {
       return existingId;
     }
+    unresolved = existingNode ? "reparented" : "missing";
   }
 
   const children = await getChildren(workspaceChromeId);
@@ -1106,6 +1113,14 @@ async function ensureLocalOnlyFolder(workspaceId: string, workspaceChromeId: str
     async () => createFolder(workspaceChromeId, LOCAL_ONLY_FOLDER_TITLE),
     [workspaceChromeId],
   );
+
+  if (unresolved) {
+    await log(
+      `sync:${workspaceId}`,
+      `local-only folder ${existingId} ${unresolved} under workspace ${workspaceChromeId}; ${reused ? `reused title match ${folderNode.id}` : `created ${folderNode.id}`}`,
+      "warn",
+    );
+  }
 
   await updateProjectionState(workspaceId, (current) => {
     current.localOnlyChromeId = folderNode.id;
@@ -2478,6 +2493,7 @@ function resetRuntimeState(): void {
   }
   abandonedMutationKeys.clear();
   workspaceLocks.clear();
+  rebuildLocks.clear();
 }
 
 function resolveWorkspace(state: Awaited<ReturnType<typeof getState>>, workspaceId: string): WorkspaceAccess | undefined {
