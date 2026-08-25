@@ -234,6 +234,11 @@ export interface ProjectionState {
   recoveryStartedAt?: string;
   degradedAt?: string;
   degradedReason?: string;
+  // Bounded silent auto-repair budget for this workspace (design ADR-401/402/403). Incremented
+  // atomically inside the same updateProjectionState slot that decides to pause; reset to 0 only
+  // on a genuine return to live (markProjectionLive, doResyncWorkspace's live branch,
+  // attemptSubtreeRecovery's success updater) — never on the repair path itself (enterRecovery).
+  autoRepairAttempts: number;
   lastActivityAt?: string;
   lastActivity?: ProjectionActivityDetail;
   activityRevision?: number;

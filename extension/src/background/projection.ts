@@ -83,8 +83,23 @@ const liveApplyQueues = new Map<string, Promise<void>>();
 const suppressedChromeIds = new Set<string>();
 const abandonedMutationKeys = new Map<string, ReturnType<typeof setTimeout>>();
 const volatileRepairGates = new Map<string, RepairGate>();
+// Auto-repair in-flight claim registry (design ADR-401 §3.1). Not a mutex — nothing production
+// ever awaits a claim's promise, only the settleAutoRepair test hook does. Written and read only
+// inside updateProjectionState updaters (plus runAutoRepair's identity checks), so "is a chain
+// already running" is decided in the same serialized slot that decides to pause (§3.2): the
+// property that makes two concurrent pauseWorkspace calls for one workspace structurally unable
+// to both start a chain.
+type AutoRepairClaim = { promise: Promise<void>; release: () => void };
+const autoRepairFlights = new Map<string, AutoRepairClaim>();
+const MAX_AUTO_REPAIR_ATTEMPTS = 2;
 const MAX_SILENT_RECOVERY_ATTEMPTS = 3;
 const ABANDONED_MUTATION_TTL_MS = 1500;
+
+function createAutoRepairClaim(): AutoRepairClaim {
+  let release!: () => void;
+  const promise = new Promise<void>((resolve) => { release = resolve; });
+  return { promise, release };
+}
 
 type RemoteApplyDiagnosticContext = Record<string, string | number | boolean | undefined>;
 type RecoveryReason = "missing-parent" | "stale-mapping" | "local-404";
@@ -132,6 +147,18 @@ export const projectionTestHooks = {
   resetRuntimeState,
   volatileRepairGate: (workspaceId: string) => volatileRepairGates.get(workspaceId),
   socketRuntimeCounts: () => ({ tokens: socketTokens.size, closers: socketClosers.size, flights: socketConnectFlights.size }),
+  // Bounded fuse for auto-repair chains (Slice C). With at most MAX_AUTO_REPAIR_ATTEMPTS chains
+  // per budget, maxChains = 4 can never be legitimately exhausted — if it ever is, this throws a
+  // named error instead of letting the suite hang silently (design §11.4, §12.1).
+  settleAutoRepair: async (workspaceId: string, maxChains = 4): Promise<void> => {
+    for (let round = 0; round < maxChains; round += 1) {
+      const claim = autoRepairFlights.get(workspaceId);
+      if (!claim) return;
+      await claim.promise;
+    }
+    throw new Error(`auto-repair for ${workspaceId} did not quiesce within ${maxChains} chains`);
+  },
+  autoRepairFlightCount: (): number => autoRepairFlights.size,
 };
 
 type WorkspaceResyncLock = {
@@ -435,21 +462,16 @@ async function settleLocalMutation(
 async function captureLocalUpdateOrMove(context: LocalIntentContext, chromeId: string, kind: "changed" | "moved"): Promise<void> {
   const node = await getNode(chromeId);
   if (!node) {
-    await updateProjectionState(context.workspaceId, (projection) => {
-      const journal = projection.convergenceJournal ?? emptyJournal();
-      journal.phase = "paused";
-      journal.pauseReason = projection.lastCursor === 0 ? "cursor-zero-read-failed" : "ambiguous-operation";
-      projection.convergenceJournal = journal;
-    });
+    // A missing or out-of-workspace Chrome node is a mapping-integrity failure, not a
+    // resync-shaped one — gateRemoteEffect's default ("retry") is what these reasons are for, and
+    // the auto-repair layer will escalate to rebuild on its own if a receipt is pending (ADR-405).
+    const cursor = (await getState()).projectionsByWorkspaceId[context.workspaceId]?.lastCursor ?? 0;
+    await pauseWorkspace(context.workspaceId, cursor, cursor === 0 ? "cursor-zero-read-failed" : "ambiguous-operation");
     return;
   }
   if (!await isWithinWorkspace(node, context.projection.workspaceChromeId)) {
-    await updateProjectionState(context.workspaceId, (projection) => {
-      const journal = projection.convergenceJournal ?? emptyJournal();
-      journal.phase = "paused";
-      journal.pauseReason = "stale-mapping";
-      projection.convergenceJournal = journal;
-    });
+    const cursor = (await getState()).projectionsByWorkspaceId[context.workspaceId]?.lastCursor ?? 0;
+    await pauseWorkspace(context.workspaceId, cursor, "stale-mapping");
     return;
   }
   await updateProjectionState(context.workspaceId, (projection) => {
@@ -924,9 +946,15 @@ export async function runCoalescedWorkspaceTask(
   await lock.active;
 }
 
+// These eight call sites all mean "the local tree no longer matches canonical state". Replaying
+// from lastCursor can never close that gap — only rematerialization can — so the pause must say
+// "rebuild". That is what lets the bounded auto-repair layer spend an attempt on the action that
+// can actually work, and what stops the popup offering a Retry that is guaranteed to fail.
+// Rematerialization still never runs inline here: it only ever happens through the counted,
+// claimed, capped layer added in Slice C (spec.md: Isolation, Repair, and Diagnostics).
 async function resyncWorkspace(workspaceId: string, reason: string): Promise<void> {
-  await pauseWorkspace(workspaceId, (await getState()).projectionsByWorkspaceId[workspaceId]?.lastCursor ?? 0, "ambiguous-predecessor");
-  await log(`repair:${workspaceId}`, `automatic resync disabled: ${reason}`, "warn");
+  await pauseWorkspace(workspaceId, (await getState()).projectionsByWorkspaceId[workspaceId]?.lastCursor ?? 0, "ambiguous-predecessor", { repair: "rebuild" });
+  await log(`repair:${workspaceId}`, `resync required: ${reason}`, "warn");
 }
 
 async function logRejectedMutation(
@@ -1080,6 +1108,7 @@ async function doResyncWorkspace(workspaceId: string, reason: string, targetHeal
         projectionState.recoveryStartedAt = undefined;
         projectionState.degradedAt = undefined;
         projectionState.degradedReason = undefined;
+        projectionState.autoRepairAttempts = 0; // ADR-403: genuine return to live restores the full budget
       }
     }, tree.workspace);
     await recordActivity(workspaceId);
@@ -1884,6 +1913,7 @@ async function markProjectionLive(workspaceId: string, currentCursor?: number): 
     projection.degradedAt = undefined;
     projection.degradedReason = undefined;
     projection.socketConnected = true;
+    projection.autoRepairAttempts = 0; // ADR-403: genuine return to live restores the full budget
     if (projection.convergenceJournal) {
       projection.convergenceJournal.phase = "live";
       projection.convergenceJournal.pauseReason = undefined;
@@ -2004,21 +2034,130 @@ async function recoverWorkspace(
     return;
   }
 
-  await pauseWorkspace(workspaceId, (await getState()).projectionsByWorkspaceId[workspaceId]?.lastCursor ?? 0, "ambiguous-predecessor");
+  await pauseWorkspace(workspaceId, (await getState()).projectionsByWorkspaceId[workspaceId]?.lastCursor ?? 0, "ambiguous-predecessor", { repair: "rebuild" });
 }
 
-async function pauseWorkspace(workspaceId: string, cursor: number, reason: Parameters<typeof gateRemoteEffect>[2]): Promise<void> {
+// Pure by construction: no getState, no await. That is what lets pauseWorkspace call it from
+// inside the atomic updater, on the very projection object it is mutating, while runAutoRepair's
+// successor call sees identical semantics from a fresh read (design ADR-406).
+function planAutoRepair(projection: ProjectionState): "retry" | "rebuild" | undefined {
+  const journal = projection.convergenceJournal;
+  if (!journal || journal.phase !== "paused") return undefined;
+
+  // Mirrors retryJournal (convergence.ts) exactly, so the layer never dispatches a retryWorkspace
+  // that would return without doing anything (projection.ts:396).
+  const needsRebuild = journal.repairDisposition === "rebuild"
+    || journal.pauseReason === "bootstrap-required"
+    || (journal.receipts ?? []).some((receipt) => receipt.status === "pending");
+  if (!needsRebuild) return "retry";
+
+  // ADR-406 / spec.md "Unacknowledged intent MUST NOT be pruned": rebuildJournal
+  // (convergence.ts) keeps only acked intents, so an automatic rebuild is allowed only when there
+  // is nothing unacknowledged to lose. Otherwise degrade and let the human decide.
+  return (journal.localIntents ?? []).some((intent) => intent.status !== "acked") ? undefined : "rebuild";
+}
+
+async function pauseWorkspace(
+  workspaceId: string,
+  cursor: number,
+  reason: Parameters<typeof gateRemoteEffect>[2],
+  options: { repair?: "retry" | "rebuild" } = {},
+): Promise<void> {
+  const claim = createAutoRepairClaim();
   let disposition: "retry" | "rebuild" = "retry";
-  await updateProjectionState(workspaceId, (projection) => {
-    projection.convergenceJournal = gateRemoteEffect(projection.convergenceJournal ?? emptyJournal(), cursor, reason);
-    if (projection.convergenceJournal.receipts?.some((receipt) => receipt.status === "pending")) projection.convergenceJournal.repairDisposition = "rebuild";
-    disposition = projection.convergenceJournal.repairDisposition ?? "retry";
-    projection.status = "error";
-    projection.health = "degraded";
-    projection.degradedReason = reason;
-    projection.degradedAt = new Date().toISOString();
-  });
-  await log(`repair:${workspaceId}`, `paused cursor ${cursor}; ${reason}; disposition ${disposition}`, "warn");
+  let armed: "retry" | "rebuild" | undefined;
+  let attempt = 0;
+
+  try {
+    await updateProjectionState(workspaceId, (projection) => {
+      projection.convergenceJournal = gateRemoteEffect(projection.convergenceJournal ?? emptyJournal(), cursor, reason);
+      if (options.repair) projection.convergenceJournal.repairDisposition = options.repair;
+      if (projection.convergenceJournal.receipts?.some((receipt) => receipt.status === "pending")) projection.convergenceJournal.repairDisposition = "rebuild";
+      disposition = projection.convergenceJournal.repairDisposition ?? "retry";
+
+      // Decide and claim in ONE slot. No await may ever be introduced between these three
+      // statements — that gap is what let a prior implementation start two chains for one
+      // workspace (design §3.2).
+      const chainInFlight = autoRepairFlights.has(workspaceId);
+      const attempts = projection.autoRepairAttempts ?? 0;
+      const action = chainInFlight || attempts >= MAX_AUTO_REPAIR_ATTEMPTS ? undefined : planAutoRepair(projection);
+
+      if (chainInFlight || action) {
+        projection.status = "syncing";
+        projection.health = "recovering";
+        projection.lastError = reason;
+        projection.degradedAt = undefined;
+        projection.degradedReason = undefined;
+        if (action) {
+          projection.autoRepairAttempts = attempts + 1; // the ONLY write to this counter
+          attempt = attempts + 1;
+          autoRepairFlights.set(workspaceId, claim);
+          armed = action;
+        }
+        return;
+      }
+
+      projection.status = "error";
+      projection.health = "degraded";
+      projection.degradedReason = reason;
+      projection.degradedAt = new Date().toISOString();
+    });
+  } catch (error) {
+    if (autoRepairFlights.get(workspaceId) === claim) autoRepairFlights.delete(workspaceId);
+    claim.release();
+    throw error; // C6: applyRemoteEnvelope's catch still fails closed
+  }
+
+  try {
+    await log(`repair:${workspaceId}`, armed
+      ? `paused cursor ${cursor}; ${reason}; disposition ${disposition}; auto-repair ${armed} attempt ${attempt}/${MAX_AUTO_REPAIR_ATTEMPTS}`
+      : `paused cursor ${cursor}; ${reason}; disposition ${disposition}`, "warn");
+  } finally {
+    if (armed) void runAutoRepair(workspaceId, armed, claim);
+  }
+}
+
+async function runAutoRepair(workspaceId: string, action: "retry" | "rebuild", claim: AutoRepairClaim): Promise<void> {
+  let failure: string | undefined;
+  try {
+    const state = await getState();
+    if (!state.session || !state.selectedWorkspaceIds.includes(workspaceId) || !state.projectionsByWorkspaceId[workspaceId]) return;
+    if (autoRepairFlights.get(workspaceId) !== claim) return; // logout / resetRuntimeState took it
+    await log(`repair:${workspaceId}`, `auto-repair ${action} started`, "info");
+    if (action === "rebuild") await rebuildWorkspace(workspaceId);
+    else await retryWorkspace(workspaceId);
+  } catch (error) {
+    failure = describeError(error);
+  } finally {
+    const owned = autoRepairFlights.get(workspaceId) === claim;
+    if (owned) autoRepairFlights.delete(workspaceId);
+    try {
+      if (owned) await settleAfterAutoRepair(workspaceId, failure);
+    } catch {
+      // best-effort: settleAfterAutoRepair already fails closed internally
+    }
+    claim.release(); // released LAST — see design §4.2
+  }
+}
+
+async function settleAfterAutoRepair(workspaceId: string, failure?: string): Promise<void> {
+  const projection = (await getState()).projectionsByWorkspaceId[workspaceId];
+  if (!projection) return;
+  const journal = projection.convergenceJournal;
+  if (journal?.phase === "paused" && journal.pauseReason) {
+    // Re-enter the single decision point with the pause the repair left behind: it either arms
+    // attempt 2 (incrementing in its own slot) or degrades.
+    await pauseWorkspace(workspaceId, journal.failedCursor ?? projection.lastCursor, journal.pauseReason, { repair: journal.repairDisposition });
+    return;
+  }
+  if (failure && projection.health === "recovering") {
+    await updateProjectionState(workspaceId, (current) => { // never leave "recovering" with no chain
+      current.status = "error";
+      current.health = "degraded";
+      current.degradedReason = failure;
+      current.degradedAt = new Date().toISOString();
+    });
+  }
 }
 
 async function enterRecovery(workspaceId: string, reason: string): Promise<boolean> {
@@ -2210,7 +2349,7 @@ async function recoverSubtreeThenWorkspace(
     parentBackendId: scope.parentBackendId,
   }, "warn");
 
-  await pauseWorkspace(scope.workspaceId, (await getState()).projectionsByWorkspaceId[scope.workspaceId]?.lastCursor ?? 0, "ambiguous-predecessor");
+  await pauseWorkspace(scope.workspaceId, (await getState()).projectionsByWorkspaceId[scope.workspaceId]?.lastCursor ?? 0, "ambiguous-predecessor", { repair: "rebuild" });
 }
 
 async function attemptSubtreeRecovery(
@@ -2280,6 +2419,7 @@ async function attemptSubtreeRecovery(
     current.degradedAt = undefined;
     current.degradedReason = undefined;
     current.socketConnected = true;
+    current.autoRepairAttempts = 0; // ADR-403: genuine return to live restores the full budget
   }, tree.workspace);
   await recordActivity(scope.workspaceId);
   await log(`sync:${scope.workspaceId}`, `recovered subtree (${reason})`, "info");
@@ -2494,6 +2634,10 @@ function resetRuntimeState(): void {
   abandonedMutationKeys.clear();
   workspaceLocks.clear();
   rebuildLocks.clear();
+  for (const claim of autoRepairFlights.values()) {
+    claim.release();
+  }
+  autoRepairFlights.clear();
 }
 
 function resolveWorkspace(state: Awaited<ReturnType<typeof getState>>, workspaceId: string): WorkspaceAccess | undefined {
