@@ -1478,12 +1478,17 @@ async function applyRemoteBookmarkUpsert(
   const updateReceipt = existing.title !== bookmark.title || existing.url !== bookmark.url;
   if (updateReceipt && !canPersistReceipt(projection.convergenceJournal ?? emptyJournal(), event.cursor)) { await pauseWorkspace(workspaceId, event.cursor, "receipt-capacity"); return true; }
   if (updateReceipt) await persistRemoteReceipt(workspaceId, event, bookmark.id, chromeId, "bookmark", existing, { parentId: existing.parentId!, index: existing.index!, title: bookmark.title, url: bookmark.url });
-  try {
-    if (existing.title !== bookmark.title || existing.url !== bookmark.url) {
-      await updateNode(chromeId, { title: bookmark.title, url: bookmark.url });
-    }
-  } catch (error) {
-    throw createRemoteApplyError(error, existingContext);
+  if (existing.title !== bookmark.title || existing.url !== bookmark.url) {
+    await withSuppression(
+      async () => {
+        try {
+          return await updateNode(chromeId, { title: bookmark.title, url: bookmark.url });
+        } catch (error) {
+          throw createRemoteApplyError(error, existingContext);
+        }
+      },
+      [chromeId],
+    );
   }
 
   const finalNode = await getNode(chromeId);
@@ -1517,8 +1522,8 @@ async function consumeRemoteCallback(context: LocalIntentContext, chromeId: stri
       const pendingReceipt = result.journal.receipts?.find((receipt, index) => before[index]?.status === "pending" && receipt.status === "consumed");
       if (pendingReceipt) projection.lastCursor = Math.max(projection.lastCursor, pendingReceipt.cursor);
       consumed = true;
-    } else if (before.some((receipt) => receipt.status === "pending" && receipt.workspaceId === context.workspaceId && receipt.backendId === context.backendId && receipt.chromeId === chromeId)) {
-      projection.convergenceJournal = gateRemoteEffect(result.journal, before.find((receipt) => receipt.status === "pending" && receipt.workspaceId === context.workspaceId && receipt.backendId === context.backendId && receipt.chromeId === chromeId)?.cursor ?? projection.lastCursor, "final-verification-failed");
+    } else if (result.disposition === "rejected") {
+      projection.convergenceJournal = gateRemoteEffect(result.journal, result.cursor ?? projection.lastCursor, "final-verification-failed");
     }
   });
   return consumed;
