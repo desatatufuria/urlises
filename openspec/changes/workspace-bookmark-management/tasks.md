@@ -72,30 +72,30 @@ Each unit is developed, tested, and merged into the previous unit's branch befor
 
 ## Phase A1: Transport — `syncEventId`
 
-- [ ] A1.1 RED: `admin-web/src/lib/api/client.test.ts` — `apiRequest` sets `X-Sync-Event-Id` only when `options.syncEventId` is passed; asserts it is independent of (never conflated with) `Idempotency-Key`.
-- [ ] A1.2 GREEN: `admin-web/src/lib/api/client.ts` — add `SYNC_EVENT_ID_HEADER = "X-Sync-Event-Id"` const, `syncEventId?: string` on `RequestOptions` with the doc comment from design.md, `headers.set(...)` line beside the existing `idempotencyKey` line (`:93`).
+- [x] A1.1 RED: `admin-web/src/lib/api/client.test.ts` — `apiRequest` sets `X-Sync-Event-Id` only when `options.syncEventId` is passed; asserts it is independent of (never conflated with) `Idempotency-Key`.
+- [x] A1.2 GREEN: `admin-web/src/lib/api/client.ts` — add `SYNC_EVENT_ID_HEADER = "X-Sync-Event-Id"` const, `syncEventId?: string` on `RequestOptions` with the doc comment from design.md, `headers.set(...)` line beside the existing `idempotencyKey` line (`:93`).
 
 ## Phase A2: API Layer — types, tree read, mutation signatures
 
-- [ ] A2.1 GREEN: `admin-web/src/lib/api/queryKeys.ts` — add `queryKeys.workspace(id).tree = ["workspaces", id, "tree"] as const`.
-- [ ] A2.2 GREEN: `admin-web/src/lib/api/bookmarks.ts` (new) — `BookmarkNode`/`FolderNode`/`WorkspaceTree` types (`parentId` normalized `?? null` everywhere per design's `NOTE`); `getWorkspaceTree`; the 6 mutation functions (`createFolder`, `updateFolder`, `deleteFolder`, `createBookmark`, `updateBookmark`, `deleteBookmark`), each requiring `syncEventId` as the last positional argument (Decision 2 — no default); PATCH bodies built key-by-key, never spread (`undefined` keys must drop, explicit `null` must survive).
+- [x] A2.1 GREEN: `admin-web/src/lib/api/queryKeys.ts` — add `queryKeys.workspace(id).tree = ["workspaces", id, "tree"] as const`.
+- [x] A2.2 GREEN: `admin-web/src/lib/api/bookmarks.ts` (new) — `BookmarkNode`/`FolderNode`/`WorkspaceTree` types (`parentId` normalized `?? null` everywhere per design's `NOTE`); `getWorkspaceTree`; the 6 mutation functions (`createFolder`, `updateFolder`, `deleteFolder`, `createBookmark`, `updateBookmark`, `deleteBookmark`), each requiring `syncEventId` as the last positional argument (Decision 2 — no default); PATCH bodies built key-by-key, never spread (`undefined` keys must drop, explicit `null` must survive).
 
 ## Phase A3: Read-Only Tree Page (first independently shippable slice)
 
-- [ ] A3.1 RED: `admin-web/src/features/bookmarks/BookmarksPage.test.tsx` (new) — renders the full nested folder/bookmark tree from a mocked `GET /workspaces/{id}/tree`, in server order. *(Spec: Workspace Tree Read — "Admin with a workspace grant sees the full tree")*
-- [ ] A3.2 RED: same — `status === 403` shows a "no grant" state with a link to `/access?workspace={id}`, never a generic error. *(Spec: "No workspace grant is detected and redirected")*
-- [ ] A3.3 RED: same — `status === 404` shows distinct copy from the 403 case; neither status is retried (mock `fetch` call count).
-- [ ] A3.4 RED: same — `workspace.role === "viewer"` renders zero create/edit/delete/drag-handle affordances (Decision 12 read-only mode).
-- [ ] A3.5 RED: same — clicking manual Refresh refetches and advances the "Updated HH:MM" stamp (fake timers + `treeQuery.dataUpdatedAt`). *(Spec: "Manual refresh updates the tree and the timestamp")*
-- [ ] A3.6 RED: same — a `window` `focus` event triggers a refetch of the tree query. *(Spec: "Window focus triggers a refetch")*
-- [ ] A3.7 GREEN: `admin-web/src/features/bookmarks/queries.ts` (new) — `useWorkspaceTree` with `staleTime: 0`, `refetchOnWindowFocus: true`, and `retry` that never retries `403`/`404`, per design's exact implementation.
-- [ ] A3.8 GREEN: `admin-web/src/features/bookmarks/BookmarksPage.tsx` (new, read-only shell) — header (workspace name, role badge, "Updated HH:MM" derived from `dataUpdatedAt`, Refresh control), the three 403/404/viewer states, notice banner (matches `WorkspacesPage` pattern).
-- [ ] A3.9 GREEN: `admin-web/src/features/bookmarks/BookmarkTree.tsx` (new, plain recursive renderer — no `flattenTree`, no `@dnd-kit`; both land in Unit C per design's hard sequencing) — nested `<ul>`/`<li>` from `FolderNode[]`, expand/collapse `useState<Set<string>>`.
-- [ ] A3.10 RED: `admin-web/src/app/router.test.tsx` (extend, if present, else new) — `/bookmarks` is unreachable anonymously and without an admin org; missing/invalid `?workspace=` renders "no workspace selected", never a crashed page. *(Threat Matrix: Routing — new client route)*
-- [ ] A3.11 GREEN: `admin-web/src/app/router.tsx` — add `{ path: "bookmarks", element: <BookmarksPage /> }` under `AdminLayout`. No nav entry (Decision 3, matches `/access`).
-- [ ] A3.12 RED: `admin-web/src/features/workspaces/WorkspacesPage.test.tsx` (extend) — the bookmarks row action for workspace W links to `/bookmarks?workspace=W`. *(Spec: "Entry point carries the correct workspace id")*
-- [ ] A3.13 GREEN: `admin-web/src/features/workspaces/WorkspacesPage.tsx` — add `<Link to={\`/bookmarks?workspace=${id}\`}>Bookmarks</Link>` beside "Manage access".
-- [ ] A3.14 RED: same as A3.2 — asserts the 403 code path issues **no** client-side authorization decision of its own (Threat Matrix: Authorization/IDOR — `?workspace=` is attacker-controllable by design; the page never gates on it itself).
+- [x] A3.1 RED: `admin-web/src/features/bookmarks/BookmarksPage.test.tsx` (new) — renders the full nested folder/bookmark tree from a mocked `GET /workspaces/{id}/tree`, in server order. *(Spec: Workspace Tree Read — "Admin with a workspace grant sees the full tree")*
+- [x] A3.2 RED: same — `status === 403` shows a "no grant" state with a link to `/access?workspace={id}`, never a generic error. *(Spec: "No workspace grant is detected and redirected")*
+- [x] A3.3 RED: same — `status === 404` shows distinct copy from the 403 case; neither status is retried (mock `fetch` call count).
+- [x] A3.4 RED: same — `workspace.role === "viewer"` renders zero create/edit/delete/drag-handle affordances (Decision 12 read-only mode).
+- [x] A3.5 RED: same — clicking manual Refresh refetches and advances the "Updated HH:MM" stamp (fake timers + `treeQuery.dataUpdatedAt`). *(Spec: "Manual refresh updates the tree and the timestamp")*
+- [x] A3.6 RED: same — a `window` `focus` event triggers a refetch of the tree query. *(Spec: "Window focus triggers a refetch")*
+- [x] A3.7 GREEN: `admin-web/src/features/bookmarks/queries.ts` (new) — `useWorkspaceTree` with `staleTime: 0`, `refetchOnWindowFocus: true`, and `retry` that never retries `403`/`404`, per design's exact implementation.
+- [x] A3.8 GREEN: `admin-web/src/features/bookmarks/BookmarksPage.tsx` (new, read-only shell) — header (workspace name, role badge, "Updated HH:MM" derived from `dataUpdatedAt`, Refresh control), the three 403/404/viewer states, notice banner (matches `WorkspacesPage` pattern).
+- [x] A3.9 GREEN: `admin-web/src/features/bookmarks/BookmarkTree.tsx` (new, plain recursive renderer — no `flattenTree`, no `@dnd-kit`; both land in Unit C per design's hard sequencing) — nested `<ul>`/`<li>` from `FolderNode[]`, expand/collapse `useState<Set<string>>`.
+- [x] A3.10 RED: `admin-web/src/app/router.test.tsx` (extend, if present, else new) — `/bookmarks` is unreachable anonymously and without an admin org; missing/invalid `?workspace=` renders "no workspace selected", never a crashed page. *(Threat Matrix: Routing — new client route)*
+- [x] A3.11 GREEN: `admin-web/src/app/router.tsx` — add `{ path: "bookmarks", element: <BookmarksPage /> }` under `AdminLayout`. No nav entry (Decision 3, matches `/access`).
+- [x] A3.12 RED: `admin-web/src/features/workspaces/WorkspacesPage.test.tsx` (extend) — the bookmarks row action for workspace W links to `/bookmarks?workspace=W`. *(Spec: "Entry point carries the correct workspace id")*
+- [x] A3.13 GREEN: `admin-web/src/features/workspaces/WorkspacesPage.tsx` — add `<Link to={\`/bookmarks?workspace=${id}\`}>Bookmarks</Link>` beside "Manage access".
+- [x] A3.14 RED: same as A3.2 — asserts the 403 code path issues **no** client-side authorization decision of its own (Threat Matrix: Authorization/IDOR — `?workspace=` is attacker-controllable by design; the page never gates on it itself).
 
 ## Phase B1: Mutation Hooks
 

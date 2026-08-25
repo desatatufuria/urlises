@@ -243,4 +243,27 @@ describe("admin router", () => {
 
     expect(await screen.findByText(/organization admin access required/i)).toBeInTheDocument();
   });
+
+  it("keeps /bookmarks unreachable anonymously and without an admin org", async () => {
+    renderAppRoute("/bookmarks?workspace=workspace-1", null);
+    expect(await screen.findByRole("heading", { name: /sign in to urlises control/i })).toBeInTheDocument();
+    expect(screen.queryByText(/bookmark tree/i)).not.toBeInTheDocument();
+
+    renderAppRoute("/bookmarks?workspace=workspace-1", {
+      session: {
+        accessToken: "token",
+        clientId: "client-1",
+        expiresAt: "2099-01-01T00:00:00Z",
+        user: { id: "user-1", email: "member@example.com" },
+      },
+      principal: { userId: "user-1", email: "member@example.com", clientId: "client-1" },
+      organizations: [{ organizationId: "org-1", organizationName: "Acme", role: "member" }],
+    });
+    expect(await screen.findByText(/organization admin access required/i)).toBeInTheDocument();
+  });
+
+  it("renders a calm 'no workspace selected' state for /bookmarks with a missing ?workspace=, never a crashed page", async () => {
+    renderAppRoute("/bookmarks", defaultAdminSnapshot);
+    expect(await screen.findByText(/no workspace selected/i)).toBeInTheDocument();
+  });
 });
