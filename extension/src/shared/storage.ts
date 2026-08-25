@@ -75,6 +75,7 @@ export function createProjectionState(workspace: ProjectionState["workspace"]): 
     socketConnected: false,
     health: "bootstrap",
     recoveryAttemptCount: 0,
+    autoRepairAttempts: 0,
     activityRevision: 0,
   };
 }
@@ -85,6 +86,8 @@ function normalizeProjectionState(projection: ProjectionState): ProjectionState 
     socketConnected: projection.socketConnected ?? false,
     health: projection.health ?? deriveLegacyHealth(projection),
     recoveryAttemptCount: projection.recoveryAttemptCount ?? 0,
+    // C11: installs that predate this field get a full budget on their first pause after upgrade.
+    autoRepairAttempts: projection.autoRepairAttempts ?? 0,
     activityRevision: projection.activityRevision ?? 0,
     convergenceJournal: normalizeJournal(projection.convergenceJournal),
   };

@@ -69,44 +69,48 @@ GREEN:
 ## Phase C: Slice C — bounded auto-repair mechanism (ADR-401/402/403/406; branch `.../slice-c-bounded-auto-repair` off slice-b)
 
 Scaffolding (additive, no behavior change):
-- [ ] C.1 Add `autoRepairAttempts: number` to `ProjectionState` (types.ts:233).
-- [ ] C.2 Default `autoRepairAttempts: 0` in `createProjectionState` (storage.ts:77).
-- [ ] C.3 Normalize `autoRepairAttempts: projection.autoRepairAttempts ?? 0` (storage.ts:87, C11).
-- [ ] C.4 Add `AutoRepairClaim` type, `autoRepairFlights` map, `MAX_AUTO_REPAIR_ATTEMPTS=2`, `createAutoRepairClaim()` (projection.ts:85-87).
-- [ ] C.5 Harness: `createProjection` factory gets legacy default `autoRepairAttempts: 2` (§12.2) so existing tests keep pinning immediate-degrade.
+- [x] C.1 Add `autoRepairAttempts: number` to `ProjectionState` (types.ts:233).
+- [x] C.2 Default `autoRepairAttempts: 0` in `createProjectionState` (storage.ts:77).
+- [x] C.3 Normalize `autoRepairAttempts: projection.autoRepairAttempts ?? 0` (storage.ts:87, C11).
+- [x] C.4 Add `AutoRepairClaim` type, `autoRepairFlights` map, `MAX_AUTO_REPAIR_ATTEMPTS=2`, `createAutoRepairClaim()` (projection.ts:85-87). The bare `autoRepairFlights` map already existed from Phase 0 (inert); this task upgraded its claim type to `{ promise, release }` and added the constant/factory.
+- [x] C.5 Harness: `createProjection` factory gets legacy default `autoRepairAttempts: 2` (§12.2) so existing tests keep pinning immediate-degrade.
 
 RED before #11 (pauseWorkspace rewrite):
-- [ ] C.6 T-C1 (attempt-2 regression): nested pause inside a running repair starts no 2nd chain; counter sequence `1` then `2`, never `1,1`; `autoRepairFlightCount()<=1` throughout, `0` after settle.
-- [ ] C.7 T-C2: two pauses fired unawaited for one workspace start exactly one chain.
-- [ ] C.8 T-C3: transient `:529` failure repairs silently, `health` never `"degraded"`.
-- [ ] C.9 T-C4: newly selected workspace bootstraps itself (no fixture override — production default).
-- [ ] C.10 T-C5: third consecutive failure degrades with Slice A's `repairDisposition`.
-- [ ] C.11 T-C6 (§3.4 guard): budget stays monotonic across a chain through `enterRecovery` — `autoRepairAttempts===2`, not `1`.
-- [ ] C.12 T-C7: durable-write failure (`storageSetFailure`) claims nothing, still throws, no dispatch.
+- [x] C.6 T-C1 (attempt-2 regression): nested pause inside a running repair starts no 2nd chain; counter sequence `1` then `2`, never `1,1`; `autoRepairFlightCount()<=1` throughout, `0` after settle. RED confirmed (attempts stayed `0`, no dispatch, before GREEN).
+- [x] C.7 T-C2: two pauses fired unawaited for one workspace start exactly one chain. RED confirmed.
+- [x] C.8 T-C3: transient failure (drainLocalIntentsNow's catch) repairs silently, `health` never `"degraded"`. RED confirmed.
+- [x] C.9 T-C4: newly selected workspace bootstraps itself (no fixture override — production default). RED confirmed.
+- [x] C.10 T-C5: third consecutive failure degrades with Slice A's `repairDisposition`. RED confirmed.
+- [x] C.11 T-C6 (§3.4 guard): budget stays monotonic across a chain through `enterRecovery` — `autoRepairAttempts===2`, not `1`. RED confirmed.
+- [x] C.12 T-C7: durable-write failure (`storageSetFailure`) claims nothing, still throws, no dispatch. Passed even pre-GREEN (trivially true with no mechanism yet) — kept as a permanent regression guard, consistent with C6.
 
 GREEN (#11+#12, coupled by compilation):
-- [ ] C.13 Rewrite `pauseWorkspace` (:2010-2022): claim+counter decided inside the atomic updater, armed dispatch `void`-ed in a `finally` after `await log(...)`; `catch` releases claim and rethrows (C6).
-- [ ] C.14 Add `planAutoRepair` (pure, mirrors `retryJournal`), `runAutoRepair` (session/selection/claim-identity guards), `settleAfterAutoRepair` (re-drive or fail-closed degrade).
-- [ ] C.15 Confirm T-C1-T-C7 green.
+- [x] C.13 Rewrite `pauseWorkspace`: claim+counter decided inside the atomic updater, armed dispatch `void`-ed in a `finally` after `await log(...)`; `catch` releases claim and rethrows (C6).
+- [x] C.14 Add `planAutoRepair` (pure, mirrors `retryJournal`), `runAutoRepair` (session/selection/claim-identity guards), `settleAfterAutoRepair` (re-drive or fail-closed degrade).
+- [x] C.15 Confirm T-C1-T-C7 green. Confirmed (two fixture bugs found and fixed along the way — see Deviations/Issues in the final report — not mechanism bugs).
 
 RED before #12's veto branch:
-- [ ] C.16 T-C8: rebuild-shaped pause with an unacknowledged (`sent`) local intent degrades immediately on the FIRST pause, `autoRepairAttempts===0`, intent preserved, zero `/tree` fetches.
+- [x] C.16 T-C8: rebuild-shaped pause with an unacknowledged (`sent`) local intent degrades immediately on the FIRST pause, `autoRepairAttempts===0`, intent preserved, zero `/tree` fetches. RED confirmed once C.13/C.14 landed (without the veto, `planAutoRepair` incorrectly armed a rebuild).
 
 GREEN:
-- [ ] C.17 Add the unacknowledged-intent veto branch to `planAutoRepair` (C7, spec.md:72). Confirm T-C8 green.
+- [x] C.17 Add the unacknowledged-intent veto branch to `planAutoRepair` (C7, spec.md:72). Confirm T-C8 green.
 
 RED before #13-#15 (reset sites):
-- [ ] C.18 T-C9: success resets the budget — fail once (attempts→1), heal, assert `autoRepairAttempts===0`, fail again → `recovering`, not `degraded`.
+- [x] C.18 T-C9: success resets the budget — fail once (attempts→1), heal, assert `autoRepairAttempts===0`, fail again → `recovering`, not `degraded`. RED confirmed (attempts stayed `1` after heal, pre-reset).
 
 GREEN:
-- [ ] C.19 Add `autoRepairAttempts = 0` reset in `markProjectionLive` (:1882), `doResyncWorkspace`'s live branch (:1079), `attemptSubtreeRecovery`'s success updater (:2278). Do NOT reset in `enterRecovery` (C3/T-C6 guard).
-- [ ] C.20 Confirm T-C9 green.
+- [x] C.19 Add `autoRepairAttempts = 0` reset in `markProjectionLive`, `doResyncWorkspace`'s live branch, `attemptSubtreeRecovery`'s success updater. Do NOT reset in `enterRecovery` (C3/T-C6 guard) — confirmed zero diff in `enterRecovery` across the whole 4-branch chain.
+- [x] C.20 Confirm T-C9 green.
 
 Cleanup / hang-safety:
-- [ ] C.21 In `resetRuntimeState` (:2483-2497, after `rebuildLocks.clear()`), release every claim then `autoRepairFlights.clear()` (inventory #16).
-- [ ] C.22 Full-suite gate: `npm run test:projection` (all T-A/T-B/T-C + legacy suite) + `npm run typecheck` green; confirm process exits (no hang). Commit Slice C alone.
+- [x] C.21 In `resetRuntimeState` (after `rebuildLocks.clear()`), release every claim then `autoRepairFlights.clear()` (inventory #16).
+- [x] C.22 Full-suite gate: `npm run test:projection` (all T-A/T-B/T-C + legacy suite) + `npm run typecheck` green; confirm process exits (no hang). Commit Slice C alone. Result: 243/243 pass across 3 consecutive runs, typecheck clean, process exits every time (no hang).
+
+**Critical finding, fixed as part of this slice (test-infra, not production code):** turning on the auto-repair layer meant several *pre-existing* tests (written before this feature existed) that pass through a mid-test socket ack matching `lastCursor` now legitimately reset `autoRepairAttempts` to `0` via `markProjectionLive` (an intentional, designed behavior — §5's "cheap reset trigger" residual) and then unknowingly trigger a **real, fire-and-forget auto-repair chain** on their own later failure, because they predate `settleAutoRepair` and never await it. That chain does not stop when the test ends; its `updateProjectionState`/`getState` calls keep landing on the *shared* `stateMutationQueue` and can corrupt whichever *later* test happens to be using the same `"workspace-1"` id at that moment — this is precisely the cross-test corruption class design §11.4 warns about, just triggered by tests that don't know the mechanism exists rather than by a new test forgetting to await it. First observed as a hard-to-reproduce failure in `remote forward-by-many same-parent bookmark move lands at the exact requested index (T-M3)`, ~6 tests after the actual leak (`connectWorkspace falls back from subtree recovery...`, which now legitimately self-heals — see below). Root-caused via targeted `console.error` instrumentation (temporary, removed), not by guessing. **Fix:** `resetRuntime()` (the shared `beforeEach` in `tests/projection-behavior.test.mjs`) now unconditionally drains `projectionTestHooks.settleAutoRepair("workspace-1")` and `"workspace-2"` at the very start, before any other teardown — cheap/no-op for tests with no active chain, and closes the corruption vector for every test in the file, past and future, without requiring every individual test author to know about the auto-repair layer.
+
+One additional pre-existing test's *contract* legitimately changed by this slice, not just its fixture: `connectWorkspace falls back from subtree recovery to workspace resync before degrading` — renamed to `...and self-heals via bounded auto-repair` — because its exact fixture (ack matching `lastCursor` resets the budget, then a resync-shaped failure with a *working* second `/tree` response) is design §4.3's own worked "self-heal" trace. Its assertions were updated from "1 tree fetch, health degraded" to "2 tree fetches, health live, budget reset" to match the intentional improvement. Its original "disposition is `rebuild`" pin was preserved as a new, isolated test (`T-A3: subtree recovery's workspace fallback is dispositioned rebuild when the auto-repair budget is exhausted`) that explicitly seeds an exhausted budget so it observes the pause in isolation from the auto-repair layer's own self-heal.
 
 ## Phase D: Delivery gate
 
-- [ ] D.1 Confirm design §14's spec-delta amendments are already reflected in the current hand-amended `specs/extension-sync-convergence/spec.md` — verify no drift before opening PRs.
+- [ ] D.1 Confirm design §14's spec-delta amendments are already reflected in the current hand-amended `specs/extension-sync-convergence/spec.md` — verify no drift before opening PRs. NOT performed by sdd-apply — recommend the orchestrator do this diff check before opening PRs, since it is a read/compare step over already-final artifacts, not implementation.
 - [ ] D.2 MANDATORY, cannot be completed by sdd-apply — live manual production test required before merge to `develop` (design §13 script): (1) fresh workspace bootstraps without red dot; (2) backend down → local edit → backend back → self-heals without red dot; (3) backend stays down → red dot after exactly 2 attempts with "Rebuild required"; (4) `Personal (not synced)` content survives every automatic rebuild. Orchestrator gates the merge on this sign-off, not this task list.

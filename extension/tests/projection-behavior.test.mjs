@@ -427,6 +427,15 @@ function createRuntimeState({
 }
 
 async function resetRuntime() {
+  // Anti-hang / anti-corruption safety net (design §11.4): a test that triggers auto-repair but
+  // forgets (or a pre-existing test that unknowingly starts one now that the layer exists) to
+  // await projectionTestHooks.settleAutoRepair leaves a fire-and-forget chain running past its
+  // own test. Draining known workspace ids here — using the CURRENT fetchHandlers/state, before
+  // anything is torn down — ensures no chain ever straddles into the next test and corrupts its
+  // fixture. This is test-infra hygiene, not a production behavior change.
+  for (const workspaceId of ["workspace-1", "workspace-2"]) {
+    await projectionTestHooks.settleAutoRepair(workspaceId).catch(() => {});
+  }
   storageData.clear();
   resetBookmarkTree();
   MockWebSocket.reset();
@@ -468,6 +477,12 @@ function createProjection(overrides = {}) {
     status: "ready",
     health: "live",
     recoveryAttemptCount: 0,
+    // Legacy tests were written against "a pause degrades immediately". That contract still holds
+    // once the auto-repair budget is spent, so every legacy fixture gets an exhausted budget by
+    // default. Tests exercising the repair layer opt in with `autoRepairAttempts: 0`. Production's
+    // real default is 0 (createProjectionState/normalizeProjectionState) — covered explicitly by
+    // T-C4 (fresh projection, no fixture override) and every Slice C test that opts in to 0.
+    autoRepairAttempts: 2,
     ...overrides,
   };
 }
@@ -2671,7 +2686,68 @@ test("handleBookmarkMoved retains one failed stable intent without destructive r
   assert.equal(projection.convergenceJournal.pauseReason, "ambiguous-predecessor");
 });
 
-test("connectWorkspace falls back from subtree recovery to workspace resync before degrading", async () => {
+test("T-A3: subtree recovery's workspace fallback is dispositioned rebuild when the auto-repair budget is exhausted", { timeout: 15_000 }, async () => {
+  bookmarkNodes.set("workspace-node", createBookmarkNode({ id: "workspace-node", parentId: "1", title: "Workspace", index: 0 }));
+  rebuildBookmarkChildren();
+
+  // autoRepairAttempts: 2 (exhausted) and no matching-cursor ack in this test (which would
+  // otherwise reset the budget via markProjectionLive, design §5): isolates the fallback pause's
+  // OWN disposition from the auto-repair layer's own dispatch/self-heal behavior (see the
+  // adjacent self-heal test for that path, driven by the identical call site).
+  await setState({
+    ...createRuntimeState({ lastCursor: 7 }),
+    projectionsByWorkspaceId: {
+      "workspace-1": createProjection({
+        workspaceChromeId: "workspace-node",
+        chromeIdByBackendId: { "folder-parent": "missing-parent" },
+        backendIdByChromeId: { "missing-parent": "folder-parent" },
+        entityTypeByBackendId: { "folder-parent": "folder" },
+        lastCursor: 7,
+        health: "live",
+        socketConnected: true,
+        autoRepairAttempts: 2,
+      }),
+    },
+  });
+
+  fetchHandlers = [
+    { match: (url) => url.endsWith("/workspaces/workspace-1/tree"), respond: () => jsonResponse({ workspace: { workspaceId: "workspace-1", workspaceName: "Workspace", workspaceType: "shared", organizationId: "org-1", organizationName: "Org", role: "viewer" }, folders: [] }) },
+    { match: (url) => url.includes("/sync/events?workspaceId=workspace-1&afterCursor=7"), respond: () => jsonResponse({ currentCursor: 8, events: [], resyncRequired: true }) },
+  ];
+
+  await projectionTestHooks.connectWorkspace("workspace-1");
+  await MockWebSocket.instances[0].emitMessage({
+    type: "event",
+    event: {
+      cursor: 8,
+      eventId: "evt-bookmark-8",
+      workspaceId: "workspace-1",
+      originClientId: "client-2",
+      kind: "bookmark.created",
+      entityType: "bookmark",
+      entityId: "bookmark-remote",
+      createdAt: "2026-07-02T00:00:03.000Z",
+      payload: {
+        id: "bookmark-remote",
+        workspaceId: "workspace-1",
+        folderId: "folder-parent",
+        title: "Debug Bookmark",
+        url: "https://example.com/debug",
+        position: 0,
+        createdAt: "2026-07-02T00:00:03.000Z",
+        updatedAt: "2026-07-02T00:00:03.000Z",
+      },
+    },
+  });
+
+  const projection = (await getState()).projectionsByWorkspaceId["workspace-1"];
+  assert.equal(fetchLog.filter((url) => url.endsWith("/tree")).length, 1, "an exhausted budget must not dispatch a rebuild");
+  assert.equal(projection.health, "degraded");
+  assert.equal(projection.convergenceJournal?.pauseReason, "ambiguous-predecessor");
+  assert.equal(projection.convergenceJournal?.repairDisposition, "rebuild", "the fallback must disposition rebuild even though this budget is exhausted");
+});
+
+test("connectWorkspace falls back from subtree recovery to workspace resync and self-heals via bounded auto-repair", async () => {
   bookmarkNodes.set("workspace-node", createBookmarkNode({ id: "workspace-node", parentId: "1", title: "Workspace", index: 0 }));
   rebuildBookmarkChildren();
 
@@ -2773,19 +2849,23 @@ test("connectWorkspace falls back from subtree recovery to workspace resync befo
   });
 
   await MockWebSocket.instances.at(-1).emitMessage({ type: "ack", currentCursor: 8 });
+  // Slice C: the ack at cursor 7 (matching lastCursor) resets the auto-repair budget via
+  // markProjectionLive before the subtree-recovery failure ever occurs, so this scenario now
+  // exercises a REAL auto-repair chain (fire-and-forget) instead of an already-exhausted one.
+  // This is design §4.3's own worked trace: the workspace self-heals and the user never sees red.
+  await projectionTestHooks.settleAutoRepair("workspace-1");
 
   const projection = (await getState()).projectionsByWorkspaceId["workspace-1"];
   const diagnostics = (await getState()).diagnostics.map((entry) => entry.message);
-  assert.equal(fetchLog.filter((url) => url.endsWith("/workspaces/workspace-1/tree")).length, 1);
-  assert.equal(fetchLog.filter((url) => url.includes("afterCursor=7")).length, 1);
-  assert.equal(fetchLog.filter((url) => url.includes("afterCursor=0")).length, 0);
   assert.ok(diagnostics.some((entry) => entry.includes("action=recover-subtree") && entry.includes("entityId=bookmark-remote")));
-  assert.equal(projection.health, "degraded");
-  assert.equal(projection.convergenceJournal?.pauseReason, "ambiguous-predecessor");
-  // T-A3 (ADR-404): the subtree-recovery-to-workspace fallback must disposition rebuild too, so
-  // the popup offers Rebuild — the only action that can actually close a resync-shaped gap —
-  // instead of a Retry that is guaranteed to fail (design §6.3).
-  assert.equal(projection.convergenceJournal?.repairDisposition, "rebuild");
+  // Two /tree reads: one from attemptSubtreeRecovery's own failed attempt, one from the
+  // auto-repair layer's rebuild, which succeeds and rematerializes folder-parent/bookmark-remote.
+  assert.equal(fetchLog.filter((url) => url.endsWith("/tree")).length, 2);
+  assert.equal(fetchLog.filter((url) => url.includes("afterCursor=7")).length, 1);
+  assert.equal(fetchLog.filter((url) => url.includes("afterCursor=0")).length, 1);
+  assert.equal(projection.health, "live", "the bounded auto-repair layer must self-heal this workspace without ever showing red");
+  assert.equal(projection.convergenceJournal?.phase, "live");
+  assert.equal(projection.autoRepairAttempts, 0, "a successful rebuild that returns to live resets the budget");
 });
 
 test("connectWorkspace validates the expected parent path before folder delete continues", async () => {
@@ -3280,4 +3360,330 @@ test("cross-parent bookmark move is unchanged by the compensation (T-M5)", async
   projection = (await getState()).projectionsByWorkspaceId["workspace-1"];
   assert.equal(projection.convergenceJournal?.receipts?.[0]?.status, "consumed");
   assert.equal(projection.lastCursor, 8);
+});
+
+// --- Slice C (ADR-401/402/403/406): bounded auto-repair mechanism ---
+// Every test below sets an explicit fetchBudget and autoRepairAttempts: 0 (or relies on the
+// production default), and awaits projectionTestHooks.settleAutoRepair before asserting, per
+// design §12.5. This is the highest-risk slice — see design §3.2/§4.3 for why the claim must be
+// written inside the same atomic updater that decides to pause.
+
+test("a nested pause inside a running repair never starts a second chain and never re-uses attempt 1", { timeout: 15_000 }, async () => {
+  bookmarkNodes.set("workspace-node", createBookmarkNode({ id: "workspace-node", parentId: "1", title: "Workspace", index: 0 }));
+  rebuildBookmarkChildren();
+  await setState({
+    ...createRuntimeState({ lastCursor: 7 }),
+    projectionsByWorkspaceId: { "workspace-1": createEditorProjection({
+      workspaceChromeId: "workspace-node",
+      lastCursor: 7,
+      autoRepairAttempts: 0,
+    }) },
+  });
+  fetchBudget = 12;
+  fetchHandlers = [
+    { match: (url) => url.endsWith("/workspaces/workspace-1/tree"), respond: () => { throw new Error("tree unavailable"); } },
+    { match: (url) => url.includes("/sync/events"), respond: () => { throw new Error("events unavailable"); } },
+  ];
+
+  await projectionTestHooks.recoverWorkspace("workspace-1", "resync required for test", "resync");
+  await projectionTestHooks.settleAutoRepair("workspace-1");
+
+  const state = await getState();
+  const projection = state.projectionsByWorkspaceId["workspace-1"];
+  // Diagnostics are stored newest-first (pushDiagnostic prepends); read them chronologically.
+  const diagnostics = state.diagnostics.map((entry) => entry.message).reverse();
+  const startedMessages = diagnostics.filter((message) => /auto-repair \S+ started/.test(message));
+  assert.equal(startedMessages.length, 2, "expected exactly 2 auto-repair attempts, never more, never fewer");
+  const attemptNumbers = diagnostics
+    .map((message) => Number(message.match(/attempt (\d+)\//)?.[1]))
+    .filter((value) => !Number.isNaN(value));
+  assert.deepEqual(attemptNumbers, [1, 2], "counter sequence must be 1 then 2 — never 1, 1 (the prior discarded implementation's bug)");
+  assert.equal(projectionTestHooks.autoRepairFlightCount(), 0, "no flight may remain claimed once the chain settles");
+  assert.equal(projection.health, "degraded");
+  assert.equal(projection.autoRepairAttempts, 2);
+});
+
+test("two independent pauses arriving for one workspace start exactly one repair chain", { timeout: 15_000 }, async () => {
+  await setState({
+    ...createRuntimeState({ lastCursor: 5 }),
+    projectionsByWorkspaceId: { "workspace-1": createEditorProjection({
+      workspaceChromeId: "workspace-node",
+      chromeIdByBackendId: { "bookmark-1": "missing-node" },
+      backendIdByChromeId: { "missing-node": "bookmark-1" },
+      entityTypeByBackendId: { "bookmark-1": "bookmark" },
+      lastCursor: 5,
+      autoRepairAttempts: 0,
+    }) },
+  });
+  fetchBudget = 10;
+  fetchHandlers = [
+    { match: (url) => url.includes("/sync/events"), respond: () => { throw new Error("events unavailable"); } },
+  ];
+
+  await Promise.all([
+    handleBookmarkChanged("missing-node", { title: "Lost once" }),
+    handleBookmarkChanged("missing-node", { title: "Lost twice" }),
+  ]);
+  await projectionTestHooks.settleAutoRepair("workspace-1");
+
+  const state = await getState();
+  const projection = state.projectionsByWorkspaceId["workspace-1"];
+  const startedMessages = state.diagnostics.map((entry) => entry.message).filter((message) => /auto-repair \S+ started/.test(message));
+  assert.equal(startedMessages.length, 1, "two concurrent pauses for one workspace must start exactly one chain");
+  assert.equal(projection.autoRepairAttempts, 1);
+  assert.equal(projectionTestHooks.autoRepairFlightCount(), 0);
+});
+
+test("a transient local-intent dispatch failure repairs silently and never shows degraded", { timeout: 15_000 }, async () => {
+  bookmarkNodes.set("workspace-node", createBookmarkNode({ id: "workspace-node", parentId: "1", title: "Workspace", index: 0 }));
+  bookmarkNodes.set("folder-a", createBookmarkNode({ id: "folder-a", parentId: "workspace-node", title: "Docs", index: 0 }));
+  bookmarkNodes.set("bookmark-node", createBookmarkNode({ id: "bookmark-node", parentId: "folder-a", title: "Before", url: "https://example.com/before", index: 0 }));
+  rebuildBookmarkChildren();
+  const intent = {
+    eventId: "local-1",
+    kind: "changed",
+    status: "queued",
+    payload: { workspaceId: "workspace-1", backendId: "bookmark-1", chromeId: "bookmark-node", type: "bookmark", kind: "changed", node: { id: "bookmark-node", parentId: "folder-a", index: 0, title: "Before", url: "https://example.com/before" } },
+  };
+  await setState({
+    ...createRuntimeState({ lastCursor: 5 }),
+    projectionsByWorkspaceId: { "workspace-1": createEditorProjection({
+      workspaceChromeId: "workspace-node",
+      chromeIdByBackendId: { "folder-a": "folder-a", "bookmark-1": "bookmark-node" },
+      backendIdByChromeId: { "folder-a": "folder-a", "bookmark-node": "bookmark-1" },
+      entityTypeByBackendId: { "folder-a": "folder", "bookmark-1": "bookmark" },
+      lastCursor: 5,
+      autoRepairAttempts: 0,
+      socketConnected: true,
+      convergenceJournal: { version: 1, phase: "live", operations: [], localIntents: [intent], attempts: 0 },
+    }) },
+  });
+
+  let patchCount = 0;
+  fetchBudget = 10;
+  fetchHandlers = [
+    {
+      match: (url) => url.endsWith("/bookmarks/bookmark-1"),
+      respond: () => {
+        patchCount += 1;
+        if (patchCount === 1) throw new Error("network blip");
+        return ackResponse(6);
+      },
+    },
+    {
+      match: (url) => url.includes("/sync/events?workspaceId=workspace-1&afterCursor=5"),
+      respond: () => jsonResponse({ currentCursor: 5, events: [] }),
+    },
+  ];
+
+  await projectionTestHooks.drainLocalIntents("workspace-1", "test drain");
+  await projectionTestHooks.settleAutoRepair("workspace-1");
+
+  const projection = (await getState()).projectionsByWorkspaceId["workspace-1"];
+  assert.notEqual(projection.health, "degraded", "a transient failure must never surface as degraded");
+  assert.equal(projection.degradedAt, undefined);
+  assert.equal(projection.convergenceJournal?.phase, "live");
+  assert.equal(projection.autoRepairAttempts, 0, "markProjectionLive must reset the budget on the successful retry");
+});
+
+test("a newly selected workspace bootstraps itself instead of showing degraded", { timeout: 15_000 }, async () => {
+  const workspace = { workspaceId: "workspace-1", workspaceName: "Workspace", workspaceType: "shared", organizationId: "org-1", organizationName: "Org", role: "editor" };
+  await setState({
+    settings: { backendUrl: "http://localhost:8081", clientId: "client-1" },
+    session: { accessToken: "token-1", expiresAt: "2099-01-01T00:00:00.000Z", clientId: "client-1", user: { id: "user-1", email: "user@example.com" } },
+    selectedWorkspaceIds: [],
+    cachedOrganizations: [],
+    cachedWorkspacesByOrganization: {},
+    projectionsByWorkspaceId: {},
+    diagnostics: [],
+  });
+
+  fetchBudget = 15;
+  fetchHandlers = [
+    { match: (url) => url.endsWith("/organizations"), respond: () => jsonResponse({ organizations: [{ organizationId: "org-1", organizationName: "Org" }] }) },
+    { match: (url) => url.endsWith("/organizations/org-1/workspaces"), respond: () => jsonResponse({ workspaces: [workspace] }) },
+    { match: (url) => url.endsWith("/workspaces/workspace-1/tree"), respond: () => jsonResponse({ workspace, folders: [] }) },
+    { match: (url) => url.includes("/sync/events") && url.includes("afterCursor=0"), respond: () => jsonResponse({ currentCursor: 0, events: [] }) },
+  ];
+
+  // No autoRepairAttempts override anywhere in this fixture: this is the real production default
+  // from createProjectionState, exercised end to end.
+  await setSelectedWorkspaces(["workspace-1"]);
+  await projectionTestHooks.settleAutoRepair("workspace-1");
+
+  const projection = (await getState()).projectionsByWorkspaceId["workspace-1"];
+  assert.notEqual(projection?.health, "degraded", "a fresh workspace must self-bootstrap instead of sitting red");
+  assert.ok(projection?.workspaceChromeId, "the workspace must materialize its managed folder");
+});
+
+test("the third consecutive failure degrades with the disposition Slice A assigned", { timeout: 15_000 }, async () => {
+  await setState({
+    ...createRuntimeState({ lastCursor: 5 }),
+    projectionsByWorkspaceId: { "workspace-1": createEditorProjection({
+      workspaceChromeId: "workspace-node",
+      chromeIdByBackendId: { "bookmark-1": "missing-node" },
+      backendIdByChromeId: { "missing-node": "bookmark-1" },
+      entityTypeByBackendId: { "bookmark-1": "bookmark" },
+      lastCursor: 5,
+      autoRepairAttempts: 0,
+    }) },
+  });
+  fetchBudget = 12;
+  fetchHandlers = [
+    { match: (url) => url.includes("/sync/events"), respond: () => { throw new Error("events unavailable"); } },
+  ];
+
+  await handleBookmarkChanged("missing-node", { title: "Lost once" });
+  await projectionTestHooks.settleAutoRepair("workspace-1");
+  await handleBookmarkChanged("missing-node", { title: "Lost twice" });
+  await projectionTestHooks.settleAutoRepair("workspace-1");
+
+  let projection = (await getState()).projectionsByWorkspaceId["workspace-1"];
+  assert.equal(projection.autoRepairAttempts, 2, "two plain retry-shaped failures must exhaust the budget");
+
+  // The third pause is resync-shaped (Slice A's { repair: "rebuild" } hint) and arrives after the
+  // budget is already spent: it must degrade immediately, on its own disposition, not the prior
+  // failures' "retry".
+  await projectionTestHooks.recoverWorkspace("workspace-1", "resync required for test", "resync");
+
+  const state = await getState();
+  projection = state.projectionsByWorkspaceId["workspace-1"];
+  const startedMessages = state.diagnostics.map((entry) => entry.message).filter((message) => /auto-repair \S+ started/.test(message));
+  assert.equal(startedMessages.length, 2, "exactly 2 repair attempts must have been dispatched in total");
+  assert.equal(projection.health, "degraded");
+  assert.equal(projection.convergenceJournal?.repairDisposition, "rebuild");
+  assert.ok(projection.degradedReason);
+});
+
+test("the attempt budget is monotonic across a recovery chain that calls enterRecovery", { timeout: 15_000 }, async () => {
+  bookmarkNodes.set("workspace-node", createBookmarkNode({ id: "workspace-node", parentId: "1", title: "Workspace", index: 0 }));
+  rebuildBookmarkChildren();
+  await setState({
+    ...createRuntimeState({ lastCursor: 7 }),
+    projectionsByWorkspaceId: { "workspace-1": createEditorProjection({
+      workspaceChromeId: "workspace-node",
+      lastCursor: 7,
+      autoRepairAttempts: 0,
+    }) },
+  });
+  fetchBudget = 12;
+  fetchHandlers = [
+    { match: (url) => url.endsWith("/workspaces/workspace-1/tree"), respond: () => { throw new Error("tree unavailable"); } },
+    { match: (url) => url.includes("/sync/events"), respond: () => { throw new Error("events unavailable"); } },
+  ];
+
+  // recoverWorkspace(..., "resync") calls enterRecovery before pausing (the repair path this
+  // guards): a naive implementation that resets autoRepairAttempts next to enterRecovery's own
+  // degradedAt/degradedReason clear (design §3.4) would leave this at 1, not 2.
+  await projectionTestHooks.recoverWorkspace("workspace-1", "resync required for test", "resync");
+  await projectionTestHooks.settleAutoRepair("workspace-1");
+
+  const projection = (await getState()).projectionsByWorkspaceId["workspace-1"];
+  assert.equal(projection.autoRepairAttempts, 2, "the budget must be monotonic across a chain that passes through enterRecovery");
+});
+
+test("a pause whose durable write fails claims no repair flight", { timeout: 15_000 }, async () => {
+  bookmarkNodes.set("workspace-node", createBookmarkNode({ id: "workspace-node", parentId: "1", title: "Workspace", index: 0 }));
+  rebuildBookmarkChildren();
+  await setState({
+    ...createRuntimeState({ lastCursor: 7 }),
+    projectionsByWorkspaceId: { "workspace-1": createEditorProjection({
+      workspaceChromeId: "workspace-node",
+      lastCursor: 7,
+      autoRepairAttempts: 0,
+    }) },
+  });
+
+  // C6: the pause's own durable write fails. pauseWorkspace must still throw (so
+  // applyRemoteEnvelope's caller-level catch can still fail closed) and must claim nothing.
+  storageSetFailure = (items) => {
+    const projection = Object.values(items)[0]?.projectionsByWorkspaceId?.["workspace-1"];
+    if (projection?.convergenceJournal?.phase === "paused") return "durable storage unavailable";
+  };
+
+  await assert.rejects(() => projectionTestHooks.recoverWorkspace("workspace-1", "resync required for test", "resync"));
+  storageSetFailure = undefined;
+
+  const state = await getState();
+  const projection = state.projectionsByWorkspaceId["workspace-1"];
+  assert.equal(projectionTestHooks.autoRepairFlightCount(), 0, "a durable write failure must claim nothing");
+  assert.equal(projection.autoRepairAttempts, 0);
+  const startedMessages = state.diagnostics.map((entry) => entry.message).filter((message) => /auto-repair \S+ started/.test(message));
+  assert.equal(startedMessages.length, 0, "a pause that never persisted must never dispatch a repair");
+});
+
+test("an automatic rebuild is refused while an unacknowledged intent exists", { timeout: 15_000 }, async () => {
+  bookmarkNodes.set("workspace-node", createBookmarkNode({ id: "workspace-node", parentId: "1", title: "Workspace", index: 0 }));
+  rebuildBookmarkChildren();
+  const intent = {
+    eventId: "local-1",
+    kind: "changed",
+    status: "sent",
+    payload: { workspaceId: "workspace-1", backendId: "bookmark-1", chromeId: "bookmark-node", type: "bookmark", kind: "changed", node: { id: "bookmark-node", title: "Local" } },
+  };
+  await setState({
+    ...createRuntimeState({ lastCursor: 7 }),
+    projectionsByWorkspaceId: { "workspace-1": createEditorProjection({
+      workspaceChromeId: "workspace-node",
+      lastCursor: 7,
+      autoRepairAttempts: 0,
+      convergenceJournal: { version: 1, phase: "live", operations: [], localIntents: [intent], attempts: 0 },
+    }) },
+  });
+  fetchBudget = 10;
+  fetchHandlers = [
+    { match: (url) => url.endsWith("/workspaces/workspace-1/tree"), respond: () => jsonResponse({ workspace: { workspaceId: "workspace-1", workspaceName: "Workspace", workspaceType: "shared", organizationId: "org-1", organizationName: "Org", role: "editor" }, folders: [] }) },
+  ];
+
+  await projectionTestHooks.recoverWorkspace("workspace-1", "resync required for test", "resync");
+  await projectionTestHooks.settleAutoRepair("workspace-1");
+
+  const projection = (await getState()).projectionsByWorkspaceId["workspace-1"];
+  assert.equal(projection.health, "degraded", "an unacknowledged intent must veto automatic rebuild on the very first pause");
+  assert.equal(projection.autoRepairAttempts, 0, "a vetoed pause must not spend any budget");
+  assert.equal(projection.convergenceJournal?.localIntents.length, 1);
+  assert.equal(projection.convergenceJournal?.localIntents[0].status, "sent");
+  assert.equal(fetchLog.filter((url) => url.endsWith("/tree")).length, 0, "a vetoed rebuild must never touch the backend tree");
+});
+
+test("a successful repair restores the full budget for a later, unrelated failure", { timeout: 15_000 }, async () => {
+  await setState({
+    ...createRuntimeState({ lastCursor: 5 }),
+    projectionsByWorkspaceId: { "workspace-1": createEditorProjection({
+      workspaceChromeId: "workspace-node",
+      chromeIdByBackendId: { "bookmark-1": "missing-node" },
+      backendIdByChromeId: { "missing-node": "bookmark-1" },
+      entityTypeByBackendId: { "bookmark-1": "bookmark" },
+      lastCursor: 5,
+      autoRepairAttempts: 0,
+    }) },
+  });
+  fetchBudget = 10;
+  fetchHandlers = [
+    { match: (url) => url.includes("/sync/events") && url.includes("afterCursor=5"), respond: () => { throw new Error("events unavailable"); } },
+  ];
+
+  await handleBookmarkChanged("missing-node", { title: "Lost" });
+  await projectionTestHooks.settleAutoRepair("workspace-1");
+
+  let projection = (await getState()).projectionsByWorkspaceId["workspace-1"];
+  assert.equal(projection.autoRepairAttempts, 1);
+  assert.equal(projection.health, "degraded");
+
+  fetchHandlers = [
+    { match: (url) => url.includes("/sync/events") && url.includes("afterCursor=5"), respond: () => jsonResponse({ currentCursor: 5, events: [] }) },
+  ];
+  await projectionTestHooks.replayWorkspaceDelta("workspace-1", 5, "heal");
+
+  projection = (await getState()).projectionsByWorkspaceId["workspace-1"];
+  assert.equal(projection.autoRepairAttempts, 0, "a successful return to live must reset the budget");
+  assert.equal(projection.health, "live");
+
+  // A later, unrelated failure must get a fresh budget of 2: the pause itself must show
+  // "recovering" (an attempt armed), never "degraded" outright.
+  await handleBookmarkChanged("missing-node", { title: "Lost again" });
+  projection = (await getState()).projectionsByWorkspaceId["workspace-1"];
+  assert.equal(projection.health, "recovering");
+  assert.equal(projection.autoRepairAttempts, 1);
+  await projectionTestHooks.settleAutoRepair("workspace-1");
 });
