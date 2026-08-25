@@ -58,6 +58,7 @@ import type {
   WorkspaceAccess,
 } from "../shared/types.js";
 import {
+  chromeMoveIndex,
   clearChildren,
   collectChromeIds,
   createBookmark,
@@ -1363,9 +1364,13 @@ async function applyRemoteFolderUpsert(
   if (existing.parentId !== parentChromeId || existing.index !== folder.position) {
     if (!canPersistReceipt(projection.convergenceJournal ?? emptyJournal(), event.cursor)) { await pauseWorkspace(workspaceId, event.cursor, "receipt-capacity"); return true; }
     if (existing.parentId === undefined || existing.index === undefined) throw new RemoteApplyError("remote folder move predecessor is incomplete", existingContext, "ambiguous-predecessor");
-    await persistRemoteReceipt(workspaceId, event, folder.id, chromeId, "folder", existing, { parentId: parentChromeId, index: folder.position, title: folder.name }, { oldParentId: existing.parentId, oldIndex: existing.index, parentId: parentChromeId, index: folder.position });
+    const move = { oldParentId: existing.parentId, oldIndex: existing.index, parentId: parentChromeId, index: folder.position };
+    await persistRemoteReceipt(workspaceId, event, folder.id, chromeId, "folder", existing, { parentId: parentChromeId, index: folder.position, title: folder.name }, move);
     if (existing.title !== folder.name) await updateNode(chromeId, { title: folder.name });
-    await moveNode(chromeId, { parentId: parentChromeId, index: folder.position });
+    const moved = await moveNode(chromeId, { parentId: parentChromeId, index: chromeMoveIndex(move) });
+    if (moved.parentId !== move.parentId || moved.index !== move.index) {
+      throw new RemoteApplyError("remote folder move landed at an unexpected index", { ...existingContext, requestedChromeIndex: chromeMoveIndex(move), observedIndex: moved.index }, "final-verification-failed");
+    }
     return true;
   }
   const updateReceipt = existing.title !== folder.name;
@@ -1469,9 +1474,13 @@ async function applyRemoteBookmarkUpsert(
   if (existing.parentId !== parentChromeId || existing.index !== bookmark.position) {
     if (!canPersistReceipt(projection.convergenceJournal ?? emptyJournal(), event.cursor)) { await pauseWorkspace(workspaceId, event.cursor, "receipt-capacity"); return true; }
     if (existing.parentId === undefined || existing.index === undefined) throw new RemoteApplyError("remote bookmark move predecessor is incomplete", existingContext, "ambiguous-predecessor");
-    await persistRemoteReceipt(workspaceId, event, bookmark.id, chromeId, "bookmark", existing, { parentId: parentChromeId, index: bookmark.position, title: bookmark.title, url: bookmark.url }, { oldParentId: existing.parentId, oldIndex: existing.index, parentId: parentChromeId, index: bookmark.position });
+    const move = { oldParentId: existing.parentId, oldIndex: existing.index, parentId: parentChromeId, index: bookmark.position };
+    await persistRemoteReceipt(workspaceId, event, bookmark.id, chromeId, "bookmark", existing, { parentId: parentChromeId, index: bookmark.position, title: bookmark.title, url: bookmark.url }, move);
     if (existing.title !== bookmark.title || existing.url !== bookmark.url) await updateNode(chromeId, { title: bookmark.title, url: bookmark.url });
-    await moveNode(chromeId, { parentId: parentChromeId, index: bookmark.position });
+    const moved = await moveNode(chromeId, { parentId: parentChromeId, index: chromeMoveIndex(move) });
+    if (moved.parentId !== move.parentId || moved.index !== move.index) {
+      throw new RemoteApplyError("remote bookmark move landed at an unexpected index", { ...existingContext, requestedChromeIndex: chromeMoveIndex(move), observedIndex: moved.index }, "final-verification-failed");
+    }
     return true;
   }
 
