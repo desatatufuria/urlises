@@ -143,3 +143,69 @@ test("timers, IDs, events, fetch filtering, and revived clones model Chrome boun
   assert.deepEqual(await call(revived.chrome.storage.session.get, "later"), { later: undefined });
   harness.teardown(); revived.teardown();
 });
+
+test("same-parent move to oldIndex+1 is a silent Chromium no-op (T-F1)", async () => {
+  const harness = createChromeHarness({ tree: workspaceTree([{ id: "one", folders: [{ title: "A" }, { title: "B" }] }]) });
+  const moved = [];
+  harness.chrome.bookmarks.onMoved.addListener((id, info) => moved.push(info));
+  const root = await call(harness.chrome.bookmarks.getChildren, "workspace:one");
+  const result = await call(harness.chrome.bookmarks.move, root[0].id, { parentId: "workspace:one", index: 1 });
+  assert.equal(result.index, 0);
+  assert.deepEqual((await call(harness.chrome.bookmarks.getChildren, "workspace:one")).map((node) => node.title), ["A", "B"]);
+  harness.mutators.settle();
+  assert.deepEqual(moved, [], "a same-parent no-op must deliver zero onMoved events");
+  harness.teardown();
+});
+
+test("same-parent forward-by-many decrements through the pre-removal coordinate (T-F2)", async () => {
+  const harness = createChromeHarness({ tree: workspaceTree([{ id: "one", folders: [{ title: "A" }, { title: "B" }, { title: "C" }, { title: "D" }] }]) });
+  const moved = [];
+  harness.chrome.bookmarks.onMoved.addListener((id, info) => moved.push(info));
+  harness.mutators.mode("delayed");
+  const root = await call(harness.chrome.bookmarks.getChildren, "workspace:one");
+  const result = await call(harness.chrome.bookmarks.move, root[0].id, { parentId: "workspace:one", index: 3 });
+  assert.equal(result.index, 2);
+  harness.mutators.flush();
+  assert.deepEqual(moved.map(({ oldIndex, index }) => ({ oldIndex, index })), [{ oldIndex: 0, index: 2 }]);
+  assert.deepEqual((await call(harness.chrome.bookmarks.getChildren, "workspace:one")).map((node) => node.title), ["B", "C", "A", "D"]);
+  harness.teardown();
+});
+
+test("backward, cross-parent, index-less append, and out-of-bounds moves are unchanged by the fix (T-F3)", async () => {
+  {
+    const harness = createChromeHarness({ tree: workspaceTree([{ id: "one", folders: [{ title: "A" }, { title: "B" }, { title: "C" }] }]) });
+    const moved = [];
+    harness.chrome.bookmarks.onMoved.addListener((id, info) => moved.push(info));
+    harness.mutators.mode("delayed");
+    const root = await call(harness.chrome.bookmarks.getChildren, "workspace:one");
+    const result = await call(harness.chrome.bookmarks.move, root[2].id, { parentId: "workspace:one", index: 0 });
+    assert.equal(result.index, 0);
+    harness.mutators.flush();
+    assert.deepEqual(moved.map(({ oldIndex, index }) => ({ oldIndex, index })), [{ oldIndex: 2, index: 0 }]);
+    assert.deepEqual((await call(harness.chrome.bookmarks.getChildren, "workspace:one")).map((node) => node.title), ["C", "A", "B"]);
+    harness.teardown();
+  }
+  {
+    const harness = createChromeHarness({ tree: workspaceTree([{ id: "one", folders: [{ title: "A" }, { title: "B" }] }, { id: "two", folders: [{ title: "X" }] }]) });
+    const root = await call(harness.chrome.bookmarks.getChildren, "workspace:one");
+    const result = await call(harness.chrome.bookmarks.move, root[0].id, { parentId: "workspace:two", index: 0 });
+    assert.equal(result.index, 0);
+    assert.deepEqual((await call(harness.chrome.bookmarks.getChildren, "workspace:one")).map((node) => ({ title: node.title, index: node.index })), [{ title: "B", index: 0 }]);
+    assert.deepEqual((await call(harness.chrome.bookmarks.getChildren, "workspace:two")).map((node) => node.title), ["A", "X"]);
+    harness.teardown();
+  }
+  {
+    const harness = createChromeHarness({ tree: workspaceTree([{ id: "one", folders: [{ title: "A" }, { title: "B" }, { title: "C" }] }]) });
+    const root = await call(harness.chrome.bookmarks.getChildren, "workspace:one");
+    const result = await call(harness.chrome.bookmarks.move, root[0].id, { parentId: "workspace:one" });
+    assert.equal(result.index, 2, "an index-less same-parent move must append to the end");
+    assert.deepEqual((await call(harness.chrome.bookmarks.getChildren, "workspace:one")).map((node) => node.title), ["B", "C", "A"]);
+    harness.teardown();
+  }
+  {
+    const harness = createChromeHarness({ tree: workspaceTree([{ id: "one", folders: [{ title: "A" }] }]) });
+    const root = await call(harness.chrome.bookmarks.getChildren, "workspace:one");
+    await assert.rejects(call(harness.chrome.bookmarks.move, root[0].id, { parentId: "workspace:one", index: 5 }), /Index out of bounds\./);
+    harness.teardown();
+  }
+});

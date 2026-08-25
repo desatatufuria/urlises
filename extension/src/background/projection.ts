@@ -58,6 +58,7 @@ import type {
   WorkspaceAccess,
 } from "../shared/types.js";
 import {
+  chromeMoveIndex,
   clearChildren,
   collectChromeIds,
   createBookmark,
@@ -73,7 +74,7 @@ import {
 } from "./chrome-bookmarks.js";
 import { connectWorkspaceSocket } from "../shared/websocket.js";
 import type { BookmarkChangeInfo, BookmarkMoveInfo, BookmarkRemoveInfo } from "./bookmark-listeners.js";
-import { canPersistReceipt, captureLocalIntent, createRemoteReceipt, emptyJournal, gateRemoteEffect, normalizedReceipts, rebuildJournal, reduceRemoteCallback, retryJournal, type RepairGate } from "./convergence.js";
+import { canPersistReceipt, captureLocalIntent, createRemoteReceipt, emptyJournal, gateRemoteEffect, normalizedReceipts, rebuildJournal, reduceRemoteCallback, retryJournal, sameUrl, type RepairGate } from "./convergence.js";
 
 const socketClosers = new Map<string, () => void>();
 const socketTokens = new Map<string, symbol>();
@@ -1363,9 +1364,13 @@ async function applyRemoteFolderUpsert(
   if (existing.parentId !== parentChromeId || existing.index !== folder.position) {
     if (!canPersistReceipt(projection.convergenceJournal ?? emptyJournal(), event.cursor)) { await pauseWorkspace(workspaceId, event.cursor, "receipt-capacity"); return true; }
     if (existing.parentId === undefined || existing.index === undefined) throw new RemoteApplyError("remote folder move predecessor is incomplete", existingContext, "ambiguous-predecessor");
-    await persistRemoteReceipt(workspaceId, event, folder.id, chromeId, "folder", existing, { parentId: parentChromeId, index: folder.position, title: folder.name }, { oldParentId: existing.parentId, oldIndex: existing.index, parentId: parentChromeId, index: folder.position });
+    const move = { oldParentId: existing.parentId, oldIndex: existing.index, parentId: parentChromeId, index: folder.position };
+    await persistRemoteReceipt(workspaceId, event, folder.id, chromeId, "folder", existing, { parentId: parentChromeId, index: folder.position, title: folder.name }, move);
     if (existing.title !== folder.name) await updateNode(chromeId, { title: folder.name });
-    await moveNode(chromeId, { parentId: parentChromeId, index: folder.position });
+    const moved = await moveNode(chromeId, { parentId: parentChromeId, index: chromeMoveIndex(move) });
+    if (moved.parentId !== move.parentId || moved.index !== move.index) {
+      throw new RemoteApplyError("remote folder move landed at an unexpected index", { ...existingContext, requestedChromeIndex: chromeMoveIndex(move), observedIndex: moved.index }, "final-verification-failed");
+    }
     return true;
   }
   const updateReceipt = existing.title !== folder.name;
@@ -1469,21 +1474,30 @@ async function applyRemoteBookmarkUpsert(
   if (existing.parentId !== parentChromeId || existing.index !== bookmark.position) {
     if (!canPersistReceipt(projection.convergenceJournal ?? emptyJournal(), event.cursor)) { await pauseWorkspace(workspaceId, event.cursor, "receipt-capacity"); return true; }
     if (existing.parentId === undefined || existing.index === undefined) throw new RemoteApplyError("remote bookmark move predecessor is incomplete", existingContext, "ambiguous-predecessor");
-    await persistRemoteReceipt(workspaceId, event, bookmark.id, chromeId, "bookmark", existing, { parentId: parentChromeId, index: bookmark.position, title: bookmark.title, url: bookmark.url }, { oldParentId: existing.parentId, oldIndex: existing.index, parentId: parentChromeId, index: bookmark.position });
+    const move = { oldParentId: existing.parentId, oldIndex: existing.index, parentId: parentChromeId, index: bookmark.position };
+    await persistRemoteReceipt(workspaceId, event, bookmark.id, chromeId, "bookmark", existing, { parentId: parentChromeId, index: bookmark.position, title: bookmark.title, url: bookmark.url }, move);
     if (existing.title !== bookmark.title || existing.url !== bookmark.url) await updateNode(chromeId, { title: bookmark.title, url: bookmark.url });
-    await moveNode(chromeId, { parentId: parentChromeId, index: bookmark.position });
+    const moved = await moveNode(chromeId, { parentId: parentChromeId, index: chromeMoveIndex(move) });
+    if (moved.parentId !== move.parentId || moved.index !== move.index) {
+      throw new RemoteApplyError("remote bookmark move landed at an unexpected index", { ...existingContext, requestedChromeIndex: chromeMoveIndex(move), observedIndex: moved.index }, "final-verification-failed");
+    }
     return true;
   }
 
   const updateReceipt = existing.title !== bookmark.title || existing.url !== bookmark.url;
   if (updateReceipt && !canPersistReceipt(projection.convergenceJournal ?? emptyJournal(), event.cursor)) { await pauseWorkspace(workspaceId, event.cursor, "receipt-capacity"); return true; }
   if (updateReceipt) await persistRemoteReceipt(workspaceId, event, bookmark.id, chromeId, "bookmark", existing, { parentId: existing.parentId!, index: existing.index!, title: bookmark.title, url: bookmark.url });
-  try {
-    if (existing.title !== bookmark.title || existing.url !== bookmark.url) {
-      await updateNode(chromeId, { title: bookmark.title, url: bookmark.url });
-    }
-  } catch (error) {
-    throw createRemoteApplyError(error, existingContext);
+  if (existing.title !== bookmark.title || existing.url !== bookmark.url) {
+    await withSuppression(
+      async () => {
+        try {
+          return await updateNode(chromeId, { title: bookmark.title, url: bookmark.url });
+        } catch (error) {
+          throw createRemoteApplyError(error, existingContext);
+        }
+      },
+      [chromeId],
+    );
   }
 
   const finalNode = await getNode(chromeId);
@@ -1517,8 +1531,8 @@ async function consumeRemoteCallback(context: LocalIntentContext, chromeId: stri
       const pendingReceipt = result.journal.receipts?.find((receipt, index) => before[index]?.status === "pending" && receipt.status === "consumed");
       if (pendingReceipt) projection.lastCursor = Math.max(projection.lastCursor, pendingReceipt.cursor);
       consumed = true;
-    } else if (before.some((receipt) => receipt.status === "pending" && receipt.workspaceId === context.workspaceId && receipt.backendId === context.backendId && receipt.chromeId === chromeId)) {
-      projection.convergenceJournal = gateRemoteEffect(result.journal, before.find((receipt) => receipt.status === "pending" && receipt.workspaceId === context.workspaceId && receipt.backendId === context.backendId && receipt.chromeId === chromeId)?.cursor ?? projection.lastCursor, "final-verification-failed");
+    } else if (result.disposition === "rejected") {
+      projection.convergenceJournal = gateRemoteEffect(result.journal, result.cursor ?? projection.lastCursor, "final-verification-failed");
     }
   });
   return consumed;
@@ -1760,7 +1774,7 @@ async function finishRemoteCreate(workspaceId: string, id: string, chromeId: str
   await updateProjectionState(workspaceId, (projection) => {
     const journal = projection.convergenceJournal, operation = journal?.operations.find((item) => item.id === id), ownership = operation?.ownership;
     if (!journal || !operation || !ownership) return;
-    if (!node || node.parentId !== ownership.parentChromeId || node.index !== ownership.index || node.title !== ownership.title || node.url !== ownership.url) { journal.phase = "paused"; journal.pauseReason = "ambiguous-operation"; return; }
+    if (!node || node.parentId !== ownership.parentChromeId || node.index !== ownership.index || node.title !== ownership.title || !sameUrl(node.url, ownership.url)) { journal.phase = "paused"; journal.pauseReason = "ambiguous-operation"; return; }
     operation.chromeId = chromeId; operation.status = "done";
     if (journal.pauseReason === "ambiguous-operation") { journal.phase = "live"; journal.pauseReason = undefined; }
     const done = journal.operations.filter((item) => item.ownership && item.status === "done");

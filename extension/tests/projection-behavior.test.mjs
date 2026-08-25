@@ -147,8 +147,27 @@ globalThis.chrome = {
       callback(cloneNode(node));
     },
     move(id, destination, callback) {
+      rebuildBookmarkChildren();
       const node = bookmarkNodes.get(id);
-      Object.assign(node, destination);
+      const oldParentId = node.parentId, oldIndex = node.index;
+      const parent = bookmarkNodes.get(destination.parentId ?? oldParentId);
+      const sameParent = parent.id === oldParentId;
+      const siblings = parent.children ?? [];
+      let index = destination.index ?? siblings.length;
+      if (index < 0 || index > siblings.length) {
+        globalThis.chrome.runtime.lastError = { message: "Index out of bounds." };
+        callback(undefined);
+        globalThis.chrome.runtime.lastError = null;
+        return;
+      }
+      if (sameParent && (index === oldIndex || index === oldIndex + 1)) { callback(cloneNode(node)); return; }
+      if (sameParent && index > oldIndex) index -= 1;
+      const source = (bookmarkNodes.get(oldParentId)?.children ?? []).filter((child) => child.id !== id);
+      source.forEach((child, position) => { child.index = position; });
+      const target = sameParent ? source : (parent.children ?? []).slice();
+      target.splice(index, 0, node);
+      node.parentId = parent.id;
+      target.forEach((child, position) => { child.index = position; });
       rebuildBookmarkChildren();
       callback(cloneNode(node));
     },
@@ -438,6 +457,15 @@ function createProjection(overrides = {}) {
 
 test.beforeEach(async () => {
   await resetRuntime();
+});
+
+test.after(() => {
+  // The last test in the file leaves no subsequent beforeEach to close a
+  // still-open workspace socket (and its real, self-rescheduling keepalive
+  // setTimeout — see src/shared/websocket.ts scheduleKeepalive), which
+  // otherwise keeps the process alive indefinitely. Mirrors the same
+  // cleanup resetRuntime() already performs before every other test.
+  projectionTestHooks.resetRuntimeState();
 });
 
 test("connectWorkspaceSocket sends keepalive only after an idle window and clears timers on close", async () => {
@@ -1052,7 +1080,7 @@ test("replay gap pauses the workspace without destructive resync", async () => {
   assert.equal(projection.convergenceJournal?.pauseReason, "ambiguous-predecessor");
 });
 
-test("Retry keeps an unproven receipt paused and Rebuild is the only destructive workspace action", async () => {
+test("Retry keeps an unproven receipt paused and Rebuild is the only destructive workspace action, dropping stale queued local intents", async () => {
   const journal = { version: 1, phase: "paused", pauseReason: "final-verification-failed", failedCursor: 6, repairDisposition: "retry", operations: [], attempts: 0, receipts: [{ version: 1, workspaceId: "workspace-1", backendId: "bookmark-1", chromeId: "bookmark-node", type: "bookmark", before: { title: "Before" }, expectedAfter: { title: "After" }, expectedSignatures: ["bad"], eventId: "evt-6", cursor: 6, status: "pending" }], localIntents: [{ eventId: "local-1", kind: "changed", status: "queued", payload: { workspaceId: "workspace-1", backendId: "bookmark-1", chromeId: "bookmark-node", type: "bookmark", kind: "changed", node: { id: "bookmark-node", title: "Local" } } }] };
   await setState({ ...createRuntimeState({ lastCursor: 5 }), projectionsByWorkspaceId: { "workspace-1": createProjection({ lastCursor: 5, convergenceJournal: journal }) } });
   await retryWorkspace("workspace-1");
@@ -1065,7 +1093,10 @@ test("Retry keeps an unproven receipt paused and Rebuild is the only destructive
   await rebuildWorkspace("workspace-1");
   projection = (await getState()).projectionsByWorkspaceId["workspace-1"];
   assert.equal(fetchLog.filter((url) => url.endsWith("/tree")).length, 1);
-  assert.equal(projection.convergenceJournal?.localIntents.length, 1);
+  // ADR-005: the pre-rebuild "queued" (not "acked") local intent must not survive Rebuild — its
+  // Chrome node is destroyed by rebuild regardless, and keeping the record would re-pause the
+  // freshly-rebuilt workspace on the next drainLocalIntentsNow (the exact production incident).
+  assert.equal(projection.convergenceJournal?.localIntents.length, 0);
   assert.equal(projection.convergenceJournal?.phase, "live");
 });
 
@@ -2610,4 +2641,178 @@ test("replay catchup stops at an unverified subtree event without cursor promoti
   assert.equal(docsFolder?.children?.length ?? 0, 1);
   assert.equal(docsFolder?.children?.[0]?.title, "Remote Bookmark Updated");
   assert.equal(docsFolder?.children?.[0]?.url, "https://example.com/remote-updated");
+});
+
+test("remote forward-by-one same-parent folder move converges (T-M2, production incident)", async () => {
+  bookmarkNodes.set("workspace-node", createBookmarkNode({ id: "workspace-node", parentId: "1", title: "Workspace", index: 0 }));
+  bookmarkNodes.set("intro-node", createBookmarkNode({ id: "intro-node", parentId: "workspace-node", title: "INTRO", index: 0 }));
+  bookmarkNodes.set("other-node", createBookmarkNode({ id: "other-node", parentId: "workspace-node", title: "Other", index: 1 }));
+  rebuildBookmarkChildren();
+  await setState({ ...createRuntimeState({ lastCursor: 18 }), projectionsByWorkspaceId: { "workspace-1": createEditorProjection({ workspaceChromeId: "workspace-node", chromeIdByBackendId: { "folder-intro": "intro-node", "folder-other": "other-node" }, backendIdByChromeId: { "intro-node": "folder-intro", "other-node": "folder-other" }, entityTypeByBackendId: { "folder-intro": "folder", "folder-other": "folder" }, lastCursor: 18 }) } });
+  await projectionTestHooks.connectWorkspace("workspace-1");
+  await MockWebSocket.instances[0].emitMessage({ type: "ack", currentCursor: 18 });
+  await MockWebSocket.instances[0].emitMessage({
+    type: "event",
+    event: createSyncEvent({
+      cursor: 19,
+      eventId: "evt-intro-move-19",
+      kind: "folder.updated",
+      entityType: "folder",
+      entityId: "folder-intro",
+      payload: { id: "folder-intro", workspaceId: "workspace-1", parentId: null, name: "INTRO", position: 1 },
+    }),
+  });
+
+  assert.equal(bookmarkNodes.get("intro-node")?.index, 1);
+  let projection = (await getState()).projectionsByWorkspaceId["workspace-1"];
+  assert.deepEqual(
+    projection.convergenceJournal?.receipts?.map((receipt) => [receipt.status, receipt.move]),
+    [["pending", { oldParentId: "workspace-node", oldIndex: 0, parentId: "workspace-node", index: 1 }]],
+  );
+
+  await handleBookmarkMoved("intro-node", { parentId: "workspace-node", oldParentId: "workspace-node", index: 1, oldIndex: 0 });
+  projection = (await getState()).projectionsByWorkspaceId["workspace-1"];
+  assert.equal(projection.convergenceJournal?.receipts?.[0]?.status, "consumed");
+  assert.equal(projection.lastCursor, 19);
+  assert.equal(projection.convergenceJournal?.pauseReason, undefined);
+  assert.equal(projection.convergenceJournal?.localIntents.length, 0);
+});
+
+test("a legacy Chrome without the same-parent no-op quirk pauses at final-verification-failed instead of stalling silently (T-M6)", async () => {
+  bookmarkNodes.set("workspace-node", createBookmarkNode({ id: "workspace-node", parentId: "1", title: "Workspace", index: 0 }));
+  bookmarkNodes.set("intro-node", createBookmarkNode({ id: "intro-node", parentId: "workspace-node", title: "INTRO", index: 0 }));
+  bookmarkNodes.set("other-node", createBookmarkNode({ id: "other-node", parentId: "workspace-node", title: "Other", index: 1 }));
+  rebuildBookmarkChildren();
+  await setState({ ...createRuntimeState({ lastCursor: 18 }), projectionsByWorkspaceId: { "workspace-1": createEditorProjection({ workspaceChromeId: "workspace-node", chromeIdByBackendId: { "folder-intro": "intro-node", "folder-other": "other-node" }, backendIdByChromeId: { "intro-node": "folder-intro", "other-node": "folder-other" }, entityTypeByBackendId: { "folder-intro": "folder", "folder-other": "folder" }, lastCursor: 18 }) } });
+  await projectionTestHooks.connectWorkspace("workspace-1");
+  await MockWebSocket.instances[0].emitMessage({ type: "ack", currentCursor: 18 });
+
+  const originalMove = globalThis.chrome.bookmarks.move;
+  globalThis.chrome.bookmarks.move = (id, destination, callback) => {
+    // Legacy Chrome that dropped the pre-removal same-parent no-op quirk: it lands the node
+    // literally at the given (already-compensated) index instead of decrementing, landing one
+    // slot too far and simulating C8's "assumption wrong" case.
+    const node = bookmarkNodes.get(id);
+    Object.assign(node, destination);
+    rebuildBookmarkChildren();
+    callback(cloneNode(node));
+  };
+  try {
+    await MockWebSocket.instances[0].emitMessage({
+      type: "event",
+      event: createSyncEvent({
+        cursor: 19,
+        eventId: "evt-intro-move-19",
+        kind: "folder.updated",
+        entityType: "folder",
+        entityId: "folder-intro",
+        payload: { id: "folder-intro", workspaceId: "workspace-1", parentId: null, name: "INTRO", position: 1 },
+      }),
+    });
+  } finally {
+    globalThis.chrome.bookmarks.move = originalMove;
+  }
+
+  const state = await getState();
+  const projection = state.projectionsByWorkspaceId["workspace-1"];
+  assert.equal(projection.convergenceJournal?.pauseReason, "final-verification-failed");
+  assert.equal(projection.convergenceJournal?.failedCursor, 19);
+  const diagnostics = state.diagnostics.map((entry) => entry.message);
+  const gateLine = diagnostics.find((entry) => entry.includes("eventId=evt-intro-move-19") && entry.includes("failure=remote effect gate failed"));
+  assert.ok(gateLine, "diagnostic entry for the failed gate must be recorded");
+  assert.ok(gateLine.includes("requestedChromeIndex=2"), "diagnostic must carry the Chrome-bound index actually requested");
+  assert.ok(gateLine.includes("observedIndex=2"), "diagnostic must carry the index Chrome actually reported");
+});
+
+test("remote forward-by-many same-parent bookmark move lands at the exact requested index (T-M3)", async () => {
+  bookmarkNodes.set("workspace-node", createBookmarkNode({ id: "workspace-node", parentId: "1", title: "Workspace", index: 0 }));
+  bookmarkNodes.set("folder-a", createBookmarkNode({ id: "folder-a", parentId: "workspace-node", title: "Docs", index: 0 }));
+  bookmarkNodes.set("bm-0", createBookmarkNode({ id: "bm-0", parentId: "folder-a", title: "B0", url: "https://example.com/b0", index: 0 }));
+  bookmarkNodes.set("bm-1", createBookmarkNode({ id: "bm-1", parentId: "folder-a", title: "B1", url: "https://example.com/b1", index: 1 }));
+  bookmarkNodes.set("bm-2", createBookmarkNode({ id: "bm-2", parentId: "folder-a", title: "B2", url: "https://example.com/b2", index: 2 }));
+  bookmarkNodes.set("bm-3", createBookmarkNode({ id: "bm-3", parentId: "folder-a", title: "B3", url: "https://example.com/b3", index: 3 }));
+  rebuildBookmarkChildren();
+  await setState({ ...createRuntimeState({ lastCursor: 7 }), projectionsByWorkspaceId: { "workspace-1": createEditorProjection({ workspaceChromeId: "workspace-node", chromeIdByBackendId: { "folder-a": "folder-a", "bookmark-1": "bm-0" }, backendIdByChromeId: { "folder-a": "folder-a", "bm-0": "bookmark-1" }, entityTypeByBackendId: { "folder-a": "folder", "bookmark-1": "bookmark" }, lastCursor: 7 }) } });
+  await projectionTestHooks.connectWorkspace("workspace-1");
+  await MockWebSocket.instances[0].emitMessage({ type: "ack", currentCursor: 7 });
+  await MockWebSocket.instances[0].emitMessage({
+    type: "event",
+    event: createSyncEvent({
+      payload: { id: "bookmark-1", workspaceId: "workspace-1", folderId: "folder-a", title: "B0", url: "https://example.com/b0", position: 3, createdAt: "2026-07-02T00:00:03.000Z", updatedAt: "2026-07-02T00:00:03.000Z" },
+    }),
+  });
+
+  assert.equal(bookmarkNodes.get("bm-0")?.index, 3, "forward-by-many must land at the exact requested index, not oldIndex+1");
+  let projection = (await getState()).projectionsByWorkspaceId["workspace-1"];
+  assert.deepEqual(
+    projection.convergenceJournal?.receipts?.map((receipt) => [receipt.status, receipt.move]),
+    [["pending", { oldParentId: "folder-a", oldIndex: 0, parentId: "folder-a", index: 3 }]],
+  );
+
+  await handleBookmarkMoved("bm-0", { parentId: "folder-a", oldParentId: "folder-a", index: 3, oldIndex: 0 });
+  projection = (await getState()).projectionsByWorkspaceId["workspace-1"];
+  assert.equal(projection.convergenceJournal?.receipts?.[0]?.status, "consumed");
+  assert.equal(projection.lastCursor, 8);
+});
+
+test("backward same-parent bookmark move is unchanged by the compensation (T-M4)", async () => {
+  bookmarkNodes.set("workspace-node", createBookmarkNode({ id: "workspace-node", parentId: "1", title: "Workspace", index: 0 }));
+  bookmarkNodes.set("folder-a", createBookmarkNode({ id: "folder-a", parentId: "workspace-node", title: "Docs", index: 0 }));
+  bookmarkNodes.set("bm-0", createBookmarkNode({ id: "bm-0", parentId: "folder-a", title: "B0", url: "https://example.com/b0", index: 0 }));
+  bookmarkNodes.set("bm-1", createBookmarkNode({ id: "bm-1", parentId: "folder-a", title: "B1", url: "https://example.com/b1", index: 1 }));
+  bookmarkNodes.set("bm-2", createBookmarkNode({ id: "bm-2", parentId: "folder-a", title: "B2", url: "https://example.com/b2", index: 2 }));
+  bookmarkNodes.set("bm-3", createBookmarkNode({ id: "bm-3", parentId: "folder-a", title: "B3", url: "https://example.com/b3", index: 3 }));
+  rebuildBookmarkChildren();
+  await setState({ ...createRuntimeState({ lastCursor: 7 }), projectionsByWorkspaceId: { "workspace-1": createEditorProjection({ workspaceChromeId: "workspace-node", chromeIdByBackendId: { "folder-a": "folder-a", "bookmark-1": "bm-3" }, backendIdByChromeId: { "folder-a": "folder-a", "bm-3": "bookmark-1" }, entityTypeByBackendId: { "folder-a": "folder", "bookmark-1": "bookmark" }, lastCursor: 7 }) } });
+  await projectionTestHooks.connectWorkspace("workspace-1");
+  await MockWebSocket.instances[0].emitMessage({ type: "ack", currentCursor: 7 });
+  await MockWebSocket.instances[0].emitMessage({
+    type: "event",
+    event: createSyncEvent({
+      payload: { id: "bookmark-1", workspaceId: "workspace-1", folderId: "folder-a", title: "B3", url: "https://example.com/b3", position: 1, createdAt: "2026-07-02T00:00:03.000Z", updatedAt: "2026-07-02T00:00:03.000Z" },
+    }),
+  });
+
+  assert.equal(bookmarkNodes.get("bm-3")?.index, 1, "a backward move must pass the requested index unmodified");
+  let projection = (await getState()).projectionsByWorkspaceId["workspace-1"];
+  assert.deepEqual(
+    projection.convergenceJournal?.receipts?.map((receipt) => [receipt.status, receipt.move]),
+    [["pending", { oldParentId: "folder-a", oldIndex: 3, parentId: "folder-a", index: 1 }]],
+  );
+
+  await handleBookmarkMoved("bm-3", { parentId: "folder-a", oldParentId: "folder-a", index: 1, oldIndex: 3 });
+  projection = (await getState()).projectionsByWorkspaceId["workspace-1"];
+  assert.equal(projection.convergenceJournal?.receipts?.[0]?.status, "consumed");
+  assert.equal(projection.lastCursor, 8);
+});
+
+test("cross-parent bookmark move is unchanged by the compensation (T-M5)", async () => {
+  bookmarkNodes.set("workspace-node", createBookmarkNode({ id: "workspace-node", parentId: "1", title: "Workspace", index: 0 }));
+  bookmarkNodes.set("folder-a", createBookmarkNode({ id: "folder-a", parentId: "workspace-node", title: "Docs", index: 0 }));
+  bookmarkNodes.set("folder-b", createBookmarkNode({ id: "folder-b", parentId: "workspace-node", title: "Links", index: 1 }));
+  bookmarkNodes.set("bm-0", createBookmarkNode({ id: "bm-0", parentId: "folder-a", title: "B0", url: "https://example.com/b0", index: 0 }));
+  bookmarkNodes.set("bm-x", createBookmarkNode({ id: "bm-x", parentId: "folder-b", title: "BX", url: "https://example.com/bx", index: 0 }));
+  rebuildBookmarkChildren();
+  await setState({ ...createRuntimeState({ lastCursor: 7 }), projectionsByWorkspaceId: { "workspace-1": createEditorProjection({ workspaceChromeId: "workspace-node", chromeIdByBackendId: { "folder-a": "folder-a", "folder-b": "folder-b", "bookmark-1": "bm-0" }, backendIdByChromeId: { "folder-a": "folder-a", "folder-b": "folder-b", "bm-0": "bookmark-1" }, entityTypeByBackendId: { "folder-a": "folder", "folder-b": "folder", "bookmark-1": "bookmark" }, lastCursor: 7 }) } });
+  await projectionTestHooks.connectWorkspace("workspace-1");
+  await MockWebSocket.instances[0].emitMessage({ type: "ack", currentCursor: 7 });
+  await MockWebSocket.instances[0].emitMessage({
+    type: "event",
+    event: createSyncEvent({
+      payload: { id: "bookmark-1", workspaceId: "workspace-1", folderId: "folder-b", title: "B0", url: "https://example.com/b0", position: 1, createdAt: "2026-07-02T00:00:03.000Z", updatedAt: "2026-07-02T00:00:03.000Z" },
+    }),
+  });
+
+  assert.equal(bookmarkNodes.get("bm-0")?.parentId, "folder-b");
+  assert.equal(bookmarkNodes.get("bm-0")?.index, 1, "a cross-parent move must pass the requested index unmodified regardless of the prior index");
+  let projection = (await getState()).projectionsByWorkspaceId["workspace-1"];
+  assert.deepEqual(
+    projection.convergenceJournal?.receipts?.map((receipt) => [receipt.status, receipt.move]),
+    [["pending", { oldParentId: "folder-a", oldIndex: 0, parentId: "folder-b", index: 1 }]],
+  );
+
+  await handleBookmarkMoved("bm-0", { parentId: "folder-b", oldParentId: "folder-a", index: 1, oldIndex: 0 });
+  projection = (await getState()).projectionsByWorkspaceId["workspace-1"];
+  assert.equal(projection.convergenceJournal?.receipts?.[0]?.status, "consumed");
+  assert.equal(projection.lastCursor, 8);
 });

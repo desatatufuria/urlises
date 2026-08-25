@@ -80,6 +80,17 @@ export async function updateNode(id: string, changes: chrome.bookmarks.UpdateCha
   });
 }
 
+/**
+ * Chromium's BookmarkModel::Move reads `destination.index` in the parent's *pre-removal*
+ * coordinate space. For a same-parent move it silently no-ops when the index equals
+ * `oldIndex` or `oldIndex + 1`, and decrements any index greater than `oldIndex`. Translating a
+ * desired *final* index into that space means adding 1 to same-parent forward moves and leaving
+ * every other case alone. Cross-parent and backward moves already coincide in both spaces.
+ */
+export function chromeMoveIndex(move: { oldParentId: string; oldIndex: number; parentId: string; index: number }): number {
+  return move.parentId === move.oldParentId && move.index > move.oldIndex ? move.index + 1 : move.index;
+}
+
 export async function moveNode(id: string, destination: { parentId?: string; index?: number }): Promise<chrome.bookmarks.BookmarkTreeNode> {
   return new Promise((resolve, reject) => {
     chrome.bookmarks.move(id, destination, (node) => {
