@@ -284,10 +284,17 @@ import { LOCAL_ONLY_FOLDER_TITLE, ROOT_FOLDER_TITLE } from "../dist/shared/runti
 const fetchLog = [];
 let fetchHandlers = [];
 let pendingTicketResponse;
+// Fast-failure fuse for runaway auto-repair (design §11.4/§12.1): a repair loop that keeps
+// issuing fetches fails deterministically on call N+1 instead of hanging the process. Reset to
+// Infinity in resetRuntime; individual tests opt into a small explicit budget.
+let fetchBudget = Number.POSITIVE_INFINITY;
 
 globalThis.fetch = async (input, init) => {
   const url = String(input);
   fetchLog.push(url);
+  if (fetchLog.length > fetchBudget) {
+    throw new Error(`fetch budget exhausted after ${fetchLog.length} calls (runaway auto-repair?): ${url}`);
+  }
   if (url.endsWith("/auth/ws-ticket")) {
     if (pendingTicketResponse) {
       return pendingTicketResponse.promise;
@@ -425,6 +432,7 @@ async function resetRuntime() {
   MockWebSocket.reset();
   fetchLog.length = 0;
   fetchHandlers = [];
+  fetchBudget = Number.POSITIVE_INFINITY;
   pendingTicketResponse = undefined;
   enforceStrictIndices = false;
   asyncBookmarkCallbacks = false;

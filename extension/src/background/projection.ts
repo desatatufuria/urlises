@@ -83,6 +83,12 @@ const liveApplyQueues = new Map<string, Promise<void>>();
 const suppressedChromeIds = new Set<string>();
 const abandonedMutationKeys = new Map<string, ReturnType<typeof setTimeout>>();
 const volatileRepairGates = new Map<string, RepairGate>();
+// Auto-repair in-flight claim registry. Declared here, ahead of the production mechanism that
+// writes into it (Slice C), purely so the anti-hang test hooks below (settleAutoRepair,
+// autoRepairFlightCount) can exist before any auto-repair behavior does. Nothing inserts into
+// this map yet, so its presence is a no-op until Slice C's pauseWorkspace rewrite.
+type AutoRepairClaim = { promise: Promise<void> };
+const autoRepairFlights = new Map<string, AutoRepairClaim>();
 const MAX_SILENT_RECOVERY_ATTEMPTS = 3;
 const ABANDONED_MUTATION_TTL_MS = 1500;
 
@@ -132,6 +138,18 @@ export const projectionTestHooks = {
   resetRuntimeState,
   volatileRepairGate: (workspaceId: string) => volatileRepairGates.get(workspaceId),
   socketRuntimeCounts: () => ({ tokens: socketTokens.size, closers: socketClosers.size, flights: socketConnectFlights.size }),
+  // Bounded fuse for auto-repair chains (Slice C). With at most MAX_AUTO_REPAIR_ATTEMPTS chains
+  // per budget, maxChains = 4 can never be legitimately exhausted — if it ever is, this throws a
+  // named error instead of letting the suite hang silently (design §11.4, §12.1).
+  settleAutoRepair: async (workspaceId: string, maxChains = 4): Promise<void> => {
+    for (let round = 0; round < maxChains; round += 1) {
+      const claim = autoRepairFlights.get(workspaceId);
+      if (!claim) return;
+      await claim.promise;
+    }
+    throw new Error(`auto-repair for ${workspaceId} did not quiesce within ${maxChains} chains`);
+  },
+  autoRepairFlightCount: (): number => autoRepairFlights.size,
 };
 
 type WorkspaceResyncLock = {
