@@ -99,25 +99,25 @@ Each unit is developed, tested, and merged into the previous unit's branch befor
 
 ## Phase B1: Mutation Hooks
 
-- [ ] B1.1 GREEN: `admin-web/src/features/bookmarks/mutations.ts` (new) — `useCreateFolderMutation`, `useUpdateFolderMutation`, `useDeleteFolderMutation`, `useCreateBookmarkMutation`, `useUpdateBookmarkMutation`, `useDeleteBookmarkMutation`; each uses `useUncertainCreationKey`'s `keyFor`/`confirm`/`retainAfterFailure`, and `onSettled` invalidates `queryKeys.workspace(workspaceId).tree`. (`useMoveNodeMutation` lands in Unit C.)
+- [x] B1.1 GREEN: `admin-web/src/features/bookmarks/mutations.ts` (new) — `useCreateFolderMutation`, `useUpdateFolderMutation`, `useDeleteFolderMutation`, `useCreateBookmarkMutation`, `useUpdateBookmarkMutation`, `useDeleteBookmarkMutation`; each uses `useUncertainCreationKey`'s `keyFor`/`confirm`/`retainAfterFailure`, and `onSettled` invalidates `queryKeys.workspace(workspaceId).tree`. (`useMoveNodeMutation` lands in Unit C.)
 
 ## Phase B2: Rename / Edit / Delete
 
-- [ ] B2.1 RED: `BookmarksPage.test.tsx` (extend) — renaming folder F sends one PATCH with a deliberate `X-Sync-Event-Id`, and F shows the new name after refetch. *(Spec: "Folder rename succeeds")*
-- [ ] B2.2 RED: same — editing a bookmark's title and URL together sends a **single** PATCH carrying both fields. *(Spec: "Bookmark title and URL are edited together")*
-- [ ] B2.3 RED: same — folder delete opens `ConfirmByTyping` stating the cascade and live blast radius (verbatim copy from design.md); cancel sends no DELETE. *(Spec: "Folder delete cascades and requires typed confirmation" / "Cancelling a delete confirmation sends no request")*
-- [ ] B2.4 RED: same — bookmark delete requires confirmation before any DELETE; confirming removes only that bookmark. *(Spec: "Bookmark delete requires confirmation")*
-- [ ] B2.5 GREEN: `admin-web/src/features/bookmarks/FolderForm.tsx` (new) — name field, shared by create and rename.
-- [ ] B2.6 GREEN: `admin-web/src/features/bookmarks/BookmarkForm.tsx` (new) — title + URL fields, shared by create and edit.
-- [ ] B2.7 GREEN: `admin-web/src/features/bookmarks/TreeRow.tsx` (new, no `@dnd-kit` yet) — folder rows carry a `DropdownMenu` (*Add folder inside / Add bookmark inside / Rename / Delete*); bookmark rows carry *Edit / Delete*.
-- [ ] B2.8 GREEN: `BookmarksPage.tsx` — wire `ContextPanels` keyed off `?panel=`/`?node=`/`?parent=` using the **updater form** of `setSearchParams` only (never the object form, which would drop `?workspace=`); page-level "New folder" button (mandatory for an empty workspace with no row to hang a per-folder menu on).
+- [x] B2.1 RED: `BookmarksPage.test.tsx` (extend) — renaming folder F sends one PATCH with a deliberate `X-Sync-Event-Id`, and F shows the new name after refetch. *(Spec: "Folder rename succeeds")*
+- [x] B2.2 RED: same — editing a bookmark's title and URL together sends a **single** PATCH carrying both fields. *(Spec: "Bookmark title and URL are edited together")*
+- [x] B2.3 RED: same — folder delete opens `ConfirmByTyping` stating the cascade and live blast radius (verbatim copy from design.md); cancel sends no DELETE. *(Spec: "Folder delete cascades and requires typed confirmation" / "Cancelling a delete confirmation sends no request")*
+- [x] B2.4 RED: same — bookmark delete requires confirmation before any DELETE; confirming removes only that bookmark. *(Spec: "Bookmark delete requires confirmation")*
+- [x] B2.5 GREEN: `admin-web/src/features/bookmarks/FolderForm.tsx` (new) — name field, shared by create and rename.
+- [x] B2.6 GREEN: `admin-web/src/features/bookmarks/BookmarkForm.tsx` (new) — title + URL fields, shared by create and edit.
+- [x] B2.7 GREEN: `admin-web/src/features/bookmarks/TreeRow.tsx` (new, no `@dnd-kit` yet) — folder rows carry a `DropdownMenu` (*Add folder inside / Add bookmark inside / Rename / Delete*); bookmark rows carry *Edit / Delete*.
+- [x] B2.8 GREEN: `BookmarksPage.tsx` — wire `ContextPanels` keyed off `?panel=`/`?node=`/`?parent=` using the **updater form** of `setSearchParams` only (never the object form, which would drop `?workspace=`); page-level "New folder" button (mandatory for an empty workspace with no row to hang a per-folder menu on).
 
 ## Phase B3: Manual Create
 
-- [ ] B3.1 RED: `BookmarksPage.test.tsx` (extend) — creating a folder with no selected parent lands at the workspace root and appears after refetch. *(Spec: "Folder created at workspace root")*
-- [ ] B3.2 RED: same — creating a folder with an existing folder F as parent appears as F's child after refetch. *(Spec: "Folder created nested inside another folder")*
-- [ ] B3.3 RED: same — creating a bookmark with title+URL inside folder F appears as F's child after refetch. *(Spec: "Bookmark created inside a folder")*
-- [ ] B3.4 GREEN: confirm B3.1–B3.3 pass against B1.1/B2.5–B2.8 with no further production changes.
+- [x] B3.1 RED: `BookmarksPage.test.tsx` (extend) — creating a folder with no selected parent lands at the workspace root and appears after refetch. *(Spec: "Folder created at workspace root")*
+- [x] B3.2 RED: same — creating a folder with an existing folder F as parent appears as F's child after refetch. *(Spec: "Folder created nested inside another folder")*
+- [x] B3.3 RED: same — creating a bookmark with title+URL inside folder F appears as F's child after refetch. *(Spec: "Bookmark created inside a folder")*
+- [x] B3.4 GREEN: confirm B3.1–B3.3 pass against B1.1/B2.5–B2.8 with no further production changes.
 
 ## Phase C1: `treeModel.ts` (pure — the automated coverage centre)
 

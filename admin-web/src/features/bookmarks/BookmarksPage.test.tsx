@@ -203,3 +203,281 @@ describe("bookmarks page — read-only tree", () => {
     await waitFor(() => expect(treeCalls).toBe(1));
   });
 });
+
+function headersOf(init: RequestInit | undefined) {
+  return new Headers(init?.headers);
+}
+
+function bodyOf(init: RequestInit | undefined): Record<string, unknown> {
+  return init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : {};
+}
+
+describe("bookmarks page — mutations and panels", () => {
+  const fetchMock = vi.fn<typeof fetch>();
+
+  beforeEach(() => {
+    vi.stubGlobal("fetch", fetchMock);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    fetchMock.mockReset();
+    vi.restoreAllMocks();
+  });
+
+  it("renames a folder with a deliberate X-Sync-Event-Id, and shows the new name after refetch", async () => {
+    let treeCalls = 0;
+    const patchCalls: Array<{ url: string; init?: RequestInit }> = [];
+    const renamedTree = {
+      ...treeFixture,
+      folders: treeFixture.folders.map((folder) => (folder.id === "folder-a" ? { ...folder, name: "Renamed Folder" } : folder)),
+    };
+
+    fetchMock.mockImplementation((input, init) => {
+      const url = String(input);
+      if (url.endsWith("/workspaces/workspace-1/tree")) {
+        treeCalls += 1;
+        return jsonResponse(treeCalls === 1 ? treeFixture : renamedTree);
+      }
+      if (url.endsWith("/folders/folder-a") && init?.method === "PATCH") {
+        patchCalls.push({ url, init });
+        return jsonResponse({ id: "folder-a", workspaceId: "workspace-1", name: "Renamed Folder", position: 0, createdAt: "", updatedAt: "" });
+      }
+      return jsonResponse({ error: "not found" }, 404);
+    });
+
+    renderAppRoute("/bookmarks?workspace=workspace-1");
+    await screen.findByText("Folder A");
+
+    await userEvent.click(screen.getByRole("button", { name: /actions for folder a/i }));
+    await userEvent.click(screen.getByRole("button", { name: /^rename$/i }));
+
+    const nameInput = await screen.findByLabelText(/folder name/i);
+    await userEvent.clear(nameInput);
+    await userEvent.type(nameInput, "Renamed Folder");
+    await userEvent.click(screen.getByRole("button", { name: /^save$/i }));
+
+    await screen.findByText("Renamed Folder");
+    expect(patchCalls).toHaveLength(1);
+    expect(headersOf(patchCalls[0].init).get("X-Sync-Event-Id")).toBeTruthy();
+    expect(bodyOf(patchCalls[0].init)).toEqual({ name: "Renamed Folder" });
+  });
+
+  it("edits a bookmark's title and URL together in a single PATCH", async () => {
+    // Two clear+type sequences on two fields is the heaviest interaction in
+    // this file; under full-suite parallel execution the default 5s vitest
+    // timeout is occasionally too tight for real (non-zero-delay) userEvent
+    // timers, though this test runs in well under 1s in isolation.
+    let treeCalls = 0;
+    const patchCalls: Array<{ url: string; init?: RequestInit }> = [];
+    const editedTree = {
+      ...treeFixture,
+      folders: treeFixture.folders.map((folder) =>
+        folder.id === "folder-a"
+          ? { ...folder, folders: folder.folders.map((child) => ({ ...child, bookmarks: child.bookmarks.map((bookmark) => (bookmark.id === "bookmark-c" ? { ...bookmark, title: "New Title", url: "https://example.com/new" } : bookmark)) })) }
+          : folder,
+      ),
+    };
+
+    fetchMock.mockImplementation((input, init) => {
+      const url = String(input);
+      if (url.endsWith("/workspaces/workspace-1/tree")) {
+        treeCalls += 1;
+        return jsonResponse(treeCalls === 1 ? treeFixture : editedTree);
+      }
+      if (url.endsWith("/bookmarks/bookmark-c") && init?.method === "PATCH") {
+        patchCalls.push({ url, init });
+        return jsonResponse({ id: "bookmark-c", workspaceId: "workspace-1", folderId: "folder-b", title: "New Title", url: "https://example.com/new", position: 0, createdAt: "", updatedAt: "" });
+      }
+      return jsonResponse({ error: "not found" }, 404);
+    });
+
+    renderAppRoute("/bookmarks?workspace=workspace-1");
+    await screen.findByText("Bookmark C");
+
+    await userEvent.click(screen.getByRole("button", { name: /actions for bookmark c/i }));
+    await userEvent.click(screen.getByRole("button", { name: /^edit$/i }));
+
+    const titleInput = await screen.findByLabelText(/bookmark title/i);
+    const urlInput = screen.getByLabelText(/bookmark url/i);
+    await userEvent.clear(titleInput);
+    await userEvent.type(titleInput, "New Title");
+    await userEvent.clear(urlInput);
+    await userEvent.type(urlInput, "https://example.com/new");
+    await userEvent.click(screen.getByRole("button", { name: /^save$/i }));
+
+    await screen.findByText("New Title");
+    expect(patchCalls).toHaveLength(1);
+    expect(headersOf(patchCalls[0].init).get("X-Sync-Event-Id")).toBeTruthy();
+    expect(bodyOf(patchCalls[0].init)).toEqual({ title: "New Title", url: "https://example.com/new" });
+  }, 15000);
+
+  it("folder delete opens ConfirmByTyping with the cascade/blast-radius copy, and cancelling sends no DELETE", async () => {
+    const deleteCalls: string[] = [];
+
+    fetchMock.mockImplementation((input, init) => {
+      const url = String(input);
+      if (url.endsWith("/workspaces/workspace-1/tree")) {
+        return jsonResponse(treeFixture);
+      }
+      if (url.endsWith("/folders/folder-a") && init?.method === "DELETE") {
+        deleteCalls.push(url);
+        return Promise.resolve(new Response(null, { status: 204 }));
+      }
+      return jsonResponse({ error: "not found" }, 404);
+    });
+
+    renderAppRoute("/bookmarks?workspace=workspace-1");
+    await screen.findByText("Folder A");
+
+    await userEvent.click(screen.getByRole("button", { name: /actions for folder a/i }));
+    await userEvent.click(screen.getByRole("button", { name: /^delete$/i }));
+
+    expect(await screen.findByText(/deleting folder a also deletes every folder and bookmark inside it/i)).toBeInTheDocument();
+    expect(screen.getByText(/applies immediately to every browser synced to this workspace/i)).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: /close panel/i }));
+
+    expect(screen.queryByText(/type "folder a" to confirm/i)).not.toBeInTheDocument();
+    expect(deleteCalls).toHaveLength(0);
+  });
+
+  it("bookmark delete requires confirmation before any DELETE, and confirming removes only that bookmark", async () => {
+    let treeCalls = 0;
+    const deleteCalls: Array<{ url: string; init?: RequestInit }> = [];
+    const afterDeleteTree = {
+      ...treeFixture,
+      folders: treeFixture.folders.map((folder) => (folder.id === "folder-a" ? { ...folder, bookmarks: [] } : folder)),
+    };
+
+    fetchMock.mockImplementation((input, init) => {
+      const url = String(input);
+      if (url.endsWith("/workspaces/workspace-1/tree")) {
+        treeCalls += 1;
+        return jsonResponse(treeCalls === 1 ? treeFixture : afterDeleteTree);
+      }
+      if (url.endsWith("/bookmarks/bookmark-d") && init?.method === "DELETE") {
+        deleteCalls.push({ url, init });
+        return Promise.resolve(new Response(null, { status: 204 }));
+      }
+      return jsonResponse({ error: "not found" }, 404);
+    });
+
+    renderAppRoute("/bookmarks?workspace=workspace-1");
+    await screen.findByText("Bookmark D");
+
+    await userEvent.click(screen.getByRole("button", { name: /actions for bookmark d/i }));
+    await userEvent.click(screen.getByRole("button", { name: /^delete$/i }));
+
+    expect(deleteCalls).toHaveLength(0);
+    await userEvent.click(screen.getByRole("button", { name: /^delete bookmark$/i }));
+
+    await waitFor(() => expect(deleteCalls).toHaveLength(1));
+    expect(headersOf(deleteCalls[0].init).get("X-Sync-Event-Id")).toBeTruthy();
+    await waitFor(() => expect(screen.queryByText("Bookmark D")).not.toBeInTheDocument());
+    expect(screen.getByText("Bookmark C")).toBeInTheDocument();
+  });
+
+  it("creates a folder at the workspace root when no parent is selected", async () => {
+    let treeCalls = 0;
+    const postCalls: Array<{ url: string; init?: RequestInit }> = [];
+    const withNewFolder = { ...treeFixture, folders: [...treeFixture.folders, { id: "folder-new", name: "New Root Folder", position: 2, folders: [], bookmarks: [] }] };
+
+    fetchMock.mockImplementation((input, init) => {
+      const url = String(input);
+      if (url.endsWith("/workspaces/workspace-1/tree")) {
+        treeCalls += 1;
+        return jsonResponse(treeCalls === 1 ? treeFixture : withNewFolder);
+      }
+      if (url.endsWith("/workspaces/workspace-1/folders") && init?.method === "POST") {
+        postCalls.push({ url, init });
+        return jsonResponse({ id: "folder-new", workspaceId: "workspace-1", name: "New Root Folder", position: 2, createdAt: "", updatedAt: "" }, 201);
+      }
+      return jsonResponse({ error: "not found" }, 404);
+    });
+
+    renderAppRoute("/bookmarks?workspace=workspace-1");
+    await screen.findByText("Folder A");
+
+    await userEvent.click(screen.getByRole("button", { name: /^new folder$/i }));
+    const nameInput = await screen.findByLabelText(/folder name/i);
+    await userEvent.type(nameInput, "New Root Folder");
+    await userEvent.click(screen.getByRole("button", { name: /^create folder$/i }));
+
+    await screen.findByText("New Root Folder");
+    expect(postCalls).toHaveLength(1);
+    expect(bodyOf(postCalls[0].init)).toEqual({ parentId: null, name: "New Root Folder" });
+  });
+
+  it("creates a folder nested inside another folder via its Add-folder-inside action", async () => {
+    let treeCalls = 0;
+    const postCalls: Array<{ url: string; init?: RequestInit }> = [];
+    const withNestedFolder = {
+      ...treeFixture,
+      folders: treeFixture.folders.map((folder) => (folder.id === "folder-a" ? { ...folder, folders: [...folder.folders, { id: "folder-nested", parentId: "folder-a", name: "Nested Folder", position: 1, folders: [], bookmarks: [] }] } : folder)),
+    };
+
+    fetchMock.mockImplementation((input, init) => {
+      const url = String(input);
+      if (url.endsWith("/workspaces/workspace-1/tree")) {
+        treeCalls += 1;
+        return jsonResponse(treeCalls === 1 ? treeFixture : withNestedFolder);
+      }
+      if (url.endsWith("/workspaces/workspace-1/folders") && init?.method === "POST") {
+        postCalls.push({ url, init });
+        return jsonResponse({ id: "folder-nested", workspaceId: "workspace-1", parentId: "folder-a", name: "Nested Folder", position: 1, createdAt: "", updatedAt: "" }, 201);
+      }
+      return jsonResponse({ error: "not found" }, 404);
+    });
+
+    renderAppRoute("/bookmarks?workspace=workspace-1");
+    await screen.findByText("Folder A");
+
+    await userEvent.click(screen.getByRole("button", { name: /actions for folder a/i }));
+    await userEvent.click(screen.getByRole("button", { name: /^add folder inside$/i }));
+    const nameInput = await screen.findByLabelText(/folder name/i);
+    await userEvent.type(nameInput, "Nested Folder");
+    await userEvent.click(screen.getByRole("button", { name: /^create folder$/i }));
+
+    await screen.findByText("Nested Folder");
+    expect(postCalls).toHaveLength(1);
+    expect(bodyOf(postCalls[0].init)).toEqual({ parentId: "folder-a", name: "Nested Folder" });
+  });
+
+  it("creates a bookmark inside a folder via its Add-bookmark-inside action", async () => {
+    let treeCalls = 0;
+    const postCalls: Array<{ url: string; init?: RequestInit }> = [];
+    const withNewBookmark = {
+      ...treeFixture,
+      folders: treeFixture.folders.map((folder) => (folder.id === "folder-a" ? { ...folder, bookmarks: [...folder.bookmarks, { id: "bookmark-new", folderId: "folder-a", title: "New Bookmark", url: "https://example.com/new-bookmark", position: 1 }] } : folder)),
+    };
+
+    fetchMock.mockImplementation((input, init) => {
+      const url = String(input);
+      if (url.endsWith("/workspaces/workspace-1/tree")) {
+        treeCalls += 1;
+        return jsonResponse(treeCalls === 1 ? treeFixture : withNewBookmark);
+      }
+      if (url.endsWith("/workspaces/workspace-1/bookmarks") && init?.method === "POST") {
+        postCalls.push({ url, init });
+        return jsonResponse({ id: "bookmark-new", workspaceId: "workspace-1", folderId: "folder-a", title: "New Bookmark", url: "https://example.com/new-bookmark", position: 1, createdAt: "", updatedAt: "" }, 201);
+      }
+      return jsonResponse({ error: "not found" }, 404);
+    });
+
+    renderAppRoute("/bookmarks?workspace=workspace-1");
+    await screen.findByText("Folder A");
+
+    await userEvent.click(screen.getByRole("button", { name: /actions for folder a/i }));
+    await userEvent.click(screen.getByRole("button", { name: /^add bookmark inside$/i }));
+    const titleInput = await screen.findByLabelText(/bookmark title/i);
+    const urlInput = screen.getByLabelText(/bookmark url/i);
+    await userEvent.type(titleInput, "New Bookmark");
+    await userEvent.type(urlInput, "https://example.com/new-bookmark");
+    await userEvent.click(screen.getByRole("button", { name: /^create bookmark$/i }));
+
+    await screen.findByText("New Bookmark");
+    expect(postCalls).toHaveLength(1);
+    expect(bodyOf(postCalls[0].init)).toEqual({ folderId: "folder-a", title: "New Bookmark", url: "https://example.com/new-bookmark" });
+  });
+});
