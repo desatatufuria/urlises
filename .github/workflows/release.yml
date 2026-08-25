@@ -38,11 +38,22 @@ jobs:
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
       - uses: docker/build-push-action@v6
+        id: build
         with:
           context: .
           file: backend/Dockerfile
           push: true
           tags: ${{ steps.image_tags.outputs.tags }}
+      # --- signing: runs on this same ubuntu-latest runner, after the push ---
+      - uses: sigstore/cosign-installer@v3
+      - name: Sign image
+        env:
+          COSIGN_PRIVATE_KEY: ${{ secrets.COSIGN_PRIVATE_KEY }}
+          COSIGN_PASSWORD: ${{ secrets.COSIGN_PASSWORD }}
+        run: |
+          cosign sign --key env://COSIGN_PRIVATE_KEY --yes \
+            registry.desatatufuria.com/dtf-bookmarks-sync-backend@${{ steps.build.outputs.digest }}
+      # --- end signing ---
 
   admin-web-image:
     needs: checks
@@ -73,10 +84,21 @@ jobs:
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
       - uses: docker/build-push-action@v6
+        id: build
         with:
           context: ./admin-web
           push: true
           tags: ${{ steps.image_tags.outputs.tags }}
+      # --- signing: same pattern as backend-image ---
+      - uses: sigstore/cosign-installer@v3
+      - name: Sign image
+        env:
+          COSIGN_PRIVATE_KEY: ${{ secrets.COSIGN_PRIVATE_KEY }}
+          COSIGN_PASSWORD: ${{ secrets.COSIGN_PASSWORD }}
+        run: |
+          cosign sign --key env://COSIGN_PRIVATE_KEY --yes \
+            registry.desatatufuria.com/dtf-bookmarks-sync-admin-web@${{ steps.build.outputs.digest }}
+      # --- end signing ---
 
   extension-artifact:
     needs: checks
