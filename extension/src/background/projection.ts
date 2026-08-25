@@ -453,21 +453,16 @@ async function settleLocalMutation(
 async function captureLocalUpdateOrMove(context: LocalIntentContext, chromeId: string, kind: "changed" | "moved"): Promise<void> {
   const node = await getNode(chromeId);
   if (!node) {
-    await updateProjectionState(context.workspaceId, (projection) => {
-      const journal = projection.convergenceJournal ?? emptyJournal();
-      journal.phase = "paused";
-      journal.pauseReason = projection.lastCursor === 0 ? "cursor-zero-read-failed" : "ambiguous-operation";
-      projection.convergenceJournal = journal;
-    });
+    // A missing or out-of-workspace Chrome node is a mapping-integrity failure, not a
+    // resync-shaped one — gateRemoteEffect's default ("retry") is what these reasons are for, and
+    // the auto-repair layer will escalate to rebuild on its own if a receipt is pending (ADR-405).
+    const cursor = (await getState()).projectionsByWorkspaceId[context.workspaceId]?.lastCursor ?? 0;
+    await pauseWorkspace(context.workspaceId, cursor, cursor === 0 ? "cursor-zero-read-failed" : "ambiguous-operation");
     return;
   }
   if (!await isWithinWorkspace(node, context.projection.workspaceChromeId)) {
-    await updateProjectionState(context.workspaceId, (projection) => {
-      const journal = projection.convergenceJournal ?? emptyJournal();
-      journal.phase = "paused";
-      journal.pauseReason = "stale-mapping";
-      projection.convergenceJournal = journal;
-    });
+    const cursor = (await getState()).projectionsByWorkspaceId[context.workspaceId]?.lastCursor ?? 0;
+    await pauseWorkspace(context.workspaceId, cursor, "stale-mapping");
     return;
   }
   await updateProjectionState(context.workspaceId, (projection) => {

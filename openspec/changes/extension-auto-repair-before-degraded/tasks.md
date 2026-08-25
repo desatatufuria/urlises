@@ -56,15 +56,15 @@ Regression guard (D6/C8, explicit — not incidental):
 ## Phase B: Slice B — `captureLocalUpdateOrMove`'s 2 direct pauses degrade visibly (ADR-405; branch `.../slice-b-visible-local-pauses` off slice-a)
 
 RED:
-- [ ] B.1 T-B1: vanished node, `lastCursor===0` → `pauseReason==="cursor-zero-read-failed"`, `health==="degraded"`, `failedCursor===0`, zero fetches.
-- [ ] B.2 T-B2: vanished node past cursor zero → `pauseReason==="ambiguous-operation"`, `failedCursor===5`.
-- [ ] B.3 T-B3: node moved outside workspace subtree → `pauseReason==="stale-mapping"`, `health==="degraded"`, no backend call.
-- [ ] B.4 T-B4 (guard): re-assert `:1467-1485` verbatim + `journal?.phase !== "paused"` + `degradedReason==="websocket closed"`.
+- [x] B.1 T-B1: vanished node, `lastCursor===0` → `pauseReason==="cursor-zero-read-failed"`, `health==="degraded"`, `failedCursor===0`, zero fetches. Implemented by extending the existing `missing cursor-zero node pauses intent capture...` test in place. RED confirmed.
+- [x] B.2 T-B2: vanished node past cursor zero → `pauseReason==="ambiguous-operation"`, `failedCursor===5`. New test `a local change to a vanished node past cursor zero degrades as ambiguous-operation`. RED confirmed.
+- [x] B.3 T-B3: node moved outside workspace subtree → `pauseReason==="stale-mapping"`, `health==="degraded"`, no backend call. New test `a local move of a node outside the workspace subtree degrades as stale-mapping`. RED confirmed.
+- [x] B.4 T-B4 (guard): re-assert `:1467-1485` verbatim + `journal?.phase !== "paused"` + `degradedReason==="websocket closed"`. Added the phase assertion to the existing `connectWorkspace degrades only after the silent recovery budget is exhausted` test.
 
 GREEN:
-- [ ] B.5 Rewrite the two direct journal blocks in `captureLocalUpdateOrMove` (:435-454) to call `pauseWorkspace` with a snapshot-read cursor/reason; no `{ repair }` hint.
-- [ ] B.6 Confirm T-B1-T-B4 green. Do NOT touch `enterRecovery` (:2024-2048) — excluded, ADR-405.
-- [ ] B.7 Gate: `npm run test:projection` + `npm run typecheck` green. Commit Slice B alone.
+- [x] B.5 Rewrite the two direct journal blocks in `captureLocalUpdateOrMove` (:435-454) to call `pauseWorkspace` with a snapshot-read cursor/reason; no `{ repair }` hint.
+- [x] B.6 Confirm T-B1-T-B4 green. Do NOT touch `enterRecovery` (:2024-2048) — excluded, ADR-405. Confirmed: `git diff feature/extension-auto-repair-on-pause -- src/background/projection.ts` shows zero occurrences of `enterRecovery`.
+- [x] B.7 Gate: `npm run test:projection` + `npm run typecheck` green. Commit Slice B alone. Result: 233/233 pass, typecheck clean. Production diff: 19 lines (net, projection.ts).
 
 ## Phase C: Slice C — bounded auto-repair mechanism (ADR-401/402/403/406; branch `.../slice-c-bounded-auto-repair` off slice-b)
 

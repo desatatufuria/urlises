@@ -1720,6 +1720,10 @@ test("connectWorkspace degrades only after the silent recovery budget is exhaust
   assert.equal(projection.health, "degraded");
   assert.equal(projection.status, "error");
   assert.equal(projection.degradedReason, "websocket closed");
+  // T-B4 (ADR-405 guard): enterRecovery's give-up branch never gates the journal — it is a
+  // separate, already-bounded repair layer for connectivity failures, not a target of Slice B's
+  // consolidation. If a future edit routes it through pauseWorkspace, this fails immediately.
+  assert.notEqual(projection.convergenceJournal?.phase, "paused");
 });
 
 test("connectWorkspace logs secret-free pause context on rejected Chrome effects", async () => {
@@ -2428,6 +2432,53 @@ test("missing cursor-zero node pauses intent capture without advancing or mutati
   assert.equal(projection.convergenceJournal.phase, "paused");
   assert.equal(projection.convergenceJournal.pauseReason, "cursor-zero-read-failed");
   assert.deepEqual(projection.convergenceJournal.localIntents, []);
+  // T-B1 (ADR-405): this pause must now reach the same `health` signal every other pause reaches
+  // — before Slice B it silently left the workspace reporting `live` while stuck paused forever.
+  assert.equal(projection.health, "degraded");
+  assert.equal(projection.status, "error");
+  assert.equal(projection.degradedReason, "cursor-zero-read-failed");
+  assert.equal(projection.convergenceJournal.failedCursor, 0);
+});
+
+test("a local change to a vanished node past cursor zero degrades as ambiguous-operation", async () => {
+  await setState({ ...createRuntimeState({ lastCursor: 5 }), projectionsByWorkspaceId: { "workspace-1": createEditorProjection({
+    workspaceChromeId: "workspace-node", chromeIdByBackendId: { "bookmark-1": "missing-node" },
+    backendIdByChromeId: { "missing-node": "bookmark-1" }, entityTypeByBackendId: { "bookmark-1": "bookmark" },
+    lastCursor: 5,
+  }) } });
+
+  await handleBookmarkChanged("missing-node", { title: "Lost" });
+
+  const projection = (await getState()).projectionsByWorkspaceId["workspace-1"];
+  assert.equal(fetchLog.length, 0);
+  assert.equal(projection.convergenceJournal.phase, "paused");
+  assert.equal(projection.convergenceJournal.pauseReason, "ambiguous-operation");
+  assert.equal(projection.convergenceJournal.failedCursor, 5);
+  assert.equal(projection.health, "degraded");
+  assert.equal(projection.status, "error");
+  assert.equal(projection.degradedReason, "ambiguous-operation");
+});
+
+test("a local move of a node outside the workspace subtree degrades as stale-mapping", async () => {
+  bookmarkNodes.set("workspace-node", createBookmarkNode({ id: "workspace-node", parentId: "1", title: "Workspace", index: 0 }));
+  bookmarkNodes.set("elsewhere-node", createBookmarkNode({ id: "elsewhere-node", parentId: "1", title: "Elsewhere", index: 1 }));
+  bookmarkNodes.set("bookmark-node", createBookmarkNode({ id: "bookmark-node", parentId: "elsewhere-node", title: "Bookmark", url: "https://example.com/bookmark", index: 0 }));
+  rebuildBookmarkChildren();
+
+  await setState({ ...createRuntimeState({ lastCursor: 5 }), projectionsByWorkspaceId: { "workspace-1": createEditorProjection({
+    workspaceChromeId: "workspace-node", chromeIdByBackendId: { "bookmark-1": "bookmark-node" },
+    backendIdByChromeId: { "bookmark-node": "bookmark-1" }, entityTypeByBackendId: { "bookmark-1": "bookmark" },
+    lastCursor: 5,
+  }) } });
+
+  await handleBookmarkMoved("bookmark-node", { parentId: "elsewhere-node", oldParentId: "workspace-node", index: 0, oldIndex: 0 });
+
+  const projection = (await getState()).projectionsByWorkspaceId["workspace-1"];
+  assert.equal(fetchLog.length, 0, "must not call the backend for a mapping-integrity failure");
+  assert.equal(projection.convergenceJournal.phase, "paused");
+  assert.equal(projection.convergenceJournal.pauseReason, "stale-mapping");
+  assert.equal(projection.health, "degraded");
+  assert.equal(projection.status, "error");
 });
 
 test("handleBookmarkChanged retains one failed stable intent without destructive recovery", async () => {
