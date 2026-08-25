@@ -23,5 +23,6 @@ export const queryKeys = {
   }),
   workspace: (workspaceId: string) => ({
     access: ["workspaces", workspaceId, "access"] as const,
+    tree: ["workspaces", workspaceId, "tree"] as const,
   }),
 };
