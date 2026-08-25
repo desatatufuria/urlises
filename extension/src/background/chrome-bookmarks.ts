@@ -2,6 +2,19 @@ import { ROOT_FOLDER_TITLE } from "../shared/runtime.js";
 
 const LEGACY_ROOT_FOLDER_TITLE = "Shared Bookmarks";
 
+// ensureManagedPath is a three-step check-then-create (root -> organization -> workspace) against a
+// tree Chrome lets anyone mutate concurrently, and every step is shared with other workspaces: the
+// managed root by every organization, the organization folder by every workspace inside it. Two
+// overlapping resyncs both read "absent" and both create, and Chrome happily keeps duplicate-titled
+// siblings. Serializing the whole composite is what makes "resolve or create, exactly once" true.
+let managedPathQueue: Promise<unknown> = Promise.resolve();
+
+function enqueueManagedPathTask<T>(task: () => Promise<T>): Promise<T> {
+  const next = managedPathQueue.then(task, task);
+  managedPathQueue = next.then(() => undefined, () => undefined);
+  return next;
+}
+
 export async function getNode(id: string): Promise<chrome.bookmarks.BookmarkTreeNode | null> {
   return new Promise((resolve) => {
     chrome.bookmarks.get(id, (nodes) => {
@@ -131,11 +144,13 @@ export async function removeTree(id: string): Promise<void> {
 }
 
 export async function ensureManagedPath(organizationName: string, workspaceName: string): Promise<{ rootId: string; organizationId: string; workspaceId: string }> {
-  const containerId = await getDefaultContainerId();
-  const root = await ensureManagedRoot(containerId);
-  const organization = await ensureFolderByTitle(root.id, organizationName);
-  const workspace = await ensureFolderByTitle(organization.id, workspaceName);
-  return { rootId: root.id, organizationId: organization.id, workspaceId: workspace.id };
+  return enqueueManagedPathTask(async () => {
+    const containerId = await getDefaultContainerId();
+    const root = await ensureManagedRoot(containerId);
+    const organization = await ensureFolderByTitle(root.id, organizationName);
+    const workspace = await ensureFolderByTitle(organization.id, workspaceName);
+    return { rootId: root.id, organizationId: organization.id, workspaceId: workspace.id };
+  });
 }
 
 export async function clearChildren(folderId: string, excludeIds: string[] = []): Promise<string[]> {
