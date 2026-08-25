@@ -1,4 +1,4 @@
-import { screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderAppRoute } from "../../test/renderRoute";
@@ -479,5 +479,106 @@ describe("bookmarks page — mutations and panels", () => {
     await screen.findByText("New Bookmark");
     expect(postCalls).toHaveLength(1);
     expect(bodyOf(postCalls[0].init)).toEqual({ folderId: "folder-a", title: "New Bookmark", url: "https://example.com/new-bookmark" });
+  });
+});
+
+// The keyboard Alt+Arrow path is fully testable in jsdom precisely because
+// it is coordinate-free (design.md Testing Strategy) — it never touches
+// @dnd-kit's pointer/collision machinery, only treeModel.ts's pure planner.
+describe("bookmarks page — keyboard-driven move (Alt+Arrow)", () => {
+  const fetchMock = vi.fn<typeof fetch>();
+
+  const twoSiblingTree = {
+    workspace: {
+      workspaceId: "workspace-1",
+      workspaceName: "Launch Room",
+      workspaceType: "shared",
+      organizationId: "org-1",
+      organizationName: "Acme",
+      role: "editor",
+      sources: ["direct"],
+    },
+    folders: [
+      {
+        id: "folder-a",
+        name: "Folder A",
+        position: 0,
+        folders: [],
+        bookmarks: [
+          { id: "bookmark-first", folderId: "folder-a", title: "First Bookmark", url: "https://example.com/first", position: 0 },
+          { id: "bookmark-second", folderId: "folder-a", title: "Second Bookmark", url: "https://example.com/second", position: 1 },
+        ],
+      },
+    ],
+  };
+
+  beforeEach(() => {
+    vi.stubGlobal("fetch", fetchMock);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    fetchMock.mockReset();
+    vi.restoreAllMocks();
+  });
+
+  it("Alt+ArrowDown on a row's drag handle issues the expected PATCH and updates the live region", async () => {
+    let treeCalls = 0;
+    const patchCalls: Array<{ url: string; init?: RequestInit }> = [];
+
+    fetchMock.mockImplementation((input, init) => {
+      const url = String(input);
+      if (url.endsWith("/workspaces/workspace-1/tree")) {
+        treeCalls += 1;
+        return jsonResponse(twoSiblingTree);
+      }
+      if (url.endsWith("/bookmarks/bookmark-first") && init?.method === "PATCH") {
+        patchCalls.push({ url, init });
+        return jsonResponse({ id: "bookmark-first", workspaceId: "workspace-1", folderId: "folder-a", title: "First Bookmark", url: "https://example.com/first", position: 1, createdAt: "", updatedAt: "" });
+      }
+      return jsonResponse({ error: "not found" }, 404);
+    });
+
+    renderAppRoute("/bookmarks?workspace=workspace-1");
+    await screen.findByText("First Bookmark");
+
+    const handle = screen.getByRole("button", { name: /move first bookmark/i });
+    fireEvent.keyDown(handle, { key: "ArrowDown", altKey: true });
+
+    await waitFor(() => expect(patchCalls).toHaveLength(1));
+    expect(headersOf(patchCalls[0].init).get("X-Sync-Event-Id")).toBeTruthy();
+    expect(bodyOf(patchCalls[0].init)).toEqual({ position: 1 });
+
+    const liveRegion = screen.getByTestId("tree-move-announcer");
+    await waitFor(() => expect(liveRegion.textContent).toContain("First Bookmark"));
+    await waitFor(() => expect(treeCalls).toBe(2));
+  });
+
+  it("surfaces the server's rejection message for a rejected move, and still refetches the tree", async () => {
+    let treeCalls = 0;
+    const patchCalls: Array<{ url: string; init?: RequestInit }> = [];
+
+    fetchMock.mockImplementation((input, init) => {
+      const url = String(input);
+      if (url.endsWith("/workspaces/workspace-1/tree")) {
+        treeCalls += 1;
+        return jsonResponse(twoSiblingTree);
+      }
+      if (url.endsWith("/bookmarks/bookmark-first") && init?.method === "PATCH") {
+        patchCalls.push({ url, init });
+        return jsonResponse({ error: "folder cannot move into its own subtree" }, 400);
+      }
+      return jsonResponse({ error: "not found" }, 404);
+    });
+
+    renderAppRoute("/bookmarks?workspace=workspace-1");
+    await screen.findByText("First Bookmark");
+
+    const handle = screen.getByRole("button", { name: /move first bookmark/i });
+    fireEvent.keyDown(handle, { key: "ArrowDown", altKey: true });
+
+    await waitFor(() => expect(patchCalls).toHaveLength(1));
+    expect(await screen.findByText(/folder cannot move into its own subtree/i)).toBeInTheDocument();
+    await waitFor(() => expect(treeCalls).toBe(2));
   });
 });

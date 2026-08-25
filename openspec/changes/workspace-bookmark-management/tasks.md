@@ -121,29 +121,29 @@ Each unit is developed, tested, and merged into the previous unit's branch befor
 
 ## Phase C1: `treeModel.ts` (pure — the automated coverage centre)
 
-- [ ] C1.1 RED: `admin-web/src/lib/bookmarks/treeModel.test.ts` (new) — `flattenTree`: depth-first nesting order, folders-before-bookmarks within each parent, per-group `index === server position`, collapsed folders contribute their own row and no descendants, `parentId` absent ⇒ workspace root.
-- [ ] C1.2 GREEN: `admin-web/src/lib/bookmarks/treeModel.ts` (new) — `FlatRow`, `flattenTree`.
-- [ ] C1.3 RED: same — **the single highest-value test in the change**: `planDrop` same-group reorder — `position === overRow.index` for every `(from, to)` pair of a 4-item group, cross-checked against a local `arrayMove` port and a local port of the server's `insertAt`.
-- [ ] C1.4 RED: same — `planDrop` cross-group reparent sets `parentChanged: true` and inserts before the hovered row (fixture: two sibling folders).
-- [ ] C1.5 GREEN: `treeModel.ts` — `DropTarget`, `MovePlan`, `planDrop`.
-- [ ] C1.6 RED: same — `isLegalTarget` table-driven: cross-type row rejected, self rejected, folder→own-descendant rejected, `into`-own-current-parent rejected, bookmark→`into-root` rejected.
-- [ ] C1.7 GREEN: `treeModel.ts` — `isLegalTarget`, consumed identically by the collision filter (C2) and the keyboard planner.
-- [ ] C1.8 RED: same — `planKeyboardMove` for `up`/`down`/`indent`/`outdent` produces **byte-identical `MovePlan`s** to the equivalent `planDrop` call — the structural proof of "keyboard achieves the same outcome as a mouse drag". *(Spec: "Keyboard-only reorder moves an item")*
-- [ ] C1.9 GREEN: `treeModel.ts` — `MoveCommand`, `planKeyboardMove` (`Alt+↑/↓` reorder within sibling group; `Alt+←` outdent to grandparent, refused when parent is a root folder for a bookmark; `Alt+→` indent into the preceding folder sibling).
-- [ ] C1.10 GREEN: `treeModel.ts` — `describeMovePlan`, one function consumed by both the dnd-kit `announcements` object and the keyboard path's own `aria-live` text. *(Spec: "Screen reader announces the move outcome")*
+- [x] C1.1 RED: `admin-web/src/lib/bookmarks/treeModel.test.ts` (new) — `flattenTree`: depth-first nesting order, folders-before-bookmarks within each parent, per-group `index === server position`, collapsed folders contribute their own row and no descendants, `parentId` absent ⇒ workspace root.
+- [x] C1.2 GREEN: `admin-web/src/lib/bookmarks/treeModel.ts` (new) — `FlatRow`, `flattenTree`.
+- [x] C1.3 RED: same — **the single highest-value test in the change**: `planDrop` same-group reorder — `position === overRow.index` for every `(from, to)` pair of a 4-item group, cross-checked against a local `arrayMove` port and a local port of the server's `insertAt`.
+- [x] C1.4 RED: same — `planDrop` cross-group reparent sets `parentChanged: true` and inserts before the hovered row (fixture: two sibling folders).
+- [x] C1.5 GREEN: `treeModel.ts` — `DropTarget`, `MovePlan`, `planDrop`.
+- [x] C1.6 RED: same — `isLegalTarget` table-driven: cross-type row rejected, self rejected, folder→own-descendant rejected, `into`-own-current-parent rejected, bookmark→`into-root` rejected.
+- [x] C1.7 GREEN: `treeModel.ts` — `isLegalTarget`, consumed identically by the collision filter (C2) and the keyboard planner.
+- [x] C1.8 RED: same — `planKeyboardMove` for `up`/`down`/`indent`/`outdent` produces **byte-identical `MovePlan`s** to the equivalent `planDrop` call — the structural proof of "keyboard achieves the same outcome as a mouse drag". *(Spec: "Keyboard-only reorder moves an item")*
+- [x] C1.9 GREEN: `treeModel.ts` — `MoveCommand`, `planKeyboardMove` (`Alt+↑/↓` reorder within sibling group; `Alt+←` outdent to grandparent, refused when parent is a root folder for a bookmark; `Alt+→` indent into the preceding folder sibling).
+- [x] C1.10 GREEN: `treeModel.ts` — `describeMovePlan`, one function consumed by both the dnd-kit `announcements` object and the keyboard path's own `aria-live` text. *(Spec: "Screen reader announces the move outcome")*
 
 ## Phase C2: DnD Wiring
 
-- [ ] C2.1 GREEN: `admin-web/package.json` — add `@dnd-kit/core`, `@dnd-kit/sortable`, `@dnd-kit/utilities`.
-- [ ] C2.2 GREEN: `admin-web/src/features/bookmarks/dnd/collision.ts` (new) — `legalTargets(closestCenter)`: filters `args.droppableContainers` by `isLegalTarget` **before** collision runs, so an illegal target is never reported as `over` (Decision 6).
-- [ ] C2.3 GREEN: `admin-web/src/features/bookmarks/dnd/announcements.ts` (new) — dnd-kit `announcements` built on `describeMovePlan`.
-- [ ] C2.4 GREEN: `BookmarkTree.tsx` (rework) — one flat `SortableContext(flatRowKeys, verticalListSortingStrategy)` over `flattenTree`'s output inside the existing nested `<ul>` markup; `DndContext` with pointer + `KeyboardSensor`; `aria-live="polite"` region; `RootDropZone` (`useDroppable("into-root")`, folders only, visible only while dragging); `DragOverlay`. No optimistic state retained anywhere (Decision 10).
-- [ ] C2.5 GREEN: `TreeRow.tsx` (extend) — `useSortable({id: rowKey})`; folder rows also `useDroppable({id: "into:" + id})`; drag handle button carries both dnd-kit listeners and the `Alt+Arrow` `onKeyDown` handler (never colliding with `KeyboardSensor`'s space-to-lift).
-- [ ] C2.6 GREEN: `mutations.ts` (extend) — `useMoveNodeMutation`: branches `updateFolder`/`updateBookmark` on `plan.type`, sends `parentId`/`folderId` only when `plan.parentChanged`, `onSettled` (not `onSuccess` — a rejected move must still resync) invalidates the tree.
-- [ ] C2.7 RED: `BookmarksPage.test.tsx` (extend) — `Alt+↓` on a row's drag handle issues the expected PATCH and updates the `aria-live` region text. *(Spec: "Keyboard-only reorder moves an item")* — the keyboard path is fully testable in jsdom precisely because it is coordinate-free.
-- [ ] C2.8 RED: same — a rejected move (mocked 400, cycle-guard message) surfaces the server message **and** still triggers a refetch via `onSettled`. *(Spec: "A cycle-producing move is rejected and shown")*
-- [ ] C2.9 GREEN: `admin-web/src/lib/ui/tokens.css` — `.ui-tree*` single-line/ellipsis rows (required for uniform row height, Decision 7), indent, drop indicator, into-zone highlight, `.ui-visually-hidden` for the live region.
-- [ ] C2.10 **MANUAL VERIFICATION CHECKLIST — mandatory, real browser only.** jsdom returns zeroed `getBoundingClientRect`; `@dnd-kit`'s collision/coordinate/pointer paths are structurally unverifiable in this repo's vitest+jsdom harness (design.md Testing Strategy, "Not covered" row). `treeModel.ts` is unit-tested exhaustively (C1) specifically so this checklist is the *only* uncovered surface:
+- [x] C2.1 GREEN: `admin-web/package.json` — add `@dnd-kit/core`, `@dnd-kit/sortable`, `@dnd-kit/utilities`.
+- [x] C2.2 GREEN: `admin-web/src/features/bookmarks/dnd/collision.ts` (new) — `legalTargets(closestCenter)`: filters `args.droppableContainers` by `isLegalTarget` **before** collision runs, so an illegal target is never reported as `over` (Decision 6).
+- [x] C2.3 GREEN: `admin-web/src/features/bookmarks/dnd/announcements.ts` (new) — dnd-kit `announcements` built on `describeMovePlan`.
+- [x] C2.4 GREEN: `BookmarkTree.tsx` (rework) — one flat `SortableContext(flatRowKeys, verticalListSortingStrategy)` over `flattenTree`'s output; `DndContext` with pointer + `KeyboardSensor`; `aria-live="polite"` region; `RootDropZone` (`useDroppable("into-root")`, folders only, visible only while dragging); `DragOverlay`. No optimistic state retained anywhere (Decision 10). *(Deviation: renders one flat `<ul>` with per-row `--depth` indentation rather than nested `<ul>` markup — see apply-time deviation note.)*
+- [x] C2.5 GREEN: `TreeRow.tsx` (extend) — `useSortable({id: rowKey})`; folder rows also `useDroppable({id: "into:" + id})`; drag handle button carries both dnd-kit listeners and the `Alt+Arrow` `onKeyDown` handler (never colliding with `KeyboardSensor`'s space-to-lift).
+- [x] C2.6 GREEN: `mutations.ts` (extend) — `useMoveNodeMutation`: branches `updateFolder`/`updateBookmark` on `plan.type`, sends `parentId`/`folderId` only when `plan.parentChanged`, `onSettled` (not `onSuccess` — a rejected move must still resync) invalidates the tree.
+- [x] C2.7 RED→GREEN: `BookmarksPage.test.tsx` (extend) — `Alt+↓` on a row's drag handle issues the expected PATCH and updates the `aria-live` region text. *(Spec: "Keyboard-only reorder moves an item")* — the keyboard path is fully testable in jsdom precisely because it is coordinate-free.
+- [x] C2.8 RED→GREEN: same — a rejected move (mocked 400, cycle-guard message) surfaces the server message **and** still triggers a refetch via `onSettled`. *(Spec: "A cycle-producing move is rejected and shown")*
+- [x] C2.9 GREEN: `admin-web/src/lib/ui/tokens.css` — `.ui-tree*` single-line/ellipsis rows (required for uniform row height, Decision 7), indent, drop indicator, into-zone highlight, `.ui-visually-hidden` for the live region.
+- [ ] C2.10 **MANUAL VERIFICATION CHECKLIST — mandatory, real browser only, NOT executed in this sandbox.** jsdom returns zeroed `getBoundingClientRect`; `@dnd-kit`'s collision/coordinate/pointer paths are structurally unverifiable in this repo's vitest+jsdom harness (design.md Testing Strategy, "Not covered" row). `treeModel.ts` is unit-tested exhaustively (C1) specifically so this checklist is the *only* uncovered surface. The wiring is implemented and typechecks/builds; a human must verify the following against a real browser before this box is checked:
   - [ ] Pointer drag reorders two sibling bookmarks within a folder; final order matches the server after refetch.
   - [ ] Pointer drag reparents a bookmark by dropping it onto a folder's into-zone; it becomes that folder's child.
   - [ ] Drop-indicator placement visually matches the row the pointer is hovering.

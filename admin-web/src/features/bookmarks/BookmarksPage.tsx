@@ -10,11 +10,13 @@ import { DataState } from "../../lib/ui/components/DataState";
 import { BookmarkForm } from "./BookmarkForm";
 import { BookmarkTree } from "./BookmarkTree";
 import { FolderForm } from "./FolderForm";
+import type { MovePlan } from "../../lib/bookmarks/treeModel";
 import {
   useCreateBookmarkMutation,
   useCreateFolderMutation,
   useDeleteBookmarkMutation,
   useDeleteFolderMutation,
+  useMoveNodeMutation,
   useUpdateBookmarkMutation,
   useUpdateFolderMutation,
 } from "./mutations";
@@ -67,6 +69,7 @@ export function BookmarksPage() {
   const createBookmarkMutation = useCreateBookmarkMutation(token, workspaceId ?? undefined);
   const updateBookmarkMutation = useUpdateBookmarkMutation(token, workspaceId ?? undefined);
   const deleteBookmarkMutation = useDeleteBookmarkMutation(token, workspaceId ?? undefined);
+  const moveNodeMutation = useMoveNodeMutation(token, workspaceId ?? undefined);
 
   const panel = searchParams.get("panel");
   const nodeId = searchParams.get("node");
@@ -188,10 +191,28 @@ export function BookmarksPage() {
     readOnly,
     onAddFolder: (parent) => openPanel({ panel: "folder-create", parent }),
     onAddBookmark: (folderId) => openPanel({ panel: "bookmark-create", parent: folderId }),
-    onRenameFolder: (folder) => openPanel({ panel: "folder-edit", node: folder.id }),
-    onDeleteFolder: (folder) => openPanel({ panel: "folder-delete", node: folder.id }),
-    onEditBookmark: (bookmark) => openPanel({ panel: "bookmark-edit", node: bookmark.id }),
-    onDeleteBookmark: (bookmark) => openPanel({ panel: "bookmark-delete", node: bookmark.id }),
+    onRenameFolder: (folderId) => openPanel({ panel: "folder-edit", node: folderId }),
+    onDeleteFolder: (folderId) => openPanel({ panel: "folder-delete", node: folderId }),
+    onEditBookmark: (bookmarkId) => openPanel({ panel: "bookmark-edit", node: bookmarkId }),
+    onDeleteBookmark: (bookmarkId) => openPanel({ panel: "bookmark-delete", node: bookmarkId }),
+  };
+
+  // Both the pointer drag path and the keyboard Alt+Arrow path funnel into
+  // this single handler — the same MovePlan shape, the same mutation
+  // (design.md Decision 9). A rejected move (e.g. the cycle guard) still
+  // resyncs via the mutation's onSettled; the notice surfaces the server's
+  // rejection message instead of silently reverting with no explanation.
+  const handleMove = (plan: Extract<MovePlan, { kind: "move" }>) => {
+    setNotice(null);
+    moveNodeMutation.mutate(plan, {
+      onError: (error) => {
+        setNotice({
+          tone: "danger",
+          title: "Move rejected",
+          description: error instanceof Error ? error.message : "The backend rejected this move.",
+        });
+      },
+    });
   };
 
   // treeQuery.dataUpdatedAt, not local state — a second clock could disagree
@@ -225,7 +246,7 @@ export function BookmarksPage() {
 
       {notice ? <DataState compact tone={notice.tone} title={notice.title} description={notice.description} /> : null}
 
-      <BookmarkTree folders={folders} workspaceName={tree.workspace.workspaceName} actions={actions} />
+      <BookmarkTree folders={folders} workspaceName={tree.workspace.workspaceName} actions={actions} onMove={handleMove} />
 
       {panel === "folder-create" ? (
         <ContextPanel title={parentId ? "Add folder inside" : "New folder"} onClose={closePanel}>
