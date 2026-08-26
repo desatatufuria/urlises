@@ -23,6 +23,7 @@ export const releaseAllowlist = [
   "dist/popup/status-detail.js",
   "dist/quick-search/quick-search.js",
   "dist/quick-search/search-results.js",
+  "dist/quick-search/workspace-scope.js",
   "dist/shared/api.js",
   "dist/shared/crypto.js",
   "dist/shared/diagnostics.js",

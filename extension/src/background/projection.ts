@@ -36,7 +36,7 @@ import {
 } from "../shared/projection-helpers.js";
 import { LOCAL_ONLY_FOLDER_TITLE } from "../shared/runtime.js";
 import { setBackendUrl, saveSession, clearSession, ensureClientId, restoreSession, setSessionPauseHandler, bestEffortLogout } from "../shared/session.js";
-import { createProjectionState, getState, resetStatePreservingSettings, setState, updateState } from "../shared/storage.js";
+import { createProjectionState, getState, normalizeQuickSearchScope, resetStatePreservingSettings, setState, updateState } from "../shared/storage.js";
 import type {
   ActivitySignal,
   BookmarkNode,
@@ -47,6 +47,7 @@ import type {
   LoginRequest,
   ProjectionActivityDetail,
   ProjectionState,
+  QuickSearchScope,
   SecretRecipient,
   SecretRecord,
   SessionData,
@@ -276,6 +277,19 @@ export async function markActivitySeen(): Promise<UiState> {
       },
     };
   });
+  return getUiState();
+}
+
+// Shaped exactly like markActivitySeen above: mutated only through this
+// background function (never a page-side updateState, D4/§13.1) so every
+// write goes through the single worker-side stateMutationQueue.
+// normalizeQuickSearchScope guards against a malformed/unknown value
+// reaching storage even if a future/older page sends garbage.
+export async function setQuickSearchScope(scope: QuickSearchScope): Promise<UiState> {
+  await updateState((state) => ({
+    ...state,
+    quickSearchScope: normalizeQuickSearchScope(scope),
+  }));
   return getUiState();
 }
 

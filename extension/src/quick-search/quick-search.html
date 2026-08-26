@@ -12,6 +12,11 @@
     </section>
 
     <section class="ui-surface ui-panel ui-panel--compact ui-grid ui-grid--compact">
+      <div id="quick-search-scope" class="ui-status-row ui-scope-toggle" role="group" aria-label="Search scope">
+        <button id="quick-search-scope-workspace" class="ui-pill ui-pill--neutral" type="button" aria-pressed="true">Workspace</button>
+        <button id="quick-search-scope-global" class="ui-pill ui-pill--neutral" type="button" aria-pressed="false">Global</button>
+      </div>
+      <p id="quick-search-scope-reason" class="ui-muted" aria-live="polite" hidden></p>
       <input
         id="quick-search-input"
         type="search"

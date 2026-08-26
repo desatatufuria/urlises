@@ -546,6 +546,16 @@ small {
   border: 1px solid rgba(var(--ui-accent-rgb), 0.32);
 }
 
+.ui-scope-toggle .ui-pill {
+  cursor: pointer;
+  border: 1px solid transparent;
+}
+
+.ui-scope-toggle .ui-pill:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
 .ui-log {
   display: grid;
   gap: 1px;

@@ -18,6 +18,7 @@ import {
   resyncAll,
   retryWorkspace,
   sendSecretEmail,
+  setQuickSearchScope,
   setSelectedWorkspaces,
   setUiTheme,
 } from "./projection.js";
@@ -184,6 +185,9 @@ chrome.runtime.onMessage.addListener((message: { type: string; payload?: unknown
         return;
       case "preferences/set-theme":
         sendResponse(await setUiTheme((message.payload as { uiTheme: "slate" | "indigo" | "teal" }).uiTheme));
+        return;
+      case "quick-search/set-scope":
+        sendResponse(await setQuickSearchScope((message.payload as { scope: "workspace" | "global" }).scope));
         return;
       default:
         sendResponse({ error: `unsupported message type ${message.type}` });

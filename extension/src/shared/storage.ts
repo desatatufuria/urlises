@@ -1,5 +1,5 @@
 import { DEFAULT_BACKEND_URL, STORAGE_KEY } from "./runtime.js";
-import type { ActivitySignal, ExtensionState, ProjectionState, SecretReadSignal } from "./types.js";
+import type { ActivitySignal, ExtensionState, ProjectionState, QuickSearchScope, SecretReadSignal } from "./types.js";
 import { normalizeJournal } from "../background/convergence.js";
 
 let stateMutationQueue: Promise<unknown> = Promise.resolve();
@@ -20,6 +20,7 @@ function defaultState(): ExtensionState {
     secretRecords: [],
     secretReadConfirmations: [],
     secretReadSignal: defaultSecretReadSignal(),
+    quickSearchScope: "workspace",
   };
 }
 
@@ -39,6 +40,7 @@ export async function getState(): Promise<ExtensionState> {
     secretRecords: next.secretRecords ?? [],
     secretReadConfirmations: next.secretReadConfirmations ?? [],
     secretReadSignal: normalizeSecretReadSignal(next.secretReadSignal),
+    quickSearchScope: normalizeQuickSearchScope(next.quickSearchScope),
   };
 }
 
@@ -105,6 +107,15 @@ function defaultSecretReadSignal(): SecretReadSignal {
     revision: 0,
     lastSeenRevision: 0,
   };
+}
+
+// Coerces any absent or unrecognized persisted value to "workspace" (the
+// documented default, design.md's Persisted Workspace/Global Scope Toggle
+// requirement) so a state persisted before this field existed — or a state
+// corrupted by a future/unknown value — upgrades cleanly rather than
+// throwing or silently disabling the feature.
+export function normalizeQuickSearchScope(scope?: QuickSearchScope): QuickSearchScope {
+  return scope === "global" ? "global" : "workspace";
 }
 
 // Unlike activitySignal, secretReadSignal has no per-workspace projection to
