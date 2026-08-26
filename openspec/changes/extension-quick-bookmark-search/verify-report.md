@@ -1,4 +1,6 @@
-# Verify Report: extension-quick-bookmark-search (Slice A only)
+# Verify Report: extension-quick-bookmark-search
+
+## Slice A
 
 **Change**: extension-quick-bookmark-search
 **Branch verified**: `feature/extension-quick-bookmark-search-slice-a` (single commit `1cc818f`), branched off tracker `feature/extension-quick-bookmark-search`
@@ -116,3 +118,56 @@ All 13 Slice A tasks (A1.1–A5.2) are marked `[x]` in `tasks.md` and each is in
 ## Final Verdict
 
 **PASS WITH WARNINGS** — 0 CRITICAL, 2 WARNING (both the same underlying residual-manual-QA gap, viewed from two angles), 0 SUGGESTION. No blocking issues found. The 2 warnings do not block proceeding to archive for Slice A given they mirror a pre-existing, already-accepted codebase convention and are transparently tracked in `tasks.md`; they should be resolved (or explicitly waived again) before this PR is merged/released in a real browser.
+
+---
+
+## Slice B (final slice)
+
+**Branch verified**: `feature/extension-quick-bookmark-search-slice-b` (commit `f36c25a`), stacked on `feature/extension-quick-bookmark-search-slice-a`, off tracker `feature/extension-quick-bookmark-search`
+**Size**: 430 insertions / 19 deletions across 11 files (~427 authored lines excluding `tasks.md` bookkeeping) — accepted `size:exception` over the 400-line default, smaller overage than Slice A's and within the session's 800-line budget; not re-flagged, content independently confirmed clean.
+**Verdict**: **PASS WITH WARNINGS** (0 CRITICAL, 1 WARNING, 0 SUGGESTION)
+
+### Test / build evidence (independently re-run)
+
+| Command | Result |
+|---|---|
+| `npm run test:projection` | **273/273 pass, 0 fail**, exit 0, run twice with identical results. Matches apply's claim: 260 (Slice A) + 13 new (`quick-search-scope.test.mjs`) = 273. |
+| `npm run typecheck` | Clean, no output, exit 0 |
+| `npm run package` | Success. Runs `test:projection` (273/273) + typecheck as gates, then: `Chrome Web Store package created. Artifact: .../urlises-for-chrome-0.1.0.zip, Files: 40, Bytes: 77984` |
+
+### Zip listing — independently inspected
+
+- `dist/quick-search/workspace-scope.js` — **now present** (2856 bytes); absent in Slice A's 39-file zip, present in this 40-file zip.
+- `dist/quick-search/quick-search.js`, `dist/quick-search/search-results.js`, `src/quick-search/quick-search.html` — still present.
+- `manifest.json` `permissions` — unchanged: `["bookmarks", "storage"]`. `commands.open-quick-search` — unchanged, present.
+
+### Diff content check
+
+`git diff feature/extension-quick-bookmark-search-slice-a..feature/extension-quick-bookmark-search-slice-b --numstat`: 430/19 across 11 files, matches claim exactly. `manifest.json` and `package.mjs` diff empty between the two slice branches — no accidental re-touch. All 11 files match design.md's Slice-B file table one-for-one; no scope creep, no Slice-A duplication.
+
+### Source-level checks
+
+- **No direct `updateState` from the page**: `quick-search.ts` imports `runtime.js`, `messaging.js`, `types.js`, `search-results.js`, `workspace-scope.js` — no `shared/storage.js` import. Scope mutation is exclusively `sendMessage({type: "quick-search/set-scope", ...})`, handled in `service-worker.ts`'s switch, which alone calls `updateState` inside `projection.ts`'s `setQuickSearchScope` (shaped like `markActivitySeen`). D4/§13.1 confirmed.
+- **Pipeline order**: `runSearch` is literally `toResultViews` → `filterByScope` → `capResults`, with an inline comment citing design §5's fixed ordering. Not reordered.
+- **`resolveScopeAvailability` never persists**: pure function, called only from `bootstrap()` and `selectScope()` for rendering; the only path that calls `sendMessage` is the explicit user click, guarded so a disabled/global fallback is never sent to the background. A signed-out `bootstrap()` cannot overwrite a persisted `"workspace"` preference — traced end to end, no write path exists outside explicit user action.
+
+### Spec compliance — all 7 requirements
+
+Persisted Workspace/Global Scope Toggle, Workspace-Scope Membership via `backendIdByChromeId`, and Release Packaging (workspace-scope.js added to the allowlist per ADR-508) are now **PASS** with source + passing tests (default/persist/legacy/unrecognized-value round-trips; membership union/exclusion; `Personal (not synced)` exclusion; filter-before-cap ordering — all covered in `quick-search-scope.test.mjs`, 13/13 passing). The four Slice-A requirements remain PASS, unchanged by this diff.
+
+### Issues
+
+**CRITICAL**: None.
+
+**WARNING** (1, same convention as Slice A):
+1. The scope-toggle DOM glue (`selectScope`, `renderScopeToggle`, click listeners) has no automated test — consistent with the repo's pure-logic/DOM-glue boundary (design §2.5). Interactive Chrome-load verification (toggle click, `Personal (not synced)` exclusion, restart persistence, signed-out disabled rendering, in a live browser) remains deferred manual QA, transparently tracked in `tasks.md` B2.5.
+
+**SUGGESTION**: None.
+
+### Task completion
+
+All 24 tasks (A1.1–A5.2, B1.1–B2.5) are marked `[x]` and each independently corresponds to real, committed code and passing tests.
+
+### Final Verdict (Slice B / whole change)
+
+**PASS WITH WARNINGS** — 0 CRITICAL, 1 WARNING (deferred manual QA on new DOM glue, same accepted convention as Slice A), 0 SUGGESTION. The full two-slice diff (`feature/extension-quick-bookmark-search..feature/extension-quick-bookmark-search-slice-b`, 18 files, 1278 insertions / 81 deletions) cleanly implements all 7 spec.md requirements with source + passing tests, no permission change, and a verified zip. Both slices' size exceptions are legitimate — content is entirely attributable to their own file lists. Ready for archive; live-browser manual QA remains the one residual step before shipping to users.

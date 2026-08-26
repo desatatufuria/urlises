@@ -6,7 +6,7 @@
 
 import { QUICK_SEARCH_TARGET_WINDOW_ID_KEY } from "../shared/runtime.js";
 import { sendMessage } from "../shared/messaging.js";
-import type { UiState } from "../shared/types.js";
+import type { ExtensionState, QuickSearchScope, UiState } from "../shared/types.js";
 import {
   RESULT_CAP,
   SEARCH_DEBOUNCE_MS,
@@ -14,12 +14,17 @@ import {
   createDebouncer,
   createQuerySequencer,
   nextHighlightIndex,
+  toResultViews,
   type SearchResultView,
 } from "./search-results.js";
+import { collectManagedChromeIds, filterByScope, resolveScopeAvailability, type ScopeAvailability } from "./workspace-scope.js";
 
 const searchInput = document.querySelector<HTMLInputElement>("#quick-search-input")!;
 const resultsList = document.querySelector<HTMLUListElement>("#quick-search-results")!;
 const hint = document.querySelector<HTMLElement>("#quick-search-hint")!;
+const scopeWorkspaceButton = document.querySelector<HTMLButtonElement>("#quick-search-scope-workspace")!;
+const scopeGlobalButton = document.querySelector<HTMLButtonElement>("#quick-search-scope-global")!;
+const scopeReason = document.querySelector<HTMLElement>("#quick-search-scope-reason")!;
 
 const debouncer = createDebouncer(SEARCH_DEBOUNCE_MS);
 const sequencer = createQuerySequencer();
@@ -27,8 +32,19 @@ const sequencer = createQuerySequencer();
 let currentResults: SearchResultView[] = [];
 let highlightIndex = -1;
 
+// Snapshot built once per window open (design.md ADR-503), not per
+// keystroke: the managed-id set and the session/selection facts that drive
+// availability. persistedScope is the user's stored preference; it is only
+// ever changed via the quick-search/set-scope background message (D4).
+let managedChromeIds = new Set<string>();
+let scopeState: Pick<ExtensionState, "session" | "selectedWorkspaceIds"> = { session: null, selectedWorkspaceIds: [] };
+let persistedScope: QuickSearchScope = "workspace";
+let scopeAvailability: ScopeAvailability = { workspaceEnabled: false, effectiveScope: "global" };
+
 searchInput.addEventListener("input", onInput);
 document.addEventListener("keydown", onKeyDown);
+scopeWorkspaceButton.addEventListener("click", () => void selectScope("workspace"));
+scopeGlobalButton.addEventListener("click", () => void selectScope("global"));
 
 // One delegated click listener on the list, not per-item: the list is
 // rebuilt on every render (design.md §8, following create-secret.ts's
@@ -46,7 +62,52 @@ void bootstrap().catch(() => undefined);
 async function bootstrap(): Promise<void> {
   const ui = await sendMessage<UiState>({ type: "session/get" });
   document.documentElement.dataset.theme = ui.state.uiTheme ?? "slate";
+
+  managedChromeIds = collectManagedChromeIds(ui.state);
+  scopeState = { session: ui.state.session, selectedWorkspaceIds: ui.state.selectedWorkspaceIds };
+  persistedScope = ui.state.quickSearchScope ?? "workspace";
+  scopeAvailability = resolveScopeAvailability(scopeState, persistedScope);
+  renderScopeToggle();
+
   searchInput.focus();
+}
+
+// Mutates only through the quick-search/set-scope background message (D4,
+// design.md §13.1) — this page never imports updateState/shared/storage.js.
+async function selectScope(scope: QuickSearchScope): Promise<void> {
+  if (scope === "workspace" && !scopeAvailability.workspaceEnabled) return; // guarded by the disabled attribute too
+  persistedScope = scope;
+  scopeAvailability = resolveScopeAvailability(scopeState, persistedScope);
+  renderScopeToggle();
+  rerunCurrentSearch();
+  void sendMessage({ type: "quick-search/set-scope", payload: { scope } }).catch(() => undefined);
+}
+
+function renderScopeToggle(): void {
+  scopeWorkspaceButton.setAttribute("aria-pressed", String(persistedScope === "workspace"));
+  scopeGlobalButton.setAttribute("aria-pressed", String(persistedScope === "global"));
+  scopeWorkspaceButton.classList.toggle("ui-pill--activity", persistedScope === "workspace");
+  scopeGlobalButton.classList.toggle("ui-pill--activity", persistedScope === "global");
+  scopeWorkspaceButton.disabled = !scopeAvailability.workspaceEnabled;
+
+  if (scopeAvailability.disabledReason) {
+    scopeReason.textContent = scopeAvailability.disabledReason;
+    scopeReason.hidden = false;
+  } else {
+    scopeReason.textContent = "";
+    scopeReason.hidden = true;
+  }
+}
+
+function rerunCurrentSearch(): void {
+  const query = searchInput.value.trim();
+  debouncer.cancel();
+  const token = sequencer.begin();
+  if (!query) {
+    renderEmpty();
+    return;
+  }
+  void runSearch(query, token);
 }
 
 function onInput(): void {
@@ -73,11 +134,13 @@ async function runSearch(query: string, token: number): Promise<void> {
   }
   if (!sequencer.isLatest(token)) return; // a newer keystroke already won; drop this response
 
-  const views = nodes.filter((node): node is chrome.bookmarks.BookmarkTreeNode & { url: string } => Boolean(node.url));
-  const { results, truncated } = capResults(
-    views.map((node) => ({ id: node.id, title: node.title ?? "", url: node.url })),
-    RESULT_CAP,
-  );
+  // Pipeline order is fixed (design.md §5): search -> drop folders -> scope
+  // filter -> cap at 50. Capping before filtering would silently hide
+  // workspace matches behind personal ones whenever they crowd the head of
+  // Chrome's own ordering.
+  const views = toResultViews(nodes);
+  const scoped = filterByScope(views, scopeAvailability.effectiveScope, managedChromeIds);
+  const { results, truncated } = capResults(scoped, RESULT_CAP);
   render(results, truncated, query);
 }
 

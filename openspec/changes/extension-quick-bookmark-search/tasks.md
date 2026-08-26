@@ -51,16 +51,16 @@ Chain strategy: feature-branch-chain
 ## Slice B (PR 2, stacked on Slice A)
 
 ### Phase B1: State (TDD)
-- [ ] B1.1 `extension/src/shared/types.ts`: `QuickSearchScope` type + optional `quickSearchScope` on `ExtensionState`
-- [ ] B1.2 RED — `extension/tests/quick-search-scope.test.mjs`: `collectManagedChromeIds` union+exclusion, `resolveScopeAvailability` fallback never persists, filter-before-cap, `setQuickSearchScope`/`getUiState` round-trip, legacy-state default normalization
-- [ ] B1.3 GREEN — `extension/src/shared/storage.ts`: `defaultState().quickSearchScope = "workspace"`, `normalizeQuickSearchScope()`
-- [ ] B1.4 GREEN — `extension/src/quick-search/workspace-scope.ts`: `collectManagedChromeIds`, `resolveScopeAvailability`, `filterByScope` (ADR-503/504)
-- [ ] B1.5 GREEN — `extension/src/background/projection.ts`: `setQuickSearchScope`, shaped like `markActivitySeen`
-- [ ] B1.6 GREEN — `extension/src/background/service-worker.ts`: `case "quick-search/set-scope"`; make B1.2 pass
+- [x] B1.1 `extension/src/shared/types.ts`: `QuickSearchScope` type + optional `quickSearchScope` on `ExtensionState`
+- [x] B1.2 RED — `extension/tests/quick-search-scope.test.mjs`: `collectManagedChromeIds` union+exclusion, `resolveScopeAvailability` fallback never persists, filter-before-cap, `setQuickSearchScope`/`getUiState` round-trip, legacy-state default normalization
+- [x] B1.3 GREEN — `extension/src/shared/storage.ts`: `defaultState().quickSearchScope = "workspace"`, `normalizeQuickSearchScope()`
+- [x] B1.4 GREEN — `extension/src/quick-search/workspace-scope.ts`: `collectManagedChromeIds`, `resolveScopeAvailability`, `filterByScope` (ADR-503/504)
+- [x] B1.5 GREEN — `extension/src/background/projection.ts`: `setQuickSearchScope`, shaped like `markActivitySeen`
+- [x] B1.6 GREEN — `extension/src/background/service-worker.ts`: `case "quick-search/set-scope"`; make B1.2 pass
 
 ### Phase B2: Surface + packaging
-- [ ] B2.1 `extension/src/quick-search/quick-search.ts`: toggle wiring, scope filter in render pipeline, disabled-state rendering
-- [ ] B2.2 `extension/src/quick-search/quick-search.html`: scope toggle markup + explanation `<p>`
-- [ ] B2.3 `extension/src/shared/ui/theme.css`: toggle styling
-- [ ] B2.4 `extension/scripts/release-allowlist.mjs`: add `dist/quick-search/workspace-scope.js` (ADR-508 — MUST land here, not Slice A)
-- [ ] B2.5 Manual: toggle scope, confirm `Personal (not synced)` excluded in `workspace`/visible in `global`, restart browser to confirm persistence, confirm signed-out disabled state with explanation
+- [x] B2.1 `extension/src/quick-search/quick-search.ts`: toggle wiring, scope filter in render pipeline, disabled-state rendering
+- [x] B2.2 `extension/src/quick-search/quick-search.html`: scope toggle markup + explanation `<p>`
+- [x] B2.3 `extension/src/shared/ui/theme.css`: toggle styling
+- [x] B2.4 `extension/scripts/release-allowlist.mjs`: add `dist/quick-search/workspace-scope.js` (ADR-508 — MUST land here, not Slice A)
+- [x] B2.5 Manual (automated portion): `npm run package` succeeded end to end; zip inspected — contains `dist/quick-search/workspace-scope.js`; manifest `permissions` unchanged (`["bookmarks","storage"]`). Interactive Chrome-load verification (toggle scope, `Personal (not synced)` exclusion, browser-restart persistence, signed-out disabled state) requires a real browser session and is deferred to manual QA — not runnable in this sandboxed environment.

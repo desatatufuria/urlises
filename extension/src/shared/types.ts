@@ -247,6 +247,11 @@ export interface ProjectionState {
 
 export type UITheme = "slate" | "indigo" | "teal";
 
+/** Persisted quick-search scope toggle (design.md ADR-503/504). Defaults to
+ * "workspace" on first run; mutated only via the `quick-search/set-scope`
+ * background message, never a direct page-side `updateState` write (D4). */
+export type QuickSearchScope = "workspace" | "global";
+
 export interface Preferences {
   uiTheme: string;
 }
@@ -266,6 +271,7 @@ export interface ExtensionState {
   secretRecords?: SecretRecord[];
   secretReadConfirmations?: SecretReadConfirmation[];
   secretReadSignal?: SecretReadSignal;
+  quickSearchScope?: QuickSearchScope;
 }
 
 export interface LoginRequest {
