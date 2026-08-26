@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Quick bookmark search · URLises</title>
+    <link rel="stylesheet" href="../shared/ui/theme.css" />
+  </head>
+  <body class="ui-shell ui-shell--compact-window">
+    <section class="ui-hero ui-hero--compact">
+      <div class="ui-eyebrow">URLises</div>
+      <h1 class="ui-title">Quick search</h1>
+    </section>
+
+    <section class="ui-surface ui-panel ui-panel--compact ui-grid ui-grid--compact">
+      <input
+        id="quick-search-input"
+        type="search"
+        placeholder="Search your bookmarks"
+        autocomplete="off"
+        autofocus
+      />
+      <p id="quick-search-hint" class="ui-muted" aria-live="polite">Type to search your bookmarks.</p>
+      <ul id="quick-search-results" class="ui-list ui-result-list" role="listbox"></ul>
+    </section>
+
+    <p class="ui-muted">Shortcut not working? Remap it at chrome://extensions/shortcuts</p>
+
+    <script type="module" src="../../dist/quick-search/quick-search.js"></script>
+  </body>
+</html>

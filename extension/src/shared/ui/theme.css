@@ -514,6 +514,38 @@ small {
   overflow-y: auto;
 }
 
+.ui-result-list {
+  max-height: 320px;
+  overflow-y: auto;
+  padding-left: 0;
+  list-style: none;
+}
+
+.ui-result-list li {
+  padding: 8px 10px;
+  border-radius: var(--ui-radius-sm);
+  cursor: pointer;
+}
+
+.ui-result-title {
+  display: block;
+  color: var(--ui-text-strong);
+}
+
+.ui-result-url {
+  display: block;
+  font-size: 12px;
+  color: var(--ui-text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ui-result--active {
+  background: var(--ui-accent-soft);
+  border: 1px solid rgba(var(--ui-accent-rgb), 0.32);
+}
+
 .ui-log {
   display: grid;
   gap: 1px;
