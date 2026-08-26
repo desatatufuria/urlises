@@ -109,6 +109,33 @@ describe("workspaces page", () => {
     expect(screen.getByText("group:Operators")).toBeInTheDocument();
   });
 
+  it("links each workspace row's bookmarks action to /bookmarks with the correct workspace id", async () => {
+    fetchMock.mockImplementation((input) => {
+      const url = String(input);
+      if (url.endsWith("/organizations/org-1/workspaces")) {
+        return jsonResponse({
+          workspaces: [
+            {
+              workspaceId: "workspace-1",
+              workspaceName: "Launch Room",
+              workspaceType: "shared",
+              organizationId: "org-1",
+              organizationName: "Acme",
+              role: "admin",
+              sources: ["direct"],
+            },
+          ],
+        });
+      }
+      return jsonResponse({ error: "not found" }, 404);
+    });
+
+    renderAppRoute("/workspaces");
+
+    const link = await screen.findByRole("link", { name: /bookmarks/i });
+    expect(link).toHaveAttribute("href", "/bookmarks?workspace=workspace-1");
+  });
+
   it("opens the delete confirmation panel via URL search params and sends no request on open", async () => {
     let deleteCalls = 0;
 

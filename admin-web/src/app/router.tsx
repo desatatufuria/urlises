@@ -7,6 +7,7 @@ import { AccessPage } from "../features/access/AccessPage";
 import { GroupsPage } from "../features/groups/GroupsPage";
 import { MembersPage } from "../features/members/MembersPage";
 import { WorkspacesPage } from "../features/workspaces/WorkspacesPage";
+import { BookmarksPage } from "../features/bookmarks/BookmarksPage";
 import { SecretsPage } from "../features/secret-history/SecretsPage";
 import { ActivityPage } from "../features/activity/ActivityPage";
 import { StateHome } from "../features/home/StateHome";
@@ -127,6 +128,13 @@ export const appRoutes: RouteObject[] = [
               {
                 path: "access",
                 element: <AccessPage />,
+              },
+              {
+                // Query-param route, matching /access (design.md decision
+                // C). No nav entry (Decision 3) — reachable only from a
+                // WorkspacesPage row action, same as /access.
+                path: "bookmarks",
+                element: <BookmarksPage />,
               },
               {
                 path: "activity",
