@@ -5,6 +5,12 @@
   "description": "Keeps selected URLises workspaces synchronized with Chrome bookmarks.",
   "permissions": ["bookmarks", "storage"],
   "host_permissions": ["http://*/*", "https://*/*", "ws://*/*", "wss://*/*"],
+  "commands": {
+    "open-quick-search": {
+      "suggested_key": { "default": "Ctrl+Q" },
+      "description": "Open URLises quick bookmark search"
+    }
+  },
   "background": {
     "service_worker": "dist/background/service-worker.js",
     "type": "module"
