@@ -65,10 +65,10 @@ Delete the verification branch in `ensureWorkspaceProjection`. Single-function, 
 
 ## Success Criteria
 
-- [ ] A workspace whose `workspaceChromeId` no longer resolves is detected on the next worker start, without any `onRemoved` event.
-- [ ] Detection routes through `resyncWorkspace` — no new pause reason, no new repair mechanism.
-- [ ] A workspace with all roots resolving is untouched: no extra pause, no counter change, no re-materialization.
-- [ ] The reactive `handleBookmarkRemoved` path behaves identically to today.
+- [x] A workspace whose `workspaceChromeId` no longer resolves is detected on the next worker start, without any `onRemoved` event. (T-V1, T-V3)
+- [x] Detection routes through `resyncWorkspace` — no new pause reason, no new repair mechanism. (T-V1/T-V3: same `"ambiguous-predecessor"` + `{ repair: "rebuild" }` disposition)
+- [x] A workspace with all roots resolving is untouched: no extra pause, no counter change, no re-materialization. (T-V2)
+- [x] The reactive `handleBookmarkRemoved` path behaves identically to today. (untouched — confirmed byte-identical in the diff)
 
 ## Proposal question round — resolved by orchestrator
 

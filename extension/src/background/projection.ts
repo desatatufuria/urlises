@@ -769,6 +769,20 @@ async function ensureWorkspaceProjection(workspaceId: string, reason: string): P
   const latest = (await getState()).projectionsByWorkspaceId[workspaceId];
   if (!latest || needsBootstrap(latest)) {
     await pauseWorkspace(workspaceId, latest?.lastCursor ?? 0, "bootstrap-required");
+    return;
+  }
+
+  // needsBootstrap only asks whether the ids are SET. MV3 evicts the worker constantly, so a
+  // managed folder deleted while no worker was alive loses its onRemoved event forever
+  // (handleBookmarkRemoved:695 is the only other place existence is ever re-derived) and nothing
+  // else ever notices: the workspace keeps reporting live against a chromeId Chrome no longer
+  // knows. Re-deriving existence here — the one choke point startup:184, login:196 and
+  // selection change:406 all funnel through — is what closes that window. The miss dispatches the
+  // same resyncWorkspace call the reactive path makes, so it inherits the disposition, the
+  // 2-attempt budget and the unacknowledged-intent veto (ADR-404/406) with no parallel mechanism.
+  const unresolvable = await findUnresolvableManagedRoots(latest);
+  if (unresolvable.length > 0) {
+    await resyncWorkspace(workspaceId, `managed root unresolvable at ${reason}: ${unresolvable.join(", ")}`);
   }
 }
 
@@ -2449,6 +2463,29 @@ async function logRemoteApplyDiagnostic(
 
 function needsBootstrap(projection: ProjectionState): boolean {
   return !projection.rootChromeId || !projection.organizationChromeId || !projection.workspaceChromeId;
+}
+
+// Existence only, by decision (proposal D3): whether a managed folder the user *moved* is a
+// violation or a legitimate reorganization is a separate product question, so parentage is not
+// checked here. Ordered outermost-first to mirror ensureManagedPath's creation order (:1051-1056)
+// and handleBookmarkRemoved's identity test (:695). getNode (chrome-bookmarks.ts:18) never throws —
+// it resolves null on chrome.runtime.lastError and on an empty result alike — so this can never
+// turn a bookmark-read hiccup into a thrown startup; the worst case is one idempotent, budgeted
+// rebuild. All three are read even after the first miss: a root deletion cascades in Chrome, and
+// naming every unresolvable level is what lets a field diagnostic distinguish "the whole managed
+// path is gone" from "only the workspace folder is".
+async function findUnresolvableManagedRoots(projection: ProjectionState): Promise<string[]> {
+  const unresolvable: string[] = [];
+  for (const [kind, chromeId] of [
+    ["root", projection.rootChromeId],
+    ["organization", projection.organizationChromeId],
+    ["workspace", projection.workspaceChromeId],
+  ] as const) {
+    if (!chromeId || !await getNode(chromeId)) {
+      unresolvable.push(kind);
+    }
+  }
+  return unresolvable;
 }
 
 async function reconcileFolderChromeNode(

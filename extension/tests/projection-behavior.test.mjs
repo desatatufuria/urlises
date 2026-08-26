@@ -3687,3 +3687,156 @@ test("a successful repair restores the full budget for a later, unrelated failur
   assert.equal(projection.autoRepairAttempts, 1);
   await projectionTestHooks.settleAutoRepair("workspace-1");
 });
+
+// T-V1..T-V4 (extension-verify-managed-roots-on-startup): ensureWorkspaceProjection must
+// re-derive managed-root existence at every ensure call, not only from a live onRemoved event
+// (spec.md "Verified Fail-Closed Sequencing"). removeBookmarkSubtree deletes from the fixture's
+// bookmark map without dispatching any event at all — the double has no onRemoved wiring — so it
+// is a faithful model of "deleted while no worker was alive". These tests must never call
+// handleBookmarkRemoved: doing so would defeat the point of testing the new startup/selection
+// path in isolation from the existing reactive path.
+const MANAGED_ROOTS_WORKSPACE = { workspaceId: "workspace-1", workspaceName: "Workspace", workspaceType: "shared", organizationId: "org-1", organizationName: "Org", role: "editor" };
+
+function seedManagedRootNodes() {
+  bookmarkNodes.set("root-node", createBookmarkNode({ id: "root-node", parentId: "1", title: "Managed", index: 0 }));
+  bookmarkNodes.set("org-node", createBookmarkNode({ id: "org-node", parentId: "root-node", title: "Org", index: 0 }));
+  bookmarkNodes.set("workspace-node", createBookmarkNode({ id: "workspace-node", parentId: "org-node", title: "Workspace", index: 0 }));
+  rebuildBookmarkChildren();
+}
+
+function managedRootsFetchHandlers() {
+  return [
+    { match: (url) => url.endsWith("/organizations"), respond: () => jsonResponse({ organizations: [{ organizationId: "org-1", organizationName: "Org" }] }) },
+    { match: (url) => url.endsWith("/organizations/org-1/workspaces"), respond: () => jsonResponse({ workspaces: [MANAGED_ROOTS_WORKSPACE] }) },
+    { match: (url) => url.endsWith("/workspaces/workspace-1/tree"), respond: () => jsonResponse({ workspace: MANAGED_ROOTS_WORKSPACE, folders: [] }) },
+    { match: (url) => url.includes("/sync/events") && url.includes("afterCursor=0"), respond: () => jsonResponse({ currentCursor: 0, events: [] }) },
+  ];
+}
+
+test("a dangling managed root is detected on the next ensure with no onRemoved event (T-V1)", { timeout: 15_000 }, async () => {
+  seedManagedRootNodes();
+  removeBookmarkSubtree("workspace-node");
+
+  await setState({
+    ...createRuntimeState({ lastCursor: 0, health: "live", status: "ready" }),
+    projectionsByWorkspaceId: { "workspace-1": createEditorProjection({
+      rootChromeId: "root-node",
+      organizationChromeId: "org-node",
+      workspaceChromeId: "workspace-node",
+      health: "live",
+      status: "ready",
+      autoRepairAttempts: 0,
+    }) },
+  });
+
+  fetchBudget = 15;
+  fetchHandlers = managedRootsFetchHandlers();
+
+  await setSelectedWorkspaces(["workspace-1"]);
+  await projectionTestHooks.settleAutoRepair("workspace-1");
+
+  const state = await getState();
+  const projection = state.projectionsByWorkspaceId["workspace-1"];
+  const diagnosticMatched = state.diagnostics.some((entry) => /resync required: managed root unresolvable at selection changed: workspace/.test(entry.message));
+  assert.ok(diagnosticMatched, "expected a resync-required diagnostic naming the dangling level and the trigger");
+  assert.equal(projection.autoRepairAttempts, 1, "detection must spend budget through the counted repair layer, not a parallel mechanism");
+  assert.equal(projection.convergenceJournal?.repairDisposition, "rebuild", "must carry the same disposition as the reactive resyncWorkspace path");
+  assert.notEqual(projection.workspaceChromeId, "workspace-node", "the dangling id must be replaced by rematerialization");
+  assert.ok(bookmarkNodes.has(projection.workspaceChromeId), "the new workspaceChromeId must resolve");
+  assert.notEqual(projection.health, "degraded");
+});
+
+test("a workspace whose managed roots all resolve is untouched (T-V2)", { timeout: 15_000 }, async () => {
+  seedManagedRootNodes();
+
+  await setState({
+    ...createRuntimeState({ lastCursor: 0, health: "live", status: "ready" }),
+    projectionsByWorkspaceId: { "workspace-1": createEditorProjection({
+      rootChromeId: "root-node",
+      organizationChromeId: "org-node",
+      workspaceChromeId: "workspace-node",
+      health: "live",
+      status: "ready",
+      autoRepairAttempts: 0,
+    }) },
+  });
+
+  fetchBudget = 15;
+  fetchHandlers = managedRootsFetchHandlers();
+
+  await setSelectedWorkspaces(["workspace-1"]);
+  await projectionTestHooks.settleAutoRepair("workspace-1");
+
+  const state = await getState();
+  const projection = state.projectionsByWorkspaceId["workspace-1"];
+  assert.equal(fetchLog.filter((url) => url.endsWith("/workspaces/workspace-1/tree")).length, 0, "a healthy workspace must never fetch /tree");
+  assert.equal(projection.autoRepairAttempts, 0);
+  assert.equal(projection.health, "live");
+  assert.notEqual(projection.convergenceJournal?.phase, "paused");
+  assert.equal(projection.workspaceChromeId, "workspace-node");
+  assert.equal(projectionTestHooks.autoRepairFlightCount(), 0);
+});
+
+test("an already-degraded workspace still gets one fresh attempt (T-V3)", { timeout: 15_000 }, async () => {
+  seedManagedRootNodes();
+  removeBookmarkSubtree("workspace-node");
+
+  await setState({
+    ...createRuntimeState({ lastCursor: 0, health: "degraded", status: "error" }),
+    projectionsByWorkspaceId: { "workspace-1": createEditorProjection({
+      rootChromeId: "root-node",
+      organizationChromeId: "org-node",
+      workspaceChromeId: "workspace-node",
+      health: "degraded",
+      status: "error",
+      degradedReason: "ambiguous-predecessor",
+      degradedAt: "2026-01-01T00:00:00.000Z",
+      autoRepairAttempts: 1,
+      convergenceJournal: { version: 1, phase: "paused", pauseReason: "ambiguous-predecessor", repairDisposition: "rebuild", failedCursor: 0, operations: [], localIntents: [], attempts: 0 },
+    }) },
+  });
+
+  fetchBudget = 15;
+  fetchHandlers = managedRootsFetchHandlers();
+
+  await setSelectedWorkspaces(["workspace-1"]);
+  await projectionTestHooks.settleAutoRepair("workspace-1");
+
+  const state = await getState();
+  const projection = state.projectionsByWorkspaceId["workspace-1"];
+  const startedMessages = state.diagnostics.map((entry) => entry.message).filter((message) => /auto-repair \S+ started/.test(message));
+  assert.equal(startedMessages.length, 1, "the already-degraded workspace must get exactly one fresh rebuild attempt");
+  assert.equal(projection.autoRepairAttempts, 2);
+  assert.equal(fetchLog.filter((url) => url.endsWith("/workspaces/workspace-1/tree")).length, 1);
+  assert.notEqual(projection.health, "degraded", "the degraded workspace must have been verified, not skipped");
+});
+
+test("an exhausted budget degrades immediately instead of rebuilding every restart (T-V4)", { timeout: 15_000 }, async () => {
+  seedManagedRootNodes();
+  removeBookmarkSubtree("workspace-node");
+
+  await setState({
+    ...createRuntimeState({ lastCursor: 0, health: "live", status: "ready" }),
+    projectionsByWorkspaceId: { "workspace-1": createEditorProjection({
+      rootChromeId: "root-node",
+      organizationChromeId: "org-node",
+      workspaceChromeId: "workspace-node",
+      health: "live",
+      status: "ready",
+      autoRepairAttempts: 2,
+    }) },
+  });
+
+  fetchBudget = 15;
+  fetchHandlers = managedRootsFetchHandlers();
+
+  await setSelectedWorkspaces(["workspace-1"]);
+  await projectionTestHooks.settleAutoRepair("workspace-1");
+
+  const state = await getState();
+  const projection = state.projectionsByWorkspaceId["workspace-1"];
+  assert.equal(projection.health, "degraded");
+  assert.equal(fetchLog.filter((url) => url.endsWith("/workspaces/workspace-1/tree")).length, 0);
+  const startedMessages = state.diagnostics.map((entry) => entry.message).filter((message) => /auto-repair \S+ started/.test(message));
+  assert.equal(startedMessages.length, 0);
+});
