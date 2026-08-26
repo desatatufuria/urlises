@@ -7,7 +7,7 @@
   "host_permissions": ["http://*/*", "https://*/*", "ws://*/*", "wss://*/*"],
   "commands": {
     "open-quick-search": {
-      "suggested_key": { "default": "Alt+Shift+B" },
+      "suggested_key": { "default": "Ctrl+Q" },
       "description": "Open URLises quick bookmark search"
     }
   },
