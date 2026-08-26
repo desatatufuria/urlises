@@ -16,49 +16,13 @@ import {
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { releaseAllowlist } from "./release-allowlist.mjs";
+
 const extensionRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const releaseRoot = path.join(extensionRoot, "release");
 const manifestPath = path.join(extensionRoot, "manifest.json");
 const fixedTimestamp = new Date("2000-01-01T00:00:00.000Z");
 
-const releaseAllowlist = [
-  "dist/background/bookmark-listeners.js",
-  "dist/background/chrome-bookmarks.js",
-  "dist/background/convergence.js",
-  "dist/background/projection.js",
-  "dist/background/service-worker.js",
-  "dist/create-secret/content-limit.js",
-  "dist/create-secret/create-secret.js",
-  "dist/create-secret/recipient-filter.js",
-  "dist/options/options.js",
-  "dist/options/secret-history.js",
-  "dist/popup/advanced-toggle.js",
-  "dist/popup/popup.js",
-  "dist/popup/status-detail.js",
-  "dist/shared/api.js",
-  "dist/shared/crypto.js",
-  "dist/shared/diagnostics.js",
-  "dist/shared/exclusions.js",
-  "dist/shared/mapping.js",
-  "dist/shared/messaging.js",
-  "dist/shared/projection-helpers.js",
-  "dist/shared/runtime.js",
-  "dist/shared/session.js",
-  "dist/shared/storage.js",
-  "dist/shared/types.js",
-  "dist/shared/ui/status.js",
-  "dist/shared/websocket.js",
-  "dist/shared/window-geometry.js",
-  "icons/icon-128.png",
-  "icons/icon-16.png",
-  "icons/icon-32.png",
-  "icons/icon-48.png",
-  "manifest.json",
-  "src/create-secret/create-secret.html",
-  "src/options/options.html",
-  "src/popup/popup.html",
-  "src/shared/ui/theme.css",
-].sort(comparePaths);
 const releaseAllowlistSet = new Set(releaseAllowlist);
 const packageMetadata = new Set([
   "npm-shrinkwrap.json",
@@ -277,7 +241,12 @@ async function validateReferencedAssets(manifest, releaseFiles) {
   const included = new Set(releaseFiles);
   const references = collectManifestReferences(manifest);
 
-  for (const htmlPath of ["src/options/options.html", "src/popup/popup.html"]) {
+  for (const htmlPath of [
+    "src/create-secret/create-secret.html",
+    "src/options/options.html",
+    "src/popup/popup.html",
+    "src/quick-search/quick-search.html",
+  ]) {
     const html = await readFile(path.join(extensionRoot, ...htmlPath.split("/")), "utf8");
     for (const match of html.matchAll(/\b(?:href|src)\s*=\s*["']([^"']+)["']/gi)) {
       const reference = resolveLocalReference(htmlPath, match[1]);

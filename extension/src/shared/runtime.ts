@@ -19,6 +19,18 @@ export const ACCESS_TOKEN_STORAGE_KEY = "sharedBookmarkSyncAccessToken";
 // popup/popup.ts and cleared by background/service-worker.ts's
 // chrome.windows.onRemoved listener when the user closes it directly.
 export const CREATE_SECRET_WINDOW_ID_KEY = "createSecretWindowId";
+// chrome.storage.session key tracking the currently-open quick-search popup
+// window's id, so a repeated shortcut invocation focuses the existing window
+// instead of opening a duplicate. Read/written by
+// background/service-worker.ts's openOrFocusQuickSearchWindow and cleared by
+// its chrome.windows.onRemoved listener when the user closes it directly.
+export const QUICK_SEARCH_WINDOW_ID_KEY = "quickSearchWindowId";
+// chrome.storage.session key holding the id of the last-focused *normal*
+// window at the moment the quick-search shortcut fired — captured then,
+// never resolved lazily, because by the time the user picks a result the
+// quick-search popup itself is the last-focused window and cannot host a
+// tab. Read by quick-search.ts when opening the selected bookmark.
+export const QUICK_SEARCH_TARGET_WINDOW_ID_KEY = "quickSearchTargetWindowId";
 export const DIAGNOSTIC_LIMIT = 50;
 export const CLIENT_ID_HEADER = "X-Client-Id";
 export const SESSION_CAPABILITY_HEADER = "X-Session-Capability";
